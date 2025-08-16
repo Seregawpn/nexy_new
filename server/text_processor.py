@@ -6,11 +6,12 @@ from config import Config
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
 
 class TextProcessor:
-    """Обработчик текста с LangChain streaming через Gemini"""
+    """Обработчик текста с LangChain streaming через Gemini с поддержкой скриншотов"""
     
     def __init__(self):
         self.buffer = ""
@@ -26,12 +27,14 @@ class TextProcessor:
             self.model = None
             self.parser = None
     
-    async def generate_response_stream(self, prompt: str) -> AsyncGenerator[str, None]:
+    async def generate_response_stream(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None) -> AsyncGenerator[str, None]:
         """
         Генерирует ответ через LangChain Gemini с реальным стримингом токенов.
         
         Args:
             prompt (str): Команда/вопрос пользователя
+            screenshot_base64 (str): Base64 WebP скриншот экрана
+            screen_info (dict): Информация об экране (ширина, высота)
             
         Yields:
             str: Токены ответа в реальном времени
@@ -42,14 +45,61 @@ class TextProcessor:
             return
         
         try:
-            # Формируем промпт для ассистента
+            # Формируем промпт для ассистента с учетом скриншота
             system_prompt = """
-            Ты - полезный голосовой ассистент для macOS. Отвечай кратко, но информативно.
+            Ты - полезный голосовой ассистент для macOS с возможностью анализа экрана.
+            
+            Если пользователь предоставил скриншот экрана:
+            - Проанализируй содержимое экрана
+            - Дай контекстный ответ на основе того, что видно на экране
+            - Объясни, что происходит на экране, если это уместно
+            
+            Отвечай кратко, но информативно на русском языке.
             Если пользователь спрашивает о чем-то, что ты не можешь сделать, объясни это вежливо.
-            Отвечай на русском языке, если пользователь говорит по-русски.
             """
             
-            full_prompt = f"{system_prompt}\n\nПользователь: {prompt}\n\nАссистент:"
+            # Добавляем информацию об экране
+            screen_context = ""
+            if screen_info:
+                screen_context = f"\n\nИнформация об экране: {screen_info['width']}x{screen_info['height']} пикселей"
+            
+            # Создаем сообщения для LangChain
+            messages = [
+                SystemMessage(content=system_prompt + screen_context)
+            ]
+            
+            if screenshot_base64:
+                # Создаем multimodal сообщение с изображением для Gemini
+                try:
+                    # Создаем HumanMessage с изображением и текстом
+                    # Используем правильный формат для Gemini
+                    human_message = HumanMessage(
+                        content=[
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/webp;base64,{screenshot_base64}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": f"Пользователь сказал: {prompt}\n\nПроанализируй скриншот и дай контекстный ответ."
+                            }
+                        ]
+                    )
+                    messages.append(human_message)
+                    
+                    logger.info(f"Анализирую команду с скриншотом: {prompt[:50]}...")
+                    
+                except Exception as img_error:
+                    logger.error(f"Ошибка обработки скриншота: {img_error}")
+                    # Fallback к текстовому режиму
+                    messages.append(HumanMessage(content=f"Пользователь: {prompt}"))
+                    logger.info(f"Обрабатываю команду без скриншота (fallback): {prompt[:50]}...")
+            else:
+                # Только текстовое сообщение
+                messages.append(HumanMessage(content=f"Пользователь: {prompt}"))
+                logger.info(f"Обрабатываю команду без скриншота: {prompt[:50]}...")
             
             # Создаем цепочку LangChain для стриминга
             chain = self.model | self.parser
@@ -57,7 +107,7 @@ class TextProcessor:
             logger.info(f"Запускаю LangChain streaming для: {prompt[:50]}...")
             
             # Стримим ответ токен за токеном
-            async for chunk in chain.astream(full_prompt):
+            async for chunk in chain.astream(messages):
                 if chunk and chunk.strip():
                     logger.debug(f"Получен токен: {chunk}")
                     yield chunk

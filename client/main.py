@@ -12,6 +12,7 @@ from audio_player import AudioPlayer
 from stt_recognizer import StreamRecognizer
 from input_handler import InputHandler
 from grpc_client import GrpcClient
+from screen_capture import ScreenCapture
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -26,11 +27,25 @@ class AppState(Enum):
     SPEAKING = 4      # Ассистент говорит
 
 async def main():
-    """Основная функция клиента с push-to-talk логикой"""
+    """Основная функция клиента с push-to-talk логикой и захватом экрана"""
     
-    # Инициализируем компоненты
-    audio_player = AudioPlayer(sample_rate=48000)
+    # Инициализируем компоненты в правильном порядке
+    console.print("[bold blue]🔧 Инициализация компонентов...[/bold blue]")
+    
+    # 1. Сначала инициализируем STT (до gRPC)
+    console.print("[blue]🎤 Инициализация STT...[/blue]")
     stt_recognizer = StreamRecognizer()
+    
+    # 2. Инициализируем захват экрана
+    console.print("[blue]📸 Инициализация захвата экрана...[/blue]")
+    screen_capture = ScreenCapture()
+    
+    # 3. Инициализируем аудио плеер
+    console.print("[blue]🔊 Инициализация аудио плеера...[/blue]")
+    audio_player = AudioPlayer(sample_rate=48000)
+    
+    # 4. Инициализируем gRPC клиент (последним)
+    console.print("[blue]🌐 Инициализация gRPC клиента...[/blue]")
     grpc_client = GrpcClient()
     
     # Очередь для событий от клавиатуры
@@ -41,14 +56,25 @@ async def main():
     # Состояние приложения
     state = AppState.IDLE
     
+    # Переменные для хранения скриншота
+    current_screenshot = None
+    current_screen_info = None
+    
     console.print("[bold green]✅ Ассистент готов![/bold green]")
     console.print("[yellow]📋 Управление:[/yellow]")
-    console.print("[yellow]  • Долгое нажатие пробела (>0.6s) - активировать ассистента[/yellow]")
-    console.print("[yellow]  • Короткое нажатие пробела (<0.6s) - прервать речь ассистента[/yellow]")
-    console.print("[yellow]  • Удерживайте пробел во время разговора[/yellow]")
+    console.print("[yellow]  • Зажмите пробел → СРАЗУ активируется микрофон[/yellow]")
+    console.print("[yellow]  • Удерживайте пробел → продолжается запись[/yellow]")
+    console.print("[yellow]  • Отпустите пробел → останавливается запись + отправка команды[/yellow]")
+    console.print("[yellow]  • Короткое нажатие → прерывание речи ассистента[/yellow]")
+    console.print("[yellow]  • При активации автоматически захватывается экран[/yellow]")
 
     try:
-        # Подключаемся к gRPC серверу
+        # Получаем информацию об экране
+        screen_info = screen_capture.get_screen_info()
+        console.print(f"[bold blue]📱 Экран: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
+        
+        # Подключаемся к gRPC серверу (после инициализации всех компонентов)
+        console.print("[blue]🔌 Подключение к серверу...[/blue]")
         if not await grpc_client.connect():
             console.print("[bold red]❌ Не удалось подключиться к серверу[/bold red]")
             return
@@ -59,14 +85,26 @@ async def main():
         while True:
             event = await event_queue.get()
             
-            if event == "long_press" and state == AppState.IDLE:
+            if event == "start_recording" and state == AppState.IDLE:
                 # Активируем ассистента - начинаем слушать команду
                 state = AppState.LISTENING
+                
+                # Захватываем экран при активации
+                console.print("[bold blue]📸 Захватываю экран...[/bold blue]")
+                current_screenshot = screen_capture.capture_screen(quality=80)
+                current_screen_info = screen_info
+                
+                if current_screenshot:
+                    console.print(f"[bold green]✅ Скриншот захвачен: {len(current_screenshot)} символов Base64[/bold green]")
+                else:
+                    console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
+                    current_screenshot = None
+                
                 stt_recognizer.start_recording()
                 console.print("[bold green]🎤 Слушаю команду...[/bold green]")
                 console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
                 
-            elif event == "short_press":
+            elif event == "interrupt_speech":
                 if state == AppState.SPEAKING:
                     # Прерываем речь ассистента
                     audio_player.stop_playback()
@@ -80,7 +118,7 @@ async def main():
                 else:
                     console.print("[yellow]ℹ️ Ассистент не активен[/yellow]")
                     
-            elif event == "space_released" and state == AppState.LISTENING:
+            elif event == "stop_recording" and state == AppState.LISTENING:
                 # Пользователь отпустил пробел - обрабатываем команду
                 state = AppState.PROCESSING
                 console.print("[bold blue]🔍 Обрабатываю команду...[/bold blue]")
@@ -91,11 +129,20 @@ async def main():
                 if command and command.strip():
                     console.print(f"[bold green]📝 Команда: {command}[/bold green]")
                     
-                    # Отправляем команду на сервер
+                    # Отправляем команду на сервер вместе со скриншотом
                     try:
-                        await grpc_client.stream_audio(command)
+                        await grpc_client.stream_audio(
+                            command, 
+                            current_screenshot, 
+                            current_screen_info
+                        )
                         state = AppState.IDLE
                         console.print("[bold green]✅ Команда выполнена[/bold green]")
+                        
+                        # Очищаем скриншот после использования
+                        current_screenshot = None
+                        current_screen_info = None
+                        
                     except Exception as e:
                         console.print(f"[bold red]❌ Ошибка выполнения команды: {e}[/bold red]")
                         state = AppState.IDLE

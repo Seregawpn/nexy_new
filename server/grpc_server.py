@@ -29,7 +29,15 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
     def StreamAudio(self, request, context):
         """Стриминг аудио и текста в ответ на промпт через LangChain streaming"""
         prompt = request.prompt
+        screenshot_base64 = request.screenshot if request.HasField('screenshot') else None
+        screen_width = request.screen_width if request.HasField('screen_width') else 0
+        screen_height = request.screen_height if request.HasField('screen_height') else 0
+        
         logger.info(f"Получен промпт: {prompt}")
+        if screenshot_base64:
+            logger.info(f"Получен скриншот: {screen_width}x{screen_height} пикселей, {len(screenshot_base64)} символов Base64")
+        else:
+            logger.info("Скриншот не предоставлен")
         
         try:
             # Запускаем LangChain streaming для получения токенов в реальном времени
@@ -41,10 +49,22 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             asyncio.set_event_loop(loop)
             
             try:
+                # Формируем информацию об экране
+                screen_info = {}
+                if screen_width > 0 and screen_height > 0:
+                    screen_info = {
+                        'width': screen_width,
+                        'height': screen_height
+                    }
+                
                 # Собираем все токены из асинхронного генератора
                 async def collect_tokens():
                     tokens = []
-                    async for token in self.text_processor.generate_response_stream(prompt):
+                    async for token in self.text_processor.generate_response_stream(
+                        prompt, 
+                        screenshot_base64, 
+                        screen_info
+                    ):
                         if token and token.strip():
                             tokens.append(token)
                     return tokens

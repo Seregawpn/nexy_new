@@ -2,30 +2,33 @@ syntax = "proto3";
 
 package streaming;
 
-// Запрос от клиента, содержит только текст промпта
-message StreamRequest {
-  string prompt = 1;
+// Сервис для стриминга аудио и текста
+service StreamingService {
+  // Стриминг аудио и текста в ответ на промпт
+  rpc StreamAudio(StreamRequest) returns (stream StreamResponse);
 }
 
-// Ответ от сервера, который может содержать либо текстовый чанк, либо аудиочанк
+// Запрос на стриминг
+message StreamRequest {
+  string prompt = 1;           // Текстовая команда пользователя
+  optional string screenshot = 2;       // Base64 WebP скриншот экрана (опционально)
+  optional int32 screen_width = 3;     // Ширина экрана
+  optional int32 screen_height = 4;    // Высота экрана
+}
+
+// Ответ стриминга
 message StreamResponse {
   oneof content {
-    string text_chunk = 1;
-    AudioChunk audio_chunk = 2;
-    string end_message = 3;
-    string error_message = 4;
+    string text_chunk = 1;     // Текстовый чанк
+    AudioChunk audio_chunk = 2; // Аудио чанк
+    string end_message = 3;    // Сообщение о завершении
+    string error_message = 4;  // Сообщение об ошибке
   }
 }
 
-// Аудио чанк с метаданными
+// Аудио чанк
 message AudioChunk {
-  bytes audio_data = 1;
-  string dtype = 2;  // numpy dtype как строка
-  repeated int32 shape = 3;  // shape как массив int32
-}
-
-// Определение сервиса стриминга
-service StreamingService {
-  // Метод, который принимает один запрос и стримит обратно множество ответов
-  rpc StreamAudio(StreamRequest) returns (stream StreamResponse) {}
+  bytes audio_data = 1;        // Аудио данные
+  string dtype = 2;            // Тип данных (например, 'int16')
+  repeated int32 shape = 3;    // Форма массива
 }

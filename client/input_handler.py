@@ -5,15 +5,18 @@ from threading import Thread
 
 class InputHandler:
     """
-    Обрабатывает глобальные нажатия клавиш в отдельном потоке
-    и передает события в основной цикл asyncio.
+    Обрабатывает глобальные нажатия клавиш для push-to-talk логики:
+    - Зажатие пробела = активация микрофона
+    - Отпускание пробела = остановка записи + отправка команды
+    - Короткое нажатие = прерывание речи ассистента
     """
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
         self.loop = loop
         self.queue = queue
         self.press_time = None
-        self.long_press_duration = 0.6  # секунды
+        self.short_press_threshold = 0.3  # секунды для короткого нажатия
         self.space_pressed = False
+        self.recording_started = False
 
         # Запускаем listener в отдельном потоке
         self.listener_thread = Thread(target=self._run_listener, daemon=True)
@@ -28,8 +31,11 @@ class InputHandler:
             self.space_pressed = True
             self.press_time = time.time()
             
-            # Отправляем событие нажатия пробела для push-to-talk
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, "space_pressed")
+            # СРАЗУ при зажатии пробела активируем микрофон
+            if not self.recording_started:
+                self.recording_started = True
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
+                print("🎤 Микрофон активирован (пробел зажат)")
 
     def on_release(self, key):
         if key == keyboard.Key.space and self.space_pressed:
@@ -37,23 +43,25 @@ class InputHandler:
             duration = time.time() - self.press_time
             self.press_time = None
             
-            # Определяем тип события для прерывания
-            if duration < self.long_press_duration:
-                event_type = "short_press"
-            else:
-                event_type = "long_press"
+            # Останавливаем запись при отпускании пробела
+            if self.recording_started:
+                self.recording_started = False
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "stop_recording")
+                print("⏹️ Запись остановлена (пробел отпущен)")
             
-            # Отправляем событие отпускания пробела для push-to-talk
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, "space_released")
-            
-            # Отправляем событие типа нажатия для прерывания
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, event_type)
+            # Определяем тип события для прерывания речи ассистента
+            if duration < self.short_press_threshold:
+                # Короткое нажатие = прерывание речи ассистента
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_speech")
+                print("🔇 Короткое нажатие - прерывание речи ассистента")
 
 async def main_test():
     """Функция для тестирования InputHandler"""
-    print("Тест push-to-talk логики:")
-    print("• Нажмите и удерживайте пробел для записи")
-    print("• Отпустите пробел для отправки команды")
+    print("🧪 Тест push-to-talk логики:")
+    print("• Зажмите пробел → СРАЗУ активируется микрофон")
+    print("• Удерживайте пробел → продолжается запись")
+    print("• Отпустите пробел → останавливается запись + отправка команды")
+    print("• Короткое нажатие → прерывание речи ассистента")
     print("• Нажмите Ctrl+C для выхода")
     
     event_queue = asyncio.Queue()
@@ -64,7 +72,7 @@ async def main_test():
     
     while True:
         event = await event_queue.get()
-        print(f"Событие: {event}")
+        print(f"📡 Событие: {event}")
         if event == "exit":
             break
 
@@ -72,4 +80,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_test())
     except KeyboardInterrupt:
-        print("\nВыход.")
+        print("\n👋 Выход.")

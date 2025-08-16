@@ -13,7 +13,7 @@ class StreamRecognizer:
     Записывает аудио только при удержании пробела.
     """
     
-    def __init__(self, sample_rate=16000, chunk_size=1024, channels=1):
+    def __init__(self, sample_rate=44100, chunk_size=1024, channels=1):
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
         self.channels = channels
@@ -27,6 +27,9 @@ class StreamRecognizer:
         
         # Инициализируем распознаватель
         self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = 300  # Снижаем порог энергии
+        self.recognizer.dynamic_energy_threshold = True  # Динамический порог
+        self.recognizer.pause_threshold = 0.8  # Порог паузы
         
     def start_recording(self):
         """Начинает запись аудио при нажатии пробела"""
@@ -36,13 +39,14 @@ class StreamRecognizer:
         self.is_recording = True
         self.audio_chunks = []
         
-        # Открываем аудиопоток
+        # Открываем аудиопоток с лучшими параметрами
         self.stream = self.audio.open(
             format=self.format,
             channels=self.channels,
             rate=self.sample_rate,
             input=True,
-            frames_per_buffer=self.chunk_size
+            frames_per_buffer=self.chunk_size,
+            input_device_index=None  # Используем устройство по умолчанию
         )
         
         console.print("[bold green]🎤 Запись началась...[/bold green]")
@@ -59,9 +63,9 @@ class StreamRecognizer:
             
         self.is_recording = False
         
-        # Ждем завершения потока записи
-        if self.recording_thread:
-            self.recording_thread.join()
+        # Даем время потоку записи завершиться
+        if self.recording_thread and self.recording_thread.is_alive():
+            self.recording_thread.join(timeout=1.0)  # Ждем максимум 1 секунду
             
         # Останавливаем поток
         if self.stream:
@@ -79,25 +83,46 @@ class StreamRecognizer:
             # Объединяем все чанки в один аудиофрагмент
             audio_data = np.concatenate(self.audio_chunks)
             
+            # Проверяем длительность аудио
+            duration = len(audio_data) / self.sample_rate
+            console.print(f"[blue]📊 Длительность аудио: {duration:.2f} секунд[/blue]")
+            
+            if duration < 0.5:  # Минимум 0.5 секунды
+                console.print("[yellow]⚠️ Аудио слишком короткое для распознавания[/yellow]")
+                return None
+            
+            # Нормализуем аудио для лучшего качества
+            audio_data = audio_data.astype(np.float32) / 32768.0  # Нормализация к [-1, 1]
+            
             # Конвертируем в формат для SpeechRecognition
-            audio_bytes = audio_data.tobytes()
+            audio_bytes = (audio_data * 32767).astype(np.int16).tobytes()
             
             # Создаем AudioData объект для распознавания
             audio = sr.AudioData(audio_bytes, self.sample_rate, 2)  # 2 bytes per sample
             
-            # Распознаем речь
-            text = self.recognizer.recognize_google(audio, language='ru-RU')
-            console.print(f"[bold magenta]✅ Распознано: {text}[/bold magenta]")
-            return text
+            # Пробуем разные языки для распознавания
+            languages = ['ru-RU', 'en-US', 'en-GB']
             
-        except sr.UnknownValueError:
-            console.print("[red]❌ Не удалось распознать речь[/red]")
+            for lang in languages:
+                try:
+                    console.print(f"[blue]🌐 Пробую язык: {lang}[/blue]")
+                    text = self.recognizer.recognize_google(audio, language=lang)
+                    console.print(f"[bold magenta]✅ Распознано ({lang}): {text}[/bold magenta]")
+                    return text
+                except sr.UnknownValueError:
+                    console.print(f"[yellow]⚠️ Не удалось распознать речь на {lang}[/yellow]")
+                    continue
+                except sr.RequestError as e:
+                    console.print(f"[red]❌ Ошибка сервиса распознавания на {lang}: {e}[/red]")
+                    continue
+            
+            # Если все языки не сработали
+            console.print("[red]❌ Не удалось распознать речь ни на одном языке[/red]")
             return None
-        except sr.RequestError as e:
-            console.print(f"[red]❌ Ошибка сервиса распознавания: {e}[/red]")
-            return None
+            
         except Exception as e:
             console.print(f"[red]❌ Ошибка распознавания: {e}[/red]")
+            console.print(f"[red]Детали: {type(e).__name__}: {str(e)}[/red]")
             return None
             
     def _record_audio(self):
@@ -112,8 +137,12 @@ class StreamRecognizer:
                     audio_chunk = np.frombuffer(data, dtype=np.int16)
                     self.audio_chunks.append(audio_chunk)
                     
+                    # Небольшая задержка для стабильности
+                    time.sleep(0.01)
+                    
         except Exception as e:
             console.print(f"[red]❌ Ошибка записи аудио: {e}[/red]")
+            console.print(f"[red]Детали: {type(e).__name__}: {str(e)}[/red]")
             
     def cleanup(self):
         """Очищает ресурсы"""

@@ -48,8 +48,8 @@ class GrpcClient:
             await self.channel.close()
             console.print("[bold yellow]🔌 Отключено от сервера[/bold yellow]")
     
-    async def stream_audio(self, prompt: str):
-        """Стриминг аудио и текста для промпта"""
+    async def stream_audio(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
+        """Стриминг аудио и текста для промпта с возможностью отправки скриншота"""
         if not self.stub:
             console.print("[bold red]❌ Не подключен к серверу[/bold red]")
             return
@@ -57,11 +57,19 @@ class GrpcClient:
         try:
             console.print(f"[bold yellow]🚀 Запуск gRPC стриминга для: {prompt}[/bold yellow]")
             
+            if screenshot_base64:
+                console.print(f"[bold blue]📸 Отправляю скриншот: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
+            
             # Запускаем воспроизведение заранее
             self.audio_player.start_playback()
             
-            # Создаем запрос
-            request = streaming_pb2.StreamRequest(prompt=prompt)
+            # Создаем запрос с учетом скриншота
+            request = streaming_pb2.StreamRequest(
+                prompt=prompt,
+                screenshot=screenshot_base64 if screenshot_base64 else "",
+                screen_width=screen_info.get('width', 0) if screen_info else 0,
+                screen_height=screen_info.get('height', 0) if screen_info else 0
+            )
             
             # Запускаем стриминг
             async for response in self.stub.StreamAudio(request):
