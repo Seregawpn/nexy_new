@@ -17,10 +17,10 @@ class AudioGenerator:
     """
     
     def __init__(self, voice: str = None, rate: str = None, volume: str = None, pitch: str = None):
-        self.voice = voice or Config.DEFAULT_VOICE
-        self.rate = rate or Config.AUDIO_RATE
-        self.volume = volume or Config.AUDIO_VOLUME
-        self.pitch = pitch or Config.AUDIO_PITCH
+        self.voice = voice or Config.EDGE_TTS_VOICE
+        self.rate = rate or Config.EDGE_TTS_RATE
+        self.volume = volume or Config.EDGE_TTS_VOLUME
+        self.pitch = pitch or "+0Hz"  # Pitch не настроен в новой конфигурации
         self._validate_voice()
         
     def _validate_voice(self):
@@ -102,14 +102,21 @@ class AudioGenerator:
             asyncio.set_event_loop(loop)
             
             try:
-                # Запускаем асинхронную генерацию в синхронном контексте
-                audio_chunks = loop.run_until_complete(self._generate_audio_chunks(text))
-                return audio_chunks
+                # Собираем все чанки из асинхронного генератора
+                async def collect_chunks():
+                    chunks = []
+                    async for chunk in self.generate_audio_stream(text):
+                        chunks.append(chunk)
+                    return chunks
+                
+                chunks = loop.run_until_complete(collect_chunks())
+                return chunks
+                
             finally:
                 loop.close()
                 
         except Exception as e:
-            logger.error(f"Ошибка при синхронной генерации аудио для текста '{text[:30]}...': {e}")
+            logger.error(f"Ошибка синхронной генерации аудио: {e}")
             return []
 
     async def _generate_audio_chunks(self, text: str) -> list[np.ndarray]:
@@ -164,7 +171,8 @@ class AudioGenerator:
 
     def set_voice(self, voice: str):
         """Устанавливает новый голос."""
-        if voice in Config.VOICES.values():
+        # Проверяем, что голос не пустой
+        if voice and voice.strip():
             self.voice = voice
             logger.info(f"Установлен голос: {voice}")
         else:

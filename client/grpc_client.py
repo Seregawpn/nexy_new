@@ -48,8 +48,8 @@ class GrpcClient:
             await self.channel.close()
             console.print("[bold yellow]🔌 Отключено от сервера[/bold yellow]")
     
-    async def stream_audio(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
-        """Стриминг аудио и текста для промпта с возможностью отправки скриншота"""
+    async def stream_audio(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None, hardware_id: str = None):
+        """Стриминг аудио и текста для промпта с возможностью отправки скриншота и Hardware ID"""
         if not self.stub:
             console.print("[bold red]❌ Не подключен к серверу[/bold red]")
             return
@@ -60,15 +60,19 @@ class GrpcClient:
             if screenshot_base64:
                 console.print(f"[bold blue]📸 Отправляю скриншот: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
             
+            if hardware_id:
+                console.print(f"[bold blue]🆔 Отправляю Hardware ID: {hardware_id[:16]}...[/bold blue]")
+            
             # Запускаем воспроизведение заранее
             self.audio_player.start_playback()
             
-            # Создаем запрос с учетом скриншота
+            # Создаем запрос с учетом скриншота и Hardware ID
             request = streaming_pb2.StreamRequest(
                 prompt=prompt,
                 screenshot=screenshot_base64 if screenshot_base64 else "",
                 screen_width=screen_info.get('width', 0) if screen_info else 0,
-                screen_height=screen_info.get('height', 0) if screen_info else 0
+                screen_height=screen_info.get('height', 0) if screen_info else 0,
+                hardware_id=hardware_id if hardware_id else ""
             )
             
             # Запускаем стриминг

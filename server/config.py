@@ -1,49 +1,94 @@
 import os
-from dotenv import load_dotenv
+from typing import Optional
+from pathlib import Path
 
-# Загружаем переменные окружения
-load_dotenv()
+# Загружаем переменные окружения из config.env
+config_path = Path(__file__).parent / "config.env"  # config.env в той же папке
+if config_path.exists():
+    with open(config_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                # Используем rsplit для правильного разбора строк с = в значениях
+                key, value = line.rsplit('=', 1)
+                os.environ[key.strip()] = value.strip()
 
 class Config:
     """Конфигурация приложения"""
     
-    # Google Gemini API
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GEMINI_MODEL = "gemini-2.5-flash-lite"
+    # =====================================================
+    # GEMINI API
+    # =====================================================
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
     
-    # Edge-TTS настройки
-    DEFAULT_VOICE = "ru-RU-SvetlanaNeural"  # Русский голос по умолчанию
-    FALLBACK_VOICE = "en-US-JennyNeural"    # Английский голос как fallback
+    # =====================================================
+    # EDGE TTS
+    # =====================================================
+    EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'ru-RU-SvetlanaNeural')
+    EDGE_TTS_RATE = os.getenv('EDGE_TTS_RATE', '+0%')
+    EDGE_TTS_VOLUME = os.getenv('EDGE_TTS_VOLUME', '+0%')
     
-    # Доступные голоса
-    VOICES = {
-        "ru": "ru-RU-SvetlanaNeural",
-        "en": "en-US-JennyNeural",
-        "ru-male": "ru-RU-DmitryNeural",
-        "en-male": "en-US-GuyNeural"
-    }
+    # =====================================================
+    # gRPC СЕРВЕР
+    # =====================================================
+    GRPC_HOST = os.getenv('GRPC_HOST', '0.0.0.0')
+    GRPC_PORT = int(os.getenv('GRPC_PORT', '50051'))
     
-    # Настройки аудио
-    AUDIO_RATE = "+0%"      # Скорость речи
-    AUDIO_VOLUME = "+0%"    # Громкость
-    AUDIO_PITCH = "+0Hz"    # Тон
+    # =====================================================
+    # POSTGRESQL БАЗА ДАННЫХ
+    # =====================================================
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_PORT = int(os.getenv('DB_PORT', '5432'))
+    DB_NAME = os.getenv('DB_NAME', 'voice_assistant_db')
+    DB_USER = os.getenv('DB_USER', 'postgres')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
     
-    # Настройки обработки
-    MAX_SENTENCE_LENGTH = 200  # Максимальная длина предложения
-    BUFFER_SIZE = 1024         # Размер буфера для аудио
-    TEMP_DIR = "temp_audio"    # Временная директория для аудио
+    # =====================================================
+    # АУДИО
+    # =====================================================
+    SAMPLE_RATE = int(os.getenv('SAMPLE_RATE', '48000'))
+    CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', '1024'))
     
-    # Настройки воспроизведения - улучшены для стабильности
-    PLAYBACK_CHUNK_SIZE = 8192  # Увеличен с 4096 до 8192
-    SAMPLE_RATE = 44100         # Увеличен с 24000 до 44100 для лучшего качества
+    # =====================================================
+    # ЛОГИРОВАНИЕ
+    # =====================================================
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+    
+    # =====================================================
+    # ПРОИЗВОДИТЕЛЬНОСТЬ
+    # =====================================================
+    MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '200'))
+    MAX_WORKERS = int(os.getenv('MAX_WORKERS', '10'))
     
     @classmethod
-    def validate(cls):
-        """Проверяет корректность конфигурации"""
-        if not cls.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY не установлен в переменных окружения")
+    def get_database_url(cls) -> str:
+        """Получение строки подключения к базе данных"""
+        if cls.DB_PASSWORD:
+            return f"postgresql://{cls.DB_USER}:{cls.DB_PASSWORD}@{cls.DB_HOST}:{cls.DB_PORT}/{cls.DB_NAME}"
+        else:
+            return f"postgresql://{cls.DB_USER}@{cls.DB_HOST}:{cls.DB_PORT}/{cls.DB_NAME}"
+    
+    @classmethod
+    def validate(cls) -> bool:
+        """Проверка конфигурации"""
+        errors = []
         
-        # Создаем временную директорию если её нет
-        os.makedirs(cls.TEMP_DIR, exist_ok=True)
+        # Проверяем обязательные параметры
+        if not cls.GEMINI_API_KEY:
+            errors.append("GEMINI_API_KEY не установлен")
         
+        # Проверяем параметры базы данных
+        if not cls.DB_NAME:
+            errors.append("DB_NAME не установлен")
+        
+        if not cls.DB_USER:
+            errors.append("DB_USER не установлен")
+        
+        if errors:
+            print("❌ Ошибки конфигурации:")
+            for error in errors:
+                print(f"  - {error}")
+            return False
+        
+        print("✅ Конфигурация корректна")
         return True

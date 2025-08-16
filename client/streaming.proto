@@ -14,6 +14,7 @@ message StreamRequest {
   optional string screenshot = 2;       // Base64 WebP скриншот экрана (опционально)
   optional int32 screen_width = 3;     // Ширина экрана
   optional int32 screen_height = 4;    // Высота экрана
+  string hardware_id = 5;      // Уникальный Hardware ID оборудования (обязательно)
 }
 
 // Ответ стриминга

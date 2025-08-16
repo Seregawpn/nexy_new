@@ -3,7 +3,8 @@ import asyncio
 import logging
 from typing import AsyncGenerator, List
 from config import Config
-from langchain.chat_models import init_chat_model
+import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -17,13 +18,24 @@ class TextProcessor:
         self.buffer = ""
         self.sentence_endings = ['.', '!', '?', '...', '?!', '!?']
         
-        # Инициализируем LangChain Gemini модель
+        # Инициализируем Google Gemini API
         try:
-            self.model = init_chat_model("gemini-2.5-flash-lite", model_provider="google_genai")
+            # Настраиваем API ключ
+            genai.configure(api_key=Config.GEMINI_API_KEY)
+            
+            # Создаем LangChain модель с Gemini
+            self.model = ChatGoogleGenerativeAI(
+                model="gemini-2.0-flash-exp",
+                google_api_key=Config.GEMINI_API_KEY,
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
             self.parser = StrOutputParser()
-            logger.info("LangChain Gemini модель инициализирована успешно")
+            logger.info("✅ LangChain Gemini модель инициализирована успешно")
+            
         except Exception as e:
-            logger.error(f"Ошибка инициализации LangChain Gemini: {e}")
+            logger.error(f"❌ Ошибка инициализации LangChain Gemini: {e}")
             self.model = None
             self.parser = None
     
@@ -47,15 +59,24 @@ class TextProcessor:
         try:
             # Формируем промпт для ассистента с учетом скриншота
             system_prompt = """
-            Ты - полезный голосовой ассистент для macOS с возможностью анализа экрана.
-            
-            Если пользователь предоставил скриншот экрана:
-            - Проанализируй содержимое экрана
-            - Дай контекстный ответ на основе того, что видно на экране
-            - Объясни, что происходит на экране, если это уместно
-            
-            Отвечай кратко, но информативно на русском языке.
-            Если пользователь спрашивает о чем-то, что ты не можешь сделать, объясни это вежливо.
+            Ты - полезный голосовой ассистент для macOS. Твоя основная задача - ОТВЕЧАТЬ НА КОМАНДЫ И ВОПРОСЫ пользователя.
+
+            ВАЖНО: Всегда отвечай на команду/вопрос пользователя ПЕРВЫМ ПРИОРИТЕТОМ!
+
+            ПРАВИЛА РАБОТЫ:
+            1. СНАЧАЛА отвечай на команду/вопрос пользователя
+            2. ЕСЛИ команда связана с экраном - используй скриншот для контекста
+            3. ЕСЛИ команда НЕ связана с экраном - игнорируй скриншот
+            4. Отвечай кратко, но информативно на русском языке
+            5. Будь полезным и дружелюбным
+
+            ПРИМЕРЫ:
+            - "Расскажи историю" → Расскажи интересную историю
+            - "Что на экране?" → Опиши содержимое экрана
+            - "Помоги с кодом" → Помоги с кодом, используя контекст экрана
+            - "Время" → Скажи текущее время (без анализа экрана)
+
+            НЕ ИГНОРИРУЙ команды пользователя! Всегда отвечай на них.
             """
             
             # Добавляем информацию об экране
@@ -72,48 +93,63 @@ class TextProcessor:
                 # Создаем multimodal сообщение с изображением для Gemini
                 try:
                     # Создаем HumanMessage с изображением и текстом
-                    # Используем правильный формат для Gemini
+                    # ПРИОРИТЕТ: команда пользователя, скриншот для контекста
                     human_message = HumanMessage(
                         content=[
+                            {
+                                "type": "text",
+                                "text": f"КОМАНДА ПОЛЬЗОВАТЕЛЯ: {prompt}\n\nВАЖНО: Отвечай на команду пользователя! Скриншот используй только если команда связана с экраном."
+                            },
                             {
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/webp;base64,{screenshot_base64}"
                                 }
-                            },
-                            {
-                                "type": "text",
-                                "text": f"Пользователь сказал: {prompt}\n\nПроанализируй скриншот и дай контекстный ответ."
                             }
                         ]
                     )
                     messages.append(human_message)
                     
-                    logger.info(f"Анализирую команду с скриншотом: {prompt[:50]}...")
+                    logger.info(f"Анализирую команду с скриншотом (приоритет команды): {prompt[:50]}...")
                     
                 except Exception as img_error:
                     logger.error(f"Ошибка обработки скриншота: {img_error}")
                     # Fallback к текстовому режиму
-                    messages.append(HumanMessage(content=f"Пользователь: {prompt}"))
+                    messages.append(HumanMessage(content=f"КОМАНДА ПОЛЬЗОВАТЕЛЯ: {prompt}\n\nОтвечай на команду пользователя!"))
                     logger.info(f"Обрабатываю команду без скриншота (fallback): {prompt[:50]}...")
             else:
                 # Только текстовое сообщение
-                messages.append(HumanMessage(content=f"Пользователь: {prompt}"))
+                messages.append(HumanMessage(content=f"КОМАНДА ПОЛЬЗОВАТЕЛЯ: {prompt}\n\nОтвечай на команду пользователя!"))
                 logger.info(f"Обрабатываю команду без скриншота: {prompt[:50]}...")
             
             # Создаем цепочку LangChain для стриминга
-            chain = self.model | self.parser
-            
             logger.info(f"Запускаю LangChain streaming для: {prompt[:50]}...")
             
-            # Стримим ответ токен за токеном
-            async for chunk in chain.astream(messages):
-                if chunk and chunk.strip():
-                    logger.debug(f"Получен токен: {chunk}")
-                    yield chunk
+            # Используем stream для получения ответа по частям
+            try:
+                response = self.model.invoke(messages)
+                if response and hasattr(response, 'content'):
+                    # Разбиваем ответ на предложения для имитации стриминга
+                    content = response.content
+                    sentences = self._split_into_sentences(content)
                     
+                    for sentence in sentences:
+                        if sentence.strip():
+                            logger.debug(f"Отправляю предложение: {sentence[:50]}...")
+                            yield sentence + " "
+                            
+                            # Небольшая задержка для имитации стриминга
+                            await asyncio.sleep(0.1)
+                else:
+                    logger.warning("Получен пустой ответ от Gemini")
+                    yield "Извините, не удалось получить ответ от ассистента."
+                    
+            except Exception as stream_error:
+                logger.error(f"Ошибка стриминга через Gemini: {stream_error}")
+                yield f"Извините, произошла ошибка при получении ответа: {str(stream_error)}"
+                
         except Exception as e:
-            logger.error(f"Ошибка генерации ответа через LangChain Gemini: {e}")
+            logger.error(f"Общая ошибка генерации ответа через LangChain Gemini: {e}")
             yield f"Извините, произошла ошибка при обработке вашего запроса: {str(e)}"
     
     def generate_response_with_gemini(self, prompt: str) -> str:
@@ -177,7 +213,7 @@ class TextProcessor:
                 return True
         
         # Проверяем на максимальную длину
-        if len(text) >= Config.MAX_SENTENCE_LENGTH:
+        if len(text) >= 200:  # MAX_SENTENCE_LENGTH из конфигурации
             return True
             
         return False
@@ -234,9 +270,9 @@ class TextProcessor:
                         break
                 
                 # Если нашли конец предложения или превысили длину
-                if sentence_end != -1 or len(self.buffer) >= Config.MAX_SENTENCE_LENGTH:
+                if sentence_end != -1 or len(self.buffer) >= 200:  # MAX_SENTENCE_LENGTH из конфигурации
                     if sentence_end == -1:
-                        sentence_end = Config.MAX_SENTENCE_LENGTH
+                        sentence_end = 200  # MAX_SENTENCE_LENGTH из конфигурации
                     
                     # Извлекаем готовое предложение
                     sentence = self.buffer[:sentence_end].strip()
@@ -305,4 +341,53 @@ class TextProcessor:
                 sentences.append(clean_text)
         
         self.buffer = ""
+        return sentences
+
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """
+        Разбивает текст на предложения для имитации стриминга.
+        
+        Args:
+            text (str): Исходный текст
+            
+        Returns:
+            List[str]: Список предложений
+        """
+        if not text:
+            return []
+        
+        # Простое разбиение по знакам препинания
+        sentences = []
+        current_sentence = ""
+        
+        for char in text:
+            current_sentence += char
+            
+            # Проверяем конец предложения
+            if char in self.sentence_endings:
+                sentence = current_sentence.strip()
+                if sentence:
+                    sentences.append(sentence)
+                current_sentence = ""
+        
+        # Добавляем последнее предложение, если оно есть
+        if current_sentence.strip():
+            sentences.append(current_sentence.strip())
+        
+        # Если не удалось разбить на предложения, разбиваем по длине
+        if not sentences:
+            words = text.split()
+            current_chunk = ""
+            
+            for word in words:
+                if len(current_chunk + " " + word) <= 100:  # Максимальная длина чанка
+                    current_chunk += (" " + word) if current_chunk else word
+                else:
+                    if current_chunk:
+                        sentences.append(current_chunk.strip())
+                    current_chunk = word
+            
+            if current_chunk:
+                sentences.append(current_chunk.strip())
+        
         return sentences

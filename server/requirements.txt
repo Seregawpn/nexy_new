@@ -1,0 +1,27 @@
+# =====================================================
+# ЗАВИСИМОСТИ ДЛЯ СЕРВЕРА
+# =====================================================
+
+# gRPC и Protocol Buffers
+grpcio
+grpcio-tools
+protobuf
+
+# LangChain и Gemini
+langchain
+langchain-core
+langchain-google-genai
+google-generativeai
+
+# Edge TTS
+edge-tts
+
+# База данных
+psycopg2-binary
+
+# Аудио обработка
+numpy
+sounddevice
+
+# Логирование и утилиты
+rich

@@ -13,6 +13,7 @@ from stt_recognizer import StreamRecognizer
 from input_handler import InputHandler
 from grpc_client import GrpcClient
 from screen_capture import ScreenCapture
+from utils.hardware_id import get_hardware_id, get_hardware_info
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -27,7 +28,7 @@ class AppState(Enum):
     SPEAKING = 4      # Ассистент говорит
 
 async def main():
-    """Основная функция клиента с push-to-talk логикой и захватом экрана"""
+    """Основная функция клиента с push-to-talk логикой, захватом экрана и Hardware ID"""
     
     # Инициализируем компоненты в правильном порядке
     console.print("[bold blue]🔧 Инициализация компонентов...[/bold blue]")
@@ -48,6 +49,42 @@ async def main():
     console.print("[blue]🌐 Инициализация gRPC клиента...[/blue]")
     grpc_client = GrpcClient()
     
+    # 5. Получаем Hardware ID (один раз при запуске, с кэшированием)
+    console.print("[blue]🆔 Получение Hardware ID...[/blue]")
+    
+    # Проверяем аргументы командной строки для управления кэшем
+    import sys
+    force_regenerate = "--force-regenerate" in sys.argv
+    clear_cache = "--clear-cache" in sys.argv
+    
+    if clear_cache:
+        from utils.hardware_id import clear_hardware_id_cache
+        clear_hardware_id_cache()
+        console.print("[yellow]🗑️ Кэш Hardware ID очищен[/yellow]")
+    
+    hardware_id = get_hardware_id(force_regenerate=force_regenerate)  # Автоматически использует кэш если доступен
+    hardware_info = get_hardware_info()
+    
+    console.print(f"[bold green]✅ Hardware ID получен: {hardware_id[:16]}...[/bold green]")
+    console.print(f"[blue]📱 UUID: {hardware_info['hardware_uuid'][:16]}...[/blue]")
+    console.print(f"[blue]🔢 Serial: {hardware_info['serial_number']}[/blue]")
+    
+    # Показываем информацию о кэше
+    from utils.hardware_id import get_cache_info
+    cache_info = get_cache_info()
+    if cache_info['exists']:
+        console.print(f"[green]💾 Hardware ID загружен из кэша[/green]")
+    else:
+        console.print(f"[yellow]🔄 Hardware ID сгенерирован заново[/yellow]")
+    
+    # Показываем справку по управлению кэшем
+    if "--help" in sys.argv:
+        console.print("\n[yellow]📋 Управление кэшем Hardware ID:[/yellow]")
+        console.print("[yellow]  • --clear-cache      - очистить кэш[/yellow]")
+        console.print("[yellow]  • --force-regenerate - принудительно пересоздать ID[/yellow]")
+        console.print("[yellow]  • --help            - показать эту справку[/yellow]")
+        console.print("[yellow]  • Без аргументов    - использовать кэш если доступен[/yellow]")
+    
     # Очередь для событий от клавиатуры
     event_queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -67,6 +104,7 @@ async def main():
     console.print("[yellow]  • Отпустите пробел → останавливается запись + отправка команды[/yellow]")
     console.print("[yellow]  • Короткое нажатие → прерывание речи ассистента[/yellow]")
     console.print("[yellow]  • При активации автоматически захватывается экран[/yellow]")
+    console.print("[yellow]  • Hardware ID отправляется с каждой командой[/yellow]")
 
     try:
         # Получаем информацию об экране
@@ -128,13 +166,15 @@ async def main():
                 
                 if command and command.strip():
                     console.print(f"[bold green]📝 Команда: {command}[/bold green]")
+                    console.print(f"[blue]🆔 Отправляю с Hardware ID: {hardware_id[:16]}...[/blue]")
                     
-                    # Отправляем команду на сервер вместе со скриншотом
+                    # Отправляем команду на сервер вместе со скриншотом и Hardware ID
                     try:
                         await grpc_client.stream_audio(
                             command, 
                             current_screenshot, 
-                            current_screen_info
+                            current_screen_info,
+                            hardware_id
                         )
                         state = AppState.IDLE
                         console.print("[bold green]✅ Команда выполнена[/bold green]")
