@@ -15,3 +15,6 @@ websockets
 grpcio
 grpcio-tools
 protobuf
+SpeechRecognition
+PyAudio
+pynput

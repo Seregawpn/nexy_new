@@ -27,65 +27,87 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         self.audio_generator = AudioGenerator()
     
     def StreamAudio(self, request, context):
-        """Стриминг аудио и текста в ответ на промпт"""
+        """Стриминг аудио и текста в ответ на промпт через LangChain streaming"""
         prompt = request.prompt
         logger.info(f"Получен промпт: {prompt}")
         
         try:
-            # Создаем простой генератор для текста (заглушка)
-            def simple_text_generator(text):
-                # Разбиваем текст на предложения
-                sentences = self.text_processor.split_into_sentences(text)
-                for sentence in sentences:
-                    yield sentence
+            # Запускаем LangChain streaming для получения токенов в реальном времени
+            logger.info("Запускаю LangChain streaming через Gemini...")
             
-            # Запускаем стриминг текста
-            text_stream = simple_text_generator(prompt)
+            # Создаем новый event loop для асинхронных операций
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            for sentence in text_stream:
-                logger.info(f"Обработка предложения для озвучивания: {sentence}")
+            try:
+                # Собираем все токены из асинхронного генератора
+                async def collect_tokens():
+                    tokens = []
+                    async for token in self.text_processor.generate_response_stream(prompt):
+                        if token and token.strip():
+                            tokens.append(token)
+                    return tokens
                 
-                # Отправляем текст клиенту
-                text_response = streaming_pb2.StreamResponse(
-                    text_chunk=sentence
-                )
-                yield text_response
+                # Запускаем асинхронную функцию
+                tokens = loop.run_until_complete(collect_tokens())
                 
-                # Генерируем и отправляем аудио (синхронно)
-                try:
-                    # Генерируем реальное аудио через Edge TTS
-                    audio_chunks = self.audio_generator.generate_audio_sync(sentence)
-                    
-                    if audio_chunks:
-                        logger.info(f"Сгенерировано {len(audio_chunks)} аудио чанков для: {sentence}")
+                if not tokens:
+                    logger.error("LangChain не вернул токены")
+                    error_response = streaming_pb2.StreamResponse(
+                        error_message="Не удалось сгенерировать ответ"
+                    )
+                    yield error_response
+                    return
+                
+                logger.info(f"Получено {len(tokens)} токенов от LangChain Gemini")
+                
+                # Обрабатываем каждый токен
+                for token in tokens:
+                    if token and token.strip():
+                        # Отправляем токен клиенту
+                        text_response = streaming_pb2.StreamResponse(
+                            text_chunk=token
+                        )
+                        yield text_response
                         
-                        # Отправляем каждый аудио чанк
-                        for audio_chunk in audio_chunks:
-                            audio_response = streaming_pb2.StreamResponse(
-                                audio_chunk=streaming_pb2.AudioChunk(
-                                    audio_data=audio_chunk.tobytes(),
-                                    dtype=str(audio_chunk.dtype),
-                                    shape=list(audio_chunk.shape)
-                                )
-                            )
-                            yield audio_response
-                    else:
-                        logger.warning(f"Не удалось сгенерировать аудио для: {sentence}")
-                    
-                except Exception as audio_error:
-                    logger.error(f"Ошибка генерации аудио: {audio_error}")
-                    # Продолжаем без аудио
-            
-            # Отправляем сообщение о завершении
-            end_response = streaming_pb2.StreamResponse(
-                end_message="Стриминг завершен"
-            )
-            yield end_response
+                        # Генерируем аудио для этого токена
+                        try:
+                            audio_chunks = self.audio_generator.generate_audio_sync(token)
+                            
+                            if audio_chunks:
+                                logger.debug(f"Сгенерировано {len(audio_chunks)} аудио чанков для токена: {token[:30]}...")
+                                
+                                # Отправляем каждый аудио чанк
+                                for audio_chunk in audio_chunks:
+                                    audio_response = streaming_pb2.StreamResponse(
+                                        audio_chunk=streaming_pb2.AudioChunk(
+                                            audio_data=audio_chunk.tobytes(),
+                                            dtype=str(audio_chunk.dtype),
+                                            shape=list(audio_chunk.shape)
+                                        )
+                                    )
+                                    yield audio_response
+                            else:
+                                logger.warning(f"Не удалось сгенерировать аудио для токена: {token[:30]}...")
+                                
+                        except Exception as audio_error:
+                            logger.error(f"Ошибка генерации аудио для токена: {audio_error}")
+                            # Продолжаем без аудио
                 
-            logger.info("Стриминг завершен для данного промпта.")
-            
+                # Отправляем сообщение о завершении
+                end_response = streaming_pb2.StreamResponse(
+                    end_message="Стриминг завершен"
+                )
+                yield end_response
+                    
+                logger.info("LangChain streaming завершен для данного промпта.")
+                
+            finally:
+                loop.close()
+                
         except Exception as e:
-            logger.error(f"Произошла ошибка в стриминге: {e}")
+            logger.error(f"Произошла ошибка в LangChain streaming: {e}")
             error_response = streaming_pb2.StreamResponse(
                 error_message=f"Произошла внутренняя ошибка: {e}"
             )

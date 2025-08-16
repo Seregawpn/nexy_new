@@ -3,16 +3,105 @@ import asyncio
 import logging
 from typing import AsyncGenerator, List
 from config import Config
+from langchain.chat_models import init_chat_model
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
 logger = logging.getLogger(__name__)
 
 class TextProcessor:
-    """Обработчик текста с фильтрацией и детекцией предложений"""
+    """Обработчик текста с LangChain streaming через Gemini"""
     
     def __init__(self):
         self.buffer = ""
         self.sentence_endings = ['.', '!', '?', '...', '?!', '!?']
         
+        # Инициализируем LangChain Gemini модель
+        try:
+            self.model = init_chat_model("gemini-2.5-flash-lite", model_provider="google_genai")
+            self.parser = StrOutputParser()
+            logger.info("LangChain Gemini модель инициализирована успешно")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации LangChain Gemini: {e}")
+            self.model = None
+            self.parser = None
+    
+    async def generate_response_stream(self, prompt: str) -> AsyncGenerator[str, None]:
+        """
+        Генерирует ответ через LangChain Gemini с реальным стримингом токенов.
+        
+        Args:
+            prompt (str): Команда/вопрос пользователя
+            
+        Yields:
+            str: Токены ответа в реальном времени
+        """
+        if not self.model or not self.parser:
+            logger.error("LangChain Gemini модель не инициализирована")
+            yield "Извините, я не могу ответить сейчас. Ошибка: Gemini не инициализирован."
+            return
+        
+        try:
+            # Формируем промпт для ассистента
+            system_prompt = """
+            Ты - полезный голосовой ассистент для macOS. Отвечай кратко, но информативно.
+            Если пользователь спрашивает о чем-то, что ты не можешь сделать, объясни это вежливо.
+            Отвечай на русском языке, если пользователь говорит по-русски.
+            """
+            
+            full_prompt = f"{system_prompt}\n\nПользователь: {prompt}\n\nАссистент:"
+            
+            # Создаем цепочку LangChain для стриминга
+            chain = self.model | self.parser
+            
+            logger.info(f"Запускаю LangChain streaming для: {prompt[:50]}...")
+            
+            # Стримим ответ токен за токеном
+            async for chunk in chain.astream(full_prompt):
+                if chunk and chunk.strip():
+                    logger.debug(f"Получен токен: {chunk}")
+                    yield chunk
+                    
+        except Exception as e:
+            logger.error(f"Ошибка генерации ответа через LangChain Gemini: {e}")
+            yield f"Извините, произошла ошибка при обработке вашего запроса: {str(e)}"
+    
+    def generate_response_with_gemini(self, prompt: str) -> str:
+        """
+        Синхронная версия для обратной совместимости.
+        УСТАРЕВШАЯ - используйте generate_response_stream для стриминга.
+        """
+        if not self.model or not self.parser:
+            logger.error("LangChain Gemini модель не инициализирована")
+            return f"Извините, я не могу ответить сейчас. Ошибка: Gemini не инициализирован."
+        
+        try:
+            # Формируем промпт для ассистента
+            system_prompt = """
+            Ты - полезный голосовой ассистент для macOS. Отвечай кратко, но информативно.
+            Если пользователь спрашивает о чем-то, что ты не можешь сделать, объясни это вежливо.
+            Отвечай на русском языке, если пользователь говорит по-русски.
+            """
+            
+            full_prompt = f"{system_prompt}\n\nПользователь: {prompt}\n\nАссистент:"
+            
+            # Создаем цепочку LangChain
+            chain = self.model | self.parser
+            
+            # Вызываем синхронно (не стриминг)
+            response = chain.invoke(full_prompt)
+            
+            if response and response.strip():
+                logger.info(f"LangChain Gemini сгенерировал ответ: {response[:100]}...")
+                return response.strip()
+            else:
+                logger.warning("LangChain Gemini вернул пустой ответ")
+                return "Извините, я не смог сгенерировать ответ. Попробуйте переформулировать вопрос."
+                
+        except Exception as e:
+            logger.error(f"Ошибка генерации ответа через LangChain Gemini: {e}")
+            return f"Извините, произошла ошибка при обработке вашего запроса: {str(e)}"
+    
     def clean_text(self, text: str) -> str:
         """Очищает текст от форматирования и артефактов"""
         # Убираем markdown разметку

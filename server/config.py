@@ -9,7 +9,7 @@ class Config:
     
     # Google Gemini API
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GEMINI_MODEL = "gemini-2.0-flash-exp"
+    GEMINI_MODEL = "gemini-2.5-flash-lite"
     
     # Edge-TTS настройки
     DEFAULT_VOICE = "ru-RU-SvetlanaNeural"  # Русский голос по умолчанию
