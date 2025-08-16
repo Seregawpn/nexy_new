@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package streaming;
+
+// Запрос от клиента, содержит только текст промпта
+message StreamRequest {
+  string prompt = 1;
+}
+
+// Ответ от сервера, который может содержать либо текстовый чанк, либо аудиочанк
+message StreamResponse {
+  oneof content {
+    string text_chunk = 1;
+    AudioChunk audio_chunk = 2;
+    string end_message = 3;
+    string error_message = 4;
+  }
+}
+
+// Аудио чанк с метаданными
+message AudioChunk {
+  bytes audio_data = 1;
+  string dtype = 2;  // numpy dtype как строка
+  repeated int32 shape = 3;  // shape как массив int32
+}
+
+// Определение сервиса стриминга
+service StreamingService {
+  // Метод, который принимает один запрос и стримит обратно множество ответов
+  rpc StreamAudio(StreamRequest) returns (stream StreamResponse) {}
+}
