@@ -19,7 +19,13 @@ class Config:
     # =====================================================
     # GEMINI API
     # =====================================================
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+    GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
+    
+    # =====================================================
+    # GOOGLE SEARCH API
+    # =====================================================
+    GSEARCH_API_KEY = os.getenv('GSEARCH_API_KEY')
+    GSEARCH_CSE_ID = os.getenv('GSEARCH_CSE_ID')
     
     # =====================================================
     # EDGE TTS

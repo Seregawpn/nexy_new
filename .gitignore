@@ -98,6 +98,47 @@ __pypackages__/
 celerybeat-schedule
 celerybeat.pid
 
+# Environment variables and secrets
+.env
+*.env
+config.env
+server/config.env
+client/config.env
+
+# API Keys and sensitive data
+**/api_keys.txt
+**/secrets.json
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Audio files
+temp_audio/
+*.wav
+*.mp3
+*.ogg
+
 # SageMath parsed files
 *.sage.py
 

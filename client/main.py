@@ -93,9 +93,10 @@ async def main():
     # Состояние приложения
     state = AppState.IDLE
     
-    # Переменные для хранения скриншота
+    # Переменные для хранения скриншота и активного вызова
     current_screenshot = None
     current_screen_info = None
+    active_call = None
     
     console.print("[bold green]✅ Ассистент готов![/bold green]")
     console.print("[yellow]📋 Управление:[/yellow]")
@@ -123,69 +124,82 @@ async def main():
         while True:
             event = await event_queue.get()
             
-            if event == "start_recording" and state == AppState.IDLE:
-                # Активируем ассистента - начинаем слушать команду
-                state = AppState.LISTENING
+            if event == "start_recording":
+                # Прерываем текущую речь, если она есть
+                if active_call and not active_call.done():
+                    console.print("[bold yellow]Прерываю предыдущий ответ...[/bold yellow]")
+                    active_call.cancel()
+                    grpc_client.audio_player.interrupt()
+                    active_call = None
                 
-                # Захватываем экран при активации
-                console.print("[bold blue]📸 Захватываю экран...[/bold blue]")
-                current_screenshot = screen_capture.capture_screen(quality=80)
-                current_screen_info = screen_info
-                
-                if current_screenshot:
-                    console.print(f"[bold green]✅ Скриншот захвачен: {len(current_screenshot)} символов Base64[/bold green]")
-                else:
-                    console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
-                    current_screenshot = None
-                
-                stt_recognizer.start_recording()
-                console.print("[bold green]🎤 Слушаю команду...[/bold green]")
-                console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
+                # Если ассистент неактивен, начинаем запись
+                if state == AppState.IDLE:
+                    state = AppState.LISTENING
+                    
+                    console.print("[bold blue]📸 Захватываю экран...[/bold blue]")
+                    current_screenshot = screen_capture.capture_screen(quality=80)
+                    current_screen_info = screen_info
+                    
+                    if current_screenshot:
+                        console.print(f"[bold green]✅ Скриншот захвачен: {len(current_screenshot)} символов Base64[/bold green]")
+                    else:
+                        console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
+                        current_screenshot = None
+                    
+                    stt_recognizer.start_recording()
+                    console.print("[bold green]🎤 Слушаю команду...[/bold green]")
+                    console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
                 
             elif event == "interrupt_speech":
-                if state == AppState.SPEAKING:
-                    # Прерываем речь ассистента
-                    audio_player.stop_playback()
+                # Короткое нажатие теперь тоже прерывает речь
+                if active_call and not active_call.done():
+                    console.print("[bold red]⏹️ Речь прервана (короткое нажатие)[/bold red]")
+                    active_call.cancel()
+                    grpc_client.audio_player.interrupt()
+                    active_call = None
                     state = AppState.IDLE
-                    console.print("[bold red]⏹️ Речь прервана[/bold red]")
                 elif state == AppState.LISTENING:
-                    # Прерываем запись команды
                     stt_recognizer.stop_recording_and_recognize()
                     state = AppState.IDLE
                     console.print("[bold yellow]⚠️ Запись команды прервана[/bold yellow]")
                 else:
-                    console.print("[yellow]ℹ️ Ассистент не активен[/yellow]")
+                    console.print("[yellow]ℹ️ Ассистент не говорит[/yellow]")
                     
             elif event == "stop_recording" and state == AppState.LISTENING:
-                # Пользователь отпустил пробел - обрабатываем команду
                 state = AppState.PROCESSING
                 console.print("[bold blue]🔍 Обрабатываю команду...[/bold blue]")
                 
-                # Останавливаем запись и распознаем речь
                 command = stt_recognizer.stop_recording_and_recognize()
                 
                 if command and command.strip():
                     console.print(f"[bold green]📝 Команда: {command}[/bold green]")
-                    console.print(f"[blue]🆔 Отправляю с Hardware ID: {hardware_id[:16]}...[/blue]")
                     
-                    # Отправляем команду на сервер вместе со скриншотом и Hardware ID
                     try:
-                        await grpc_client.stream_audio(
+                        # Запускаем стриминг и получаем объект вызова
+                        stream_generator = grpc_client.stream_audio(
                             command, 
                             current_screenshot, 
                             current_screen_info,
                             hardware_id
                         )
-                        state = AppState.IDLE
-                        console.print("[bold green]✅ Команда выполнена[/bold green]")
                         
-                        # Очищаем скриншот после использования
-                        current_screenshot = None
-                        current_screen_info = None
+                        # Получаем сам объект вызова
+                        active_call = await stream_generator.__anext__()
+                        state = AppState.SPEAKING
+                        
+                        # Ожидаем завершения стриминга
+                        async for _ in stream_generator:
+                            # Этот цикл просто исчерпывает генератор
+                            pass
+                        
+                        state = AppState.IDLE
+                        active_call = None
+                        console.print("[bold green]✅ Команда выполнена[/bold green]")
                         
                     except Exception as e:
                         console.print(f"[bold red]❌ Ошибка выполнения команды: {e}[/bold red]")
                         state = AppState.IDLE
+                        active_call = None
                 else:
                     console.print("[yellow]⚠️ Команда не распознана[/yellow]")
                     state = AppState.IDLE
@@ -195,10 +209,11 @@ async def main():
     except Exception as e:
         console.print(f"[bold red]❌ Критическая ошибка: {e}[/bold red]")
     finally:
-        # Очищаем ресурсы
+        if active_call and not active_call.done():
+            active_call.cancel()
         stt_recognizer.cleanup()
-        if audio_player.is_playing:
-            audio_player.stop_playback()
+        if grpc_client.audio_player.is_playing:
+            grpc_client.audio_player.stop_playback()
         logger.info("Клиент завершил работу.")
 
 if __name__ == "__main__":

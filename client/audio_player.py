@@ -129,7 +129,7 @@ class AudioPlayer:
                 logger.critical(f"Не удалось запустить аудиопоток и на устройстве по умолчанию: {e_default}")
 
     def stop_playback(self):
-        """Останавливает аудиопоток."""
+        """Останавливает аудиопоток и очищает ресурсы."""
         if not self.is_playing:
             return
             
@@ -139,16 +139,46 @@ class AudioPlayer:
         if self.stream:
             self.stream.stop()
             self.stream.close()
+            self.stream = None
             logger.info("Аудиопоток остановлен и закрыт.")
         
         # Очищаем очередь и буфер
+        self._clear_buffers()
+            
+        self.is_playing = False
+
+    def interrupt(self):
+        """
+        Мгновенно прерывает воспроизведение и очищает все очереди.
+        Используется для немедленной реакции на действия пользователя.
+        """
+        if self.is_playing:
+            logger.info("Прерывание воспроизведения...")
+            # Немедленно останавливаем stream, не дожидаясь завершения буфера
+            if self.stream:
+                self.stream.stop()
+                self.stream.close()
+                self.stream = None
+            
+            self._clear_buffers()
+            self.is_playing = False
+            logger.info("Воспроизведение прервано, очереди очищены.")
+
+    def _clear_buffers(self):
+        """Очищает внутренний буфер и очередь аудио."""
         with self.buffer_lock:
             self.internal_buffer = np.array([], dtype=np.int16)
             
         with self.audio_queue.mutex:
             self.audio_queue.queue.clear()
-            
-        self.is_playing = False
+        
+        # Сбрасываем счетчик join()
+        while not self.audio_queue.empty():
+            try:
+                self.audio_queue.get_nowait()
+                self.audio_queue.task_done()
+            except queue.Empty:
+                break
 
     def wait_for_queue_empty(self):
         """Блокирует выполнение, пока очередь не опустеет."""

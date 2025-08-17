@@ -25,3 +25,5 @@ sounddevice
 
 # Логирование и утилиты
 rich
+langchain-community
+google-api-python-client

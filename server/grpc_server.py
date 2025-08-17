@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import grpc
+import grpc.aio
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import os
@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
-    """gRPC сервис для стриминга аудио и текста"""
+    """gRPC сервис для стриминга аудио и текста (АСИНХРОННАЯ ВЕРСИЯ)"""
     
     def __init__(self):
         self.text_processor = TextProcessor()
@@ -41,8 +41,11 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             logger.error(f"❌ Ошибка инициализации базы данных: {e}")
             self.db_manager = None
 
-    def StreamAudio(self, request, context):
-        """Стриминг аудио и текста в ответ на промпт через LangChain streaming"""
+    async def StreamAudio(self, request, context):
+        """
+        АСИНХРОННЫЙ стриминг аудио и текста в ответ на промпт.
+        Использует async for для обработки потоков текста и аудио.
+        """
         prompt = request.prompt
         screenshot_base64 = request.screenshot if request.HasField('screenshot') else None
         screen_width = request.screen_width if request.HasField('screen_width') else 0
@@ -58,243 +61,127 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             logger.info("Скриншот не предоставлен")
         
         try:
-            # АСИНХРОННО: Обрабатываем Hardware ID в базе данных (не блокируем основной поток)
+            # Асинхронная обработка БД (запускаем как фоновую задачу)
             if hardware_id and self.db_manager:
-                # Формируем информацию об экране для передачи в метод
-                screen_info_for_db = {}
-                if screen_width > 0 and screen_height > 0:
-                    screen_info_for_db = {
-                        'width': screen_width,
-                        'height': screen_height
-                    }
-                self._process_hardware_id_async(hardware_id, prompt, screenshot_base64, screen_info_for_db)
+                screen_info_for_db = {'width': screen_width, 'height': screen_height} if screen_width > 0 else {}
+                asyncio.create_task(self._process_hardware_id_async(hardware_id, prompt, screenshot_base64, screen_info_for_db))
             
-            # Запускаем LangChain streaming для получения токенов в реальном времени
             logger.info("Запускаю LangChain streaming через Gemini...")
             
-            # Создаем новый event loop для асинхронных операций
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            screen_info = {'width': screen_width, 'height': screen_height} if screen_width > 0 else {}
             
-            try:
-                # Формируем информацию об экране
-                screen_info = {}
-                if screen_width > 0 and screen_height > 0:
-                    screen_info = {
-                        'width': screen_width,
-                        'height': screen_height
-                    }
-                
-                # Собираем все токены из асинхронного генератора
-                async def collect_tokens():
-                    tokens = []
-                    async for token in self.text_processor.generate_response_stream(
-                        prompt, 
-                        screenshot_base64, 
-                        screen_info
-                    ):
-                        if token and token.strip():
-                            tokens.append(token)
-                    return tokens
-                
-                # Запускаем асинхронную функцию
-                tokens = loop.run_until_complete(collect_tokens())
-                
-                if not tokens:
-                    logger.error("LangChain не вернул токены")
-                    error_response = streaming_pb2.StreamResponse(
-                        error_message="Не удалось сгенерировать ответ"
-                    )
-                    yield error_response
-                    return
-                
-                logger.info(f"Получено {len(tokens)} токенов от LangChain Gemini")
-                
-                # Обрабатываем каждый токен
-                for token in tokens:
-                    if token and token.strip():
-                        # Отправляем токен клиенту
-                        text_response = streaming_pb2.StreamResponse(
-                            text_chunk=token
-                        )
-                        yield text_response
-                        
-                        # Генерируем аудио для этого токена
-                        try:
-                            audio_chunks = self.audio_generator.generate_audio_sync(token)
-                            
-                            if audio_chunks:
-                                logger.debug(f"Сгенерировано {len(audio_chunks)} аудио чанков для токена: {token[:30]}...")
-                                
-                                # Отправляем каждый аудио чанк
-                                for audio_chunk in audio_chunks:
-                                    audio_response = streaming_pb2.StreamResponse(
-                                        audio_chunk=streaming_pb2.AudioChunk(
-                                            audio_data=audio_chunk.tobytes(),
-                                            dtype=str(audio_chunk.dtype),
-                                            shape=list(audio_chunk.shape)
-                                        )
-                                    )
-                                    yield audio_response
-                            else:
-                                logger.warning(f"Не удалось сгенерировать аудио для токена: {token[:30]}...")
-                                
-                        except Exception as audio_error:
-                            logger.error(f"Ошибка генерации аудио для токена: {audio_error}")
-                            # Продолжаем без аудио
-                
-                # Отправляем сообщение о завершении
-                end_response = streaming_pb2.StreamResponse(
-                    end_message="Стриминг завершен"
-                )
-                yield end_response
+            # Получаем асинхронный генератор текста
+            text_generator = self.text_processor.generate_response_stream(prompt)
+            
+            # Стримим текст и для каждого куска стримим аудио
+            async for text_chunk in text_generator:
+                if text_chunk and text_chunk.strip():
+                    # 1. Отправляем текстовый чанк клиенту
+                    yield streaming_pb2.StreamResponse(text_chunk=text_chunk)
                     
-                logger.info("LangChain streaming завершен для данного промпта.")
-                
-            finally:
-                loop.close()
+                    # 2. Асинхронно генерируем ПОЛНОЕ аудио для этого предложения
+                    try:
+                        # Вызываем новый метод, который возвращает один большой массив
+                        audio_chunk_complete = await self.audio_generator.generate_complete_audio_for_sentence(text_chunk)
+                        
+                        if audio_chunk_complete is not None and len(audio_chunk_complete) > 0:
+                            # Отправляем этот массив как один аудио-чанк
+                            yield streaming_pb2.StreamResponse(
+                                audio_chunk=streaming_pb2.AudioChunk(
+                                    audio_data=audio_chunk_complete.tobytes(),
+                                    dtype=str(audio_chunk_complete.dtype),
+                                    shape=list(audio_chunk_complete.shape)
+                                )
+                            )
+                    except Exception as audio_error:
+                        logger.error(f"Ошибка генерации аудио для '{text_chunk[:30]}...': {audio_error}")
+
+            logger.info("LangChain streaming завершен для данного промпта.")
                 
         except Exception as e:
-            logger.error(f"Произошла ошибка в LangChain streaming: {e}")
-            error_response = streaming_pb2.StreamResponse(
+            logger.error(f"Произошла ошибка в StreamAudio: {e}", exc_info=True)
+            yield streaming_pb2.StreamResponse(
                 error_message=f"Произошла внутренняя ошибка: {e}"
             )
-            yield error_response
-    
-    def _process_hardware_id_async(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
-        """Асинхронная обработка Hardware ID в базе данных (не блокирует основной поток)"""
-        try:
-            # Запускаем в отдельном потоке для неблокирующей обработки
-            import threading
-            
-            def process_in_thread():
-                try:
-                    if not self.db_manager:
-                        logger.warning("⚠️ База данных недоступна для обработки Hardware ID")
-                        return
-                    
-                    logger.info(f"🆔 Асинхронная обработка Hardware ID: {hardware_id[:16]}...")
-                    logger.info(f"📝 Команда: {prompt[:50]}...")
-                    
-                    # 1. Получаем или создаем пользователя
-                    user = self.db_manager.get_user_by_hardware_id(hardware_id)
-                    if not user:
-                        # Создаем нового пользователя
-                        user_metadata = {
-                            "hardware_id": hardware_id,
-                            "first_command": prompt,
-                            "created_via": "gRPC"
-                        }
-                        user_id = self.db_manager.create_user(hardware_id, user_metadata)
-                        if user_id:
-                            logger.info(f"✅ Создан новый пользователь: {user_id}")
-                        else:
-                            logger.error("❌ Не удалось создать пользователя")
-                            return
-                    else:
-                        user_id = user['id']
-                        logger.info(f"✅ Найден существующий пользователь: {user_id}")
-                    
-                    # 2. Создаем новую сессию
-                    session_metadata = {
-                        "prompt": prompt,
-                        "has_screenshot": bool(screenshot_base64),
-                        "screen_resolution": f"{screen_info.get('width', 0)}x{screen_info.get('height', 0)}" if screen_info else "unknown"
-                    }
-                    session_id = self.db_manager.create_session(user_id, session_metadata)
-                    if not session_id:
-                        logger.error("❌ Не удалось создать сессию")
-                        return
-                    
-                    logger.info(f"✅ Создана сессия: {session_id}")
-                    
-                    # 3. Сохраняем команду
-                    command_metadata = {
-                        "prompt_length": len(prompt),
-                        "has_screenshot": bool(screenshot_base64),
-                        "screen_info": screen_info or {}
-                    }
-                    command_id = self.db_manager.create_command(session_id, prompt, command_metadata)
-                    if not command_id:
-                        logger.error("❌ Не удалось сохранить команду")
-                        return
-                    
-                    logger.info(f"✅ Команда сохранена: {command_id}")
-                    
-                    # 4. Сохраняем скриншот (если есть)
-                    if screenshot_base64:
-                        screenshot_metadata = {
-                            "base64_length": len(screenshot_base64),
-                            "screen_resolution": f"{screen_info.get('width', 0)}x{screen_info.get('height', 0)}" if screen_info else "unknown",
-                            "format": "webp_base64"
-                        }
-                        # Сохраняем скриншот с временным путем (в реальности можно сохранить в файл)
-                        screenshot_id = self.db_manager.create_screenshot(
-                            session_id, 
-                            file_path=f"/tmp/screenshot_{session_id}.webp",
-                            metadata=screenshot_metadata
-                        )
-                        if screenshot_id:
-                            logger.info(f"✅ Скриншот сохранен: {screenshot_id}")
-                        else:
-                            logger.warning("⚠️ Не удалось сохранить скриншот")
-                    
-                    # 5. Сохраняем метрики производительности
-                    performance_metadata = {
-                        "command_processing": {
-                            "prompt_length": len(prompt),
-                            "has_screenshot": bool(screenshot_base64),
-                            "timestamp": str(datetime.now())
-                        }
-                    }
-                    metric_id = self.db_manager.create_performance_metric(session_id, "command_processing", performance_metadata)
-                    if metric_id:
-                        logger.info(f"✅ Метрики сохранены: {metric_id}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Ошибка асинхронной обработки Hardware ID: {e}")
-                    # Просто логируем в консоль, не сохраняем в БД
-                    pass
-            
-            # Запускаем в отдельном потоке
-            thread = threading.Thread(target=process_in_thread, daemon=True)
-            thread.start()
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка запуска асинхронной обработки Hardware ID: {e}")
 
-def serve():
-    """Запуск gRPC сервера"""
+    async def _process_hardware_id_async(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
+        """Асинхронная обработка информации в базе данных."""
+        # Эта функция теперь может быть нативной корутиной, если db_manager поддерживает async
+        # Пока что оставляем запуск в executor'е для совместимости с синхронной библиотекой БД
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._process_hardware_id_sync, hardware_id, prompt, screenshot_base64, screen_info)
+
+    def _process_hardware_id_sync(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
+        """Синхронный код для работы с БД, который будет выполняться в ThreadPoolExecutor."""
+        try:
+            if not self.db_manager:
+                logger.warning("⚠️ База данных недоступна для обработки Hardware ID")
+                return
+            
+            logger.info(f"🆔 Обработка Hardware ID в потоке: {hardware_id[:16]}...")
+            
+            user = self.db_manager.get_user_by_hardware_id(hardware_id)
+            if not user:
+                user_id = self.db_manager.create_user(hardware_id, {"created_via": "gRPC"})
+                logger.info(f"✅ Создан новый пользователь: {user_id}")
+            else:
+                user_id = user['id']
+                logger.info(f"✅ Найден существующий пользователь: {user_id}")
+
+            session_id = self.db_manager.create_session(user_id, {"prompt": prompt})
+            logger.info(f"✅ Создана сессия: {session_id}")
+
+            command_metadata = {"has_screenshot": bool(screenshot_base64)}
+            if screen_info:
+                command_metadata['screen_info'] = screen_info
+            self.db_manager.create_command(session_id, prompt, command_metadata)
+            logger.info(f"✅ Команда сохранена")
+
+            if screenshot_base64:
+                import json
+                screenshot_metadata = {
+                    "base64_length": len(screenshot_base64),
+                    "format": "webp_base64"
+                }
+                if screen_info:
+                    screenshot_metadata["screen_resolution"] = f"{screen_info.get('width', 0)}x{screen_info.get('height', 0)}"
+                
+                # Преобразуем dict в JSON строку перед сохранением
+                self.db_manager.create_screenshot(
+                    session_id, 
+                    f"/tmp/screenshot_{session_id}.webp", 
+                    json.dumps(screenshot_metadata)
+                )
+                logger.info(f"✅ Скриншот сохранен")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка в потоке обработки Hardware ID: {e}", exc_info=True)
+
+
+async def serve():
+    """Запуск асинхронного gRPC сервера"""
+    server = grpc.aio.server()
+    streaming_pb2_grpc.add_StreamingServiceServicer_to_server(StreamingServicer(), server)
+    
+    server_address = f"{Config.GRPC_HOST}:{Config.GRPC_PORT}"
+    server.add_insecure_port(server_address)
+    
+    logger.info(f"Асинхронный gRPC сервер запускается на {server_address}")
+    await server.start()
+    logger.info("Сервер запущен. Нажмите Ctrl+C для остановки.")
+    
     try:
-        # Проверяем конфигурацию
-        if not Config.validate():
-            logger.error("❌ Конфигурация некорректна")
-            return
-        
-        logger.info("Конфигурация успешно проверена.")
-        
-        # Создаем gRPC сервер
-        server = grpc.server(ThreadPoolExecutor(max_workers=Config.MAX_WORKERS))
-        streaming_pb2_grpc.add_StreamingServiceServicer_to_server(StreamingServicer(), server)
-        
-        # Запускаем сервер
-        server_address = f"{Config.GRPC_HOST}:{Config.GRPC_PORT}"
-        server.add_insecure_port(server_address)
-        server.start()
-        
-        logger.info(f"gRPC сервер запущен на {server_address}")
-        logger.info("Нажмите Ctrl+C для остановки...")
-        
-        # Ждем завершения
-        server.wait_for_termination()
-        
+        await server.wait_for_termination()
     except KeyboardInterrupt:
-        logger.info("Получен сигнал остановки...")
-    except Exception as e:
-        logger.error(f"Ошибка запуска сервера: {e}")
+        logger.info("Получен сигнал остановки, останавливаю сервер...")
+        await server.stop(0)
     finally:
-        logger.info("Сервер остановлен")
+        logger.info("Сервер остановлен.")
 
 if __name__ == "__main__":
-    serve()
+    # Проверяем конфигурацию перед запуском
+    if not Config.validate():
+        logger.error("❌ Конфигурация некорректна. Сервер не будет запущен.")
+        sys.exit(1)
+    
+    asyncio.run(serve())

@@ -49,11 +49,17 @@ class GrpcClient:
             console.print("[bold yellow]🔌 Отключено от сервера[/bold yellow]")
     
     async def stream_audio(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None, hardware_id: str = None):
-        """Стриминг аудио и текста для промпта с возможностью отправки скриншота и Hardware ID"""
+        """
+        Запускает стриминг аудио и текста.
+        Эта функция является асинхронным генератором, который сначала возвращает 
+        объект вызова (для возможности отмены), а затем ничего не возвращает, 
+        поскольку обработка происходит внутри.
+        """
         if not self.stub:
             console.print("[bold red]❌ Не подключен к серверу[/bold red]")
             return
         
+        call = None
         try:
             console.print(f"[bold yellow]🚀 Запуск gRPC стриминга для: {prompt}[/bold yellow]")
             
@@ -63,10 +69,8 @@ class GrpcClient:
             if hardware_id:
                 console.print(f"[bold blue]🆔 Отправляю Hardware ID: {hardware_id[:16]}...[/bold blue]")
             
-            # Запускаем воспроизведение заранее
             self.audio_player.start_playback()
             
-            # Создаем запрос с учетом скриншота и Hardware ID
             request = streaming_pb2.StreamRequest(
                 prompt=prompt,
                 screenshot=screenshot_base64 if screenshot_base64 else "",
@@ -75,20 +79,20 @@ class GrpcClient:
                 hardware_id=hardware_id if hardware_id else ""
             )
             
-            # Запускаем стриминг
-            async for response in self.stub.StreamAudio(request):
-                # Обрабатываем разные типы ответов
+            call = self.stub.StreamAudio(request)
+            
+            # Сразу возвращаем объект вызова, чтобы main мог его отменить
+            yield call
+            
+            async for response in call:
                 if response.HasField('text_chunk'):
                     console.print(f"[green]📄 Текст: {response.text_chunk}[/green]")
                 
                 elif response.HasField('audio_chunk'):
-                    # Восстанавливаем NumPy массив из AudioChunk
                     audio_chunk = np.frombuffer(
                         response.audio_chunk.audio_data, 
                         dtype=response.audio_chunk.dtype
                     ).reshape(response.audio_chunk.shape)
-                    
-                    # Добавляем в плеер
                     self.audio_player.add_chunk(audio_chunk)
                 
                 elif response.HasField('end_message'):
@@ -99,22 +103,21 @@ class GrpcClient:
                     console.print(f"[bold red]❌ Ошибка от сервера: {response.error_message}[/bold red]")
                     break
             
-            # Ждем, пока все аудио в очереди будет воспроизведено
             self.audio_player.wait_for_queue_empty()
-            self.audio_player.stop_playback()
             
-        except grpc.RpcError as e:
-            if e.code() == grpc.StatusCode.UNAVAILABLE:
-                console.print("[bold red]❌ Сервер недоступен[/bold red]")
-            elif e.code() == grpc.StatusCode.CANCELLED:
-                console.print("[bold yellow]⚠️ Стриминг отменен[/bold yellow]")
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.CANCELLED:
+                console.print("[bold yellow]⚠️ Стриминг отменен клиентом[/bold yellow]")
             else:
                 console.print(f"[bold red]❌ gRPC ошибка: {e.details()}[/bold red]")
         except Exception as e:
-            console.print(f"[bold red]❌ Произошла непредвиденная ошибка: {e}[/bold red]")
+            console.print(f"[bold red]❌ Произошла непредвиденная ошибка в стриминге: {e}[/bold red]")
         finally:
             if self.audio_player.is_playing:
                 self.audio_player.stop_playback()
+            # Убеждаемся, что call завершен, если он был создан
+            if call and not call.done():
+                call.cancel()
 
 async def main():
     """Основная функция клиента"""

@@ -1,6 +1,15 @@
 # 🎤 Голосовой Ассистент для macOS
 
-Интеллектуальный голосовой ассистент с поддержкой анализа экрана, использующий Google Gemini LLM и Edge TTS.
+Интеллектуальный голосовой ассистент с поддержкой анализа экрана, Google Search интеграцией, использующий Google Gemini LLM и Edge TTS.
+
+## ✨ Возможности
+
+- 🎤 **Голосовое управление** - push-to-talk с распознаванием речи
+- 🔍 **Google Search интеграция** - актуальная информация в реальном времени
+- 🖥️ **Анализ экрана** - понимание контекста через скриншоты
+- 🧠 **ИИ-агент** - LangChain AgentExecutor с инструментами
+- 📊 **База данных** - PostgreSQL с логированием всех взаимодействий
+- 🔊 **Нейронный TTS** - Microsoft Edge TTS с русскими голосами
 
 ## 🏗️ Архитектура
 
@@ -77,8 +86,14 @@ cp config.env.example config.env
 
 Отредактируйте `config.env`:
 ```env
-# Google Gemini API
-GEMINI_API_KEY=your_actual_api_key_here
+# Google Gemini API (получить на https://makersuite.google.com/app/apikey)
+GOOGLE_API_KEY=your_gemini_api_key_here
+
+# Google Search API (получить в Google Cloud Console)
+GSEARCH_API_KEY=your_google_search_api_key_here
+
+# Custom Search Engine ID (создать на https://cse.google.com/)
+GSEARCH_CSE_ID=your_custom_search_engine_id_here
 
 # PostgreSQL Database
 DB_HOST=localhost
@@ -87,6 +102,25 @@ DB_NAME=voice_assistant_db
 DB_USER=postgres
 DB_PASSWORD=your_password_here
 ```
+
+### 🔑 Получение API ключей
+
+#### Google Gemini API
+1. Перейдите на [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Создайте новый API ключ
+3. Скопируйте ключ в `GOOGLE_API_KEY`
+
+#### Google Search API
+1. Перейдите в [Google Cloud Console](https://console.cloud.google.com/)
+2. Создайте новый проект или выберите существующий
+3. Включите Custom Search API
+4. Создайте учетные данные (API ключ)
+5. Скопируйте ключ в `GSEARCH_API_KEY`
+
+#### Custom Search Engine
+1. Перейдите на [Google Custom Search](https://cse.google.com/)
+2. Создайте новую поисковую машину
+3. Скопируйте Search Engine ID в `GSEARCH_CSE_ID`
 
 ### 4. Запуск системы
 
