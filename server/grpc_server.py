@@ -229,7 +229,12 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                             "screen_resolution": f"{screen_info.get('width', 0)}x{screen_info.get('height', 0)}" if screen_info else "unknown",
                             "format": "webp_base64"
                         }
-                        screenshot_id = self.db_manager.create_screenshot(session_id, screenshot_metadata)
+                        # Сохраняем скриншот с временным путем (в реальности можно сохранить в файл)
+                        screenshot_id = self.db_manager.create_screenshot(
+                            session_id, 
+                            file_path=f"/tmp/screenshot_{session_id}.webp",
+                            metadata=screenshot_metadata
+                        )
                         if screenshot_id:
                             logger.info(f"✅ Скриншот сохранен: {screenshot_id}")
                         else:
@@ -249,17 +254,8 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка асинхронной обработки Hardware ID: {e}")
-                    # Логируем ошибку в базу данных
-                    if self.db_manager:
-                        try:
-                            self.db_manager.create_error_log(
-                                session_id=None,
-                                error_type="hardware_id_processing",
-                                error_message=str(e),
-                                metadata={"hardware_id": hardware_id[:16]}
-                            )
-                        except:
-                            pass
+                    # Просто логируем в консоль, не сохраняем в БД
+                    pass
             
             # Запускаем в отдельном потоке
             thread = threading.Thread(target=process_in_thread, daemon=True)

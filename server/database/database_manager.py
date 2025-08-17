@@ -147,8 +147,7 @@ class DatabaseManager:
     # УПРАВЛЕНИЕ КОМАНДАМИ
     # =====================================================
     
-    def create_command(self, session_id: str, prompt: str, language: str = 'en', 
-                      metadata: Dict[str, Any] = None) -> Optional[str]:
+    def create_command(self, session_id: str, prompt: str, metadata: Dict[str, Any] = None, language: str = 'en') -> Optional[str]:
         """Создание новой команды"""
         try:
             with self.connection.cursor() as cursor:
@@ -254,34 +253,6 @@ class DatabaseManager:
             return None
     
     # =====================================================
-    # УПРАВЛЕНИЕ ЛОГАМИ ОШИБОК
-    # =====================================================
-    
-    def create_error_log(self, error_type: str, error_message: str, 
-                        session_id: str = None, stack_trace: str = None,
-                        metadata: Dict[str, Any] = None) -> Optional[str]:
-        """Создание лога ошибки"""
-        try:
-            with self.connection.cursor() as cursor:
-                error_id = str(uuid.uuid4())
-                cursor.execute("""
-                    INSERT INTO error_logs (id, session_id, error_type, error_message, stack_trace, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (error_id, session_id, error_type, error_message, stack_trace, json.dumps(metadata or {})))
-                
-                result = cursor.fetchone()
-                self.connection.commit()
-                
-                logger.info(f"✅ Лог ошибки создан: {error_id}")
-                return result[0] if result else error_id
-                
-        except Exception as e:
-            self.connection.rollback()
-            logger.error(f"❌ Ошибка создания лога ошибки: {e}")
-            return None
-    
-    # =====================================================
     # АНАЛИТИЧЕСКИЕ ЗАПРОСЫ
     # =====================================================
     
@@ -379,7 +350,7 @@ if __name__ == "__main__":
                     "confidence": 0.95
                 }
                 
-                command_id = db.create_command(session_id, "Привет, как дела?", "ru", command_metadata)
+                command_id = db.create_command(session_id, "Привет, как дела?", command_metadata)
                 if command_id:
                     print(f"✅ Команда создана: {command_id}")
                     

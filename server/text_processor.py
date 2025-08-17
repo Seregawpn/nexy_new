@@ -135,11 +135,14 @@ class TextProcessor:
                     
                     for sentence in sentences:
                         if sentence.strip():
-                            logger.debug(f"Отправляю предложение: {sentence[:50]}...")
-                            yield sentence + " "
-                            
-                            # Небольшая задержка для имитации стриминга
-                            await asyncio.sleep(0.1)
+                            # Дополнительно очищаем каждое предложение от markdown
+                            clean_sentence = self.clean_text(sentence.strip())
+                            if clean_sentence:
+                                logger.debug(f"Отправляю очищенное предложение: {clean_sentence[:50]}...")
+                                yield clean_sentence + " "
+                                
+                                # Небольшая задержка для имитации стриминга
+                                await asyncio.sleep(0.1)
                 else:
                     logger.warning("Получен пустой ответ от Gemini")
                     yield "Извините, не удалось получить ответ от ассистента."
@@ -191,9 +194,16 @@ class TextProcessor:
     def clean_text(self, text: str) -> str:
         """Очищает текст от форматирования и артефактов"""
         # Убираем markdown разметку
+        text = re.sub(r'\*\*\*([^*]+)\*\*\*', r'\1', text)  # ***текст*** -> текст
         text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **текст** -> текст
         text = re.sub(r'\*([^*]+)\*', r'\1', text)      # *текст* -> текст
         text = re.sub(r'###\s*', '', text)              # ### Заголовок -> Заголовок
+        
+        # Убираем звездочки в начале строк (списки)
+        text = re.sub(r'^\s*\*\s*', '', text, flags=re.MULTILINE)  # * элемент списка -> элемент списка
+        
+        # Убираем оставшиеся звездочки
+        text = text.replace('*', '')
         
         # Убираем лишние пробелы и переносы строк
         text = re.sub(r'\s+', ' ', text)                # Множественные пробелы -> один
@@ -220,14 +230,27 @@ class TextProcessor:
     
     def split_into_sentences(self, text: str) -> List[str]:
         """Разбивает текст на предложения"""
-        # Сначала очищаем текст
-        clean_text = self.clean_text(text)
+        # Сначала разбиваем по звездочкам (списки)
+        if '*' in text:
+            # Используем regex для разбиения по звездочкам с пробелами
+            import re
+            parts = re.split(r'\*\s*', text)
+            sentences = []
+            for part in parts:
+                if part.strip():
+                    # Применяем полную очистку
+                    final_clean = self.clean_text(part.strip())
+                    if final_clean:
+                        sentences.append(final_clean)
+            # Если получили предложения, возвращаем их
+            if sentences:
+                return sentences
         
-        # Простое разбиение по знакам препинания
+        # Если нет звездочек, разбиваем по знакам препинания
         sentences = []
         current = ""
         
-        for char in clean_text:
+        for char in text:
             current += char
             
             if char in ['.', '!', '?']:
@@ -245,8 +268,15 @@ class TextProcessor:
         if current.strip():
             sentences.append(current.strip())
         
-        # Фильтруем пустые предложения
-        return [s for s in sentences if s.strip()]
+        # Фильтруем пустые предложения и очищаем каждое от markdown
+        cleaned_sentences = []
+        for sentence in sentences:
+            if sentence.strip():
+                clean_sentence = self.clean_text(sentence.strip())
+                if clean_sentence:
+                    cleaned_sentences.append(clean_sentence)
+        
+        return cleaned_sentences
     
     async def process_stream(self, text_stream: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
         """Обрабатывает поток текста и возвращает готовые предложения"""

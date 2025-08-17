@@ -141,30 +141,6 @@ CREATE INDEX idx_performance_metrics_type ON performance_metrics(metric_type);
 CREATE INDEX idx_performance_metrics_value ON performance_metrics USING GIN (metric_value);
 
 -- =====================================================
--- ТАБЛИЦА ЛОГОВ ОШИБОК
--- =====================================================
-CREATE TABLE error_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-    
-    -- Основная информация об ошибке
-    error_type VARCHAR(100) NOT NULL,
-    error_message TEXT NOT NULL,
-    stack_trace TEXT,
-    
-    -- Дополнительная информация об ошибке
-    metadata JSONB DEFAULT '{}'::jsonb,
-    
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Индексы для логов ошибок
-CREATE INDEX idx_error_logs_session_id ON error_logs(session_id);
-CREATE INDEX idx_error_logs_error_type ON error_logs(error_type);
-CREATE INDEX idx_error_logs_created_at ON error_logs(created_at);
-CREATE INDEX idx_error_logs_metadata ON error_logs USING GIN (metadata);
-
--- =====================================================
 -- ТРИГГЕРЫ ДЛЯ ОБНОВЛЕНИЯ TIMESTAMP
 -- =====================================================
 
