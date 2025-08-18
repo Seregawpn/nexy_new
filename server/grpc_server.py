@@ -66,12 +66,12 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 screen_info_for_db = {'width': screen_width, 'height': screen_height} if screen_width > 0 else {}
                 asyncio.create_task(self._process_hardware_id_async(hardware_id, prompt, screenshot_base64, screen_info_for_db))
             
-            logger.info("Запускаю LangChain streaming через Gemini...")
+            logger.info("Запускаю Gemini Live API streaming...")
             
             screen_info = {'width': screen_width, 'height': screen_height} if screen_width > 0 else {}
             
             # Получаем асинхронный генератор текста
-            text_generator = self.text_processor.generate_response_stream(prompt)
+            text_generator = self.text_processor.generate_response_stream(prompt, screenshot_base64)
             
             # Стримим текст и для каждого куска стримим аудио
             async for text_chunk in text_generator:
@@ -96,7 +96,7 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                     except Exception as audio_error:
                         logger.error(f"Ошибка генерации аудио для '{text_chunk[:30]}...': {audio_error}")
 
-            logger.info("LangChain streaming завершен для данного промпта.")
+            logger.info("Gemini Live API streaming завершен для данного промпта.")
                 
         except Exception as e:
             logger.error(f"Произошла ошибка в StreamAudio: {e}", exc_info=True)

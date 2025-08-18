@@ -93,6 +93,7 @@ class GrpcClient:
                         response.audio_chunk.audio_data, 
                         dtype=response.audio_chunk.dtype
                     ).reshape(response.audio_chunk.shape)
+                    console.print(f"[blue]🎵 Аудио чанк получен: {len(audio_chunk)} сэмплов[/blue]")
                     self.audio_player.add_chunk(audio_chunk)
                 
                 elif response.HasField('end_message'):

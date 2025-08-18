@@ -23,7 +23,7 @@ from Quartz import (
 logger = logging.getLogger(__name__)
 
 class ScreenCapture:
-    """Захват экрана macOS с конвертацией в WebP + Base64"""
+    """Захват экрана macOS с конвертацией в JPEG + Base64"""
     
     def __init__(self):
         self.main_display_id = CGMainDisplayID()
@@ -31,13 +31,13 @@ class ScreenCapture:
         
     def capture_screen(self, quality: int = 85) -> str:
         """
-        Захватывает экран и возвращает Base64 строку WebP изображения
+        Захватывает экран и возвращает Base64 строку JPEG изображения
         
         Args:
-            quality (int): Качество WebP (1-100)
+            quality (int): Качество JPEG (1-100)
             
         Returns:
-            str: Base64 строка WebP изображения
+            str: Base64 строка JPEG изображения
         """
         try:
             logger.info("Начинаю захват экрана...")
@@ -105,26 +105,26 @@ class ScreenCapture:
                 return None
             
             # Конвертируем в PIL Image
-            pil_image = Image.fromarray(rgb_array, 'RGB')
+            pil_image = Image.fromarray(rgb_array)
             
             logger.info(f"Экран захвачен: {width}x{height} пикселей")
             
-            # Конвертируем в WebP с указанным качеством
-            webp_buffer = io.BytesIO()
+            # Конвертируем в JPEG с указанным качеством
+            jpeg_buffer = io.BytesIO()
             pil_image.save(
-                webp_buffer,
-                format='WEBP',
+                jpeg_buffer,
+                format='JPEG',
                 quality=quality,
-                method=6  # Максимальное сжатие
+                optimize=True
             )
             
-            webp_data = webp_buffer.getvalue()
-            webp_buffer.close()
+            jpeg_data = jpeg_buffer.getvalue()
+            jpeg_buffer.close()
             
-            logger.info(f"WebP создан: {len(webp_data)} байт")
+            logger.info(f"JPEG создан: {len(jpeg_data)} байт")
             
             # Конвертируем в Base64
-            base64_string = base64.b64encode(webp_data).decode('utf-8')
+            base64_string = base64.b64encode(jpeg_data).decode('utf-8')
             
             logger.info(f"Base64 создан: {len(base64_string)} символов")
             
@@ -139,10 +139,10 @@ class ScreenCapture:
         Захватывает активное окно (если возможно)
         
         Args:
-            quality (int): Качество WebP (1-100)
+            quality (int): Качество JPEG (1-100)
             
         Returns:
-            str: Base64 строка WebP изображения
+            str: Base64 строка JPEG изображения
         """
         try:
             logger.info("Начинаю захват активного окна...")
@@ -195,19 +195,19 @@ if __name__ == "__main__":
     
     # Захватываем экран
     print("Захватываю экран...")
-    base64_webp = capture.capture_screen(quality=80)
+    base64_jpeg = capture.capture_screen(quality=80)
     
-    if base64_webp:
+    if base64_jpeg:
         print(f"✅ Захват успешен!")
-        print(f"Base64 длина: {len(base64_webp)} символов")
-        print(f"Первые 100 символов: {base64_webp[:100]}...")
+        print(f"Base64 длина: {len(base64_jpeg)} символов")
+        print(f"Первые 100 символов: {base64_jpeg[:100]}...")
         
         # Сохраняем для проверки
         try:
-            decoded = base64.b64decode(base64_webp)
-            with open("test_screenshot.webp", "wb") as f:
+            decoded = base64.b64decode(base64_jpeg)
+            with open("test_screenshot.jpg", "wb") as f:
                 f.write(decoded)
-            print("💾 Скриншот сохранен как test_screenshot.webp")
+            print("💾 Скриншот сохранен как test_screenshot.jpg")
         except Exception as e:
             print(f"❌ Ошибка сохранения: {e}")
     else:

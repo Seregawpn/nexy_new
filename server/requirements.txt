@@ -7,11 +7,11 @@ grpcio
 grpcio-tools
 protobuf
 
-# LangChain и Gemini
-langchain
-langchain-core
-langchain-google-genai
-google-generativeai
+# Google Gemini Live API
+google-genai
+
+# Обработка изображений
+Pillow
 
 # Edge TTS
 edge-tts
@@ -22,8 +22,7 @@ psycopg2-binary
 # Аудио обработка
 numpy
 sounddevice
+pydub
 
 # Логирование и утилиты
 rich
-langchain-community
-google-api-python-client

@@ -97,6 +97,7 @@ async def main():
     current_screenshot = None
     current_screen_info = None
     active_call = None
+    streaming_task = None  # Задача для фоновой обработки стрима
     
     console.print("[bold green]✅ Ассистент готов![/bold green]")
     console.print("[yellow]📋 Управление:[/yellow]")
@@ -106,6 +107,26 @@ async def main():
     console.print("[yellow]  • Короткое нажатие → прерывание речи ассистента[/yellow]")
     console.print("[yellow]  • При активации автоматически захватывается экран[/yellow]")
     console.print("[yellow]  • Hardware ID отправляется с каждой командой[/yellow]")
+
+    # --- Вспомогательная функция для обработки стрима в фоне ---
+    async def consume_stream(stream_generator):
+        nonlocal state, active_call, streaming_task
+        try:
+            # Потребляем генератор до конца
+            async for _ in stream_generator:
+                pass
+        except asyncio.CancelledError:
+            # Это ожидаемое исключение при отмене задачи
+            logger.info("Задача стриминга была отменена.")
+        except Exception as e:
+            console.print(f"[bold red]❌ Ошибка в задаче обработки стрима: {e}[/bold red]")
+        finally:
+            # Сбрасываем состояние после завершения или отмены
+            state = AppState.IDLE
+            active_call = None
+            streaming_task = None
+            console.print("[bold green]✅ Команда выполнена[/bold green]")
+    # ---------------------------------------------------------
 
     try:
         # Получаем информацию об экране
@@ -126,22 +147,23 @@ async def main():
             
             if event == "start_recording":
                 # Прерываем текущую речь, если она есть
-                if active_call and not active_call.done():
+                if streaming_task and not streaming_task.done():
                     console.print("[bold yellow]Прерываю предыдущий ответ...[/bold yellow]")
-                    active_call.cancel()
+                    streaming_task.cancel()  # Отменяем фоновую задачу
+                    if active_call:
+                        active_call.cancel() # Отменяем gRPC вызов
                     grpc_client.audio_player.interrupt()
-                    active_call = None
                 
                 # Если ассистент неактивен, начинаем запись
                 if state == AppState.IDLE:
                     state = AppState.LISTENING
                     
-                    console.print("[bold blue]📸 Захватываю экран...[/bold blue]")
+                    console.print("[bold blue]📸 Захватываю экран в JPEG...[/bold blue]")
                     current_screenshot = screen_capture.capture_screen(quality=80)
                     current_screen_info = screen_info
                     
                     if current_screenshot:
-                        console.print(f"[bold green]✅ Скриншот захвачен: {len(current_screenshot)} символов Base64[/bold green]")
+                        console.print(f"[bold green]✅ JPEG скриншот захвачен: {len(current_screenshot)} символов Base64[/bold green]")
                     else:
                         console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
                         current_screenshot = None
@@ -151,19 +173,26 @@ async def main():
                     console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
                 
             elif event == "interrupt_speech":
-                # Короткое нажатие теперь тоже прерывает речь
-                if active_call and not active_call.done():
+                # Короткое нажатие прерывает речь ассистента
+                console.print("[bold red]🔇 Прерывание речи ассистента...[/bold red]")
+                
+                # Принудительно прерываем ВСЕ процессы
+                if streaming_task and not streaming_task.done():
                     console.print("[bold red]⏹️ Речь прервана (короткое нажатие)[/bold red]")
+                    streaming_task.cancel()
+                if active_call:
                     active_call.cancel()
-                    grpc_client.audio_player.interrupt()
-                    active_call = None
-                    state = AppState.IDLE
-                elif state == AppState.LISTENING:
-                    stt_recognizer.stop_recording_and_recognize()
-                    state = AppState.IDLE
-                    console.print("[bold yellow]⚠️ Запись команды прервана[/bold yellow]")
-                else:
-                    console.print("[yellow]ℹ️ Ассистент не говорит[/yellow]")
+                
+                # Принудительно останавливаем аудио плеер
+                grpc_client.audio_player.interrupt()
+                grpc_client.audio_player.stop_playback()
+                
+                # Сбрасываем состояние
+                state = AppState.IDLE
+                active_call = None
+                streaming_task = None
+                
+                console.print("[bold green]✅ Речь полностью прервана[/bold green]")
                     
             elif event == "stop_recording" and state == AppState.LISTENING:
                 state = AppState.PROCESSING
@@ -187,19 +216,14 @@ async def main():
                         active_call = await stream_generator.__anext__()
                         state = AppState.SPEAKING
                         
-                        # Ожидаем завершения стриминга
-                        async for _ in stream_generator:
-                            # Этот цикл просто исчерпывает генератор
-                            pass
-                        
-                        state = AppState.IDLE
-                        active_call = None
-                        console.print("[bold green]✅ Команда выполнена[/bold green]")
+                        # Запускаем обработку стрима в фоновой задаче
+                        streaming_task = asyncio.create_task(consume_stream(stream_generator))
                         
                     except Exception as e:
                         console.print(f"[bold red]❌ Ошибка выполнения команды: {e}[/bold red]")
                         state = AppState.IDLE
                         active_call = None
+                        streaming_task = None
                 else:
                     console.print("[yellow]⚠️ Команда не распознана[/yellow]")
                     state = AppState.IDLE
@@ -209,6 +233,8 @@ async def main():
     except Exception as e:
         console.print(f"[bold red]❌ Критическая ошибка: {e}[/bold red]")
     finally:
+        if streaming_task and not streaming_task.done():
+            streaming_task.cancel()
         if active_call and not active_call.done():
             active_call.cancel()
         stt_recognizer.cleanup()
@@ -221,3 +247,15 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
+

@@ -2,170 +2,147 @@ import asyncio
 import logging
 import os
 import re
+import base64
+import io
 from typing import AsyncGenerator, List
+from PIL import Image
 
-from dotenv import load_dotenv
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_community.tools import GoogleSearchRun
-from langchain_community.utilities import GoogleSearchAPIWrapper
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from google import genai
+from google.genai import types
 
 # --- Загрузка конфигурации ---
-# Вместо прямого вызова Config, используем load_dotenv,
-# так как TextProcessor не должен зависеть от всего server.config
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'config.env'))
-
-# Проверка наличия всех необходимых ключей API
-if not all(k in os.environ for k in ["GOOGLE_API_KEY", "GSEARCH_API_KEY", "GSEARCH_CSE_ID"]):
-    raise ValueError("Не найдены необходимые ключи API. Проверьте config.env")
+# Проверка наличия необходимых ключей API
+if not os.environ.get("GEMINI_API_KEY"):
+    raise ValueError("Не найден GEMINI_API_KEY. Проверьте config.env")
 
 logger = logging.getLogger(__name__)
 
-# --- Определение инструментов ---
-# Этот инструмент можно вынести, если он будет использоваться где-то еще
-@tool
-def get_weather(city: str) -> str:
-    """Gets the current weather for a given city. Use only when user asks about weather."""
-    logger.info(f"--- Tool: get_weather called for city: {city} ---")
-    # Здесь должна быть реальная логика получения погоды
-    if "boston" in city.lower():
-        return "It's currently sunny in Boston."
-    elif "san francisco" in city.lower():
-        return "It's currently foggy in San Francisco."
-    else:
-        return f"Weather data for {city} is not available."
-
 class TextProcessor:
     """
-    Обрабатывает текстовые запросы с использованием ИИ-агента,
+    Обрабатывает текстовые запросы с использованием Google Gemini Live API,
     который может использовать инструменты (например, Google Search)
     и поддерживает стриминг финального ответа.
     """
     
     def __init__(self):
         try:
-            # 1. Инициализация модели
-            self.model = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash-lite",
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-                temperature=0.7,
+            # Инициализация Gemini Live API клиента
+            self.client = genai.Client(
+                http_options={"api_version": "v1beta"},
+                api_key=os.environ.get("GEMINI_API_KEY"),
             )
-
-            # 2. Создание и настройка инструментов
-            search_wrapper = GoogleSearchAPIWrapper(
-                google_api_key=os.environ["GSEARCH_API_KEY"],
-                google_cse_id=os.environ["GSEARCH_CSE_ID"]
-            )
-            search_tool = GoogleSearchRun(api_wrapper=search_wrapper)
-            self.tools = [search_tool, get_weather]
-
-            # 3. Создание промпта для Агента
-            prompt_template = ChatPromptTemplate.from_messages(
-                [
-                    ("system", """
-                    You are a helpful voice assistant for macOS. You have access to tools like Google Search.
-
-                    **YOUR CORE RULES:**
-                    - For any question that requires current information (news, facts, weather, stock prices, match results), events after 2023, or any information that can change over time, you **MUST** use the `google_search` tool.
-                    - **DO NOT** answer such questions from your memory. Always use the search tool first.
-                    - If the user asks about the weather, use the `get_weather` tool.
-                    - Answer in concise, informative Russian.
-                    """),
-                    ("human", "{input}"),
-                    ("placeholder", "{agent_scratchpad}"),
-                ]
-            )
-
-            # 4. Создание Агента и его Исполнителя (Executor)
-            agent = create_tool_calling_agent(self.model, self.tools, prompt_template)
-            self.agent_executor = AgentExecutor(agent=agent, tools=self.tools, verbose=True)
             
-            logger.info("✅ TextProcessor с AgentExecutor инициализирован успешно")
-
+            # Настройка инструментов
+            self.tools = [
+                types.Tool(google_search=types.GoogleSearch()),
+            ]
+            
+            # Конфигурация для Live API
+            self.config = types.LiveConnectConfig(
+                response_modalities=["TEXT"],
+                media_resolution="MEDIA_RESOLUTION_MEDIUM",
+                context_window_compression=types.ContextWindowCompressionConfig(
+                    trigger_tokens=25600,
+                    sliding_window=types.SlidingWindow(target_tokens=12800),
+                ),
+                tools=self.tools,
+            )
+            
+            logger.info(f"✅ TextProcessor с Gemini Live API инициализирован успешно")
+            logger.info(f"🔍 Google Search tool создан")
+            
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации TextProcessor: {e}", exc_info=True)
-            self.agent_executor = None
+            self.client = None
 
-    async def generate_response_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_response_stream(self, prompt: str, screenshot_base64: str = None, **kwargs) -> AsyncGenerator[str, None]:
         """
-        Генерирует ответ с помощью агента и стримит финальный результат.
-        **kwargs используется для обратной совместимости, но не используется в этой реализации.
+        Генерирует ответ с помощью Gemini Live API и стримит результат.
         """
-        if not self.agent_executor:
-            logger.error("AgentExecutor не инициализирован.")
+        if not self.client:
+            logger.error("Gemini клиент не инициализирован.")
             yield "Извините, произошла ошибка конфигурации ассистента."
             return
 
-        logger.info(f"Запускаю AgentExecutor astream_events для: '{prompt[:50]}...'")
-        
-        buffer = ""
-        sentence_endings = ['.', '!', '?', '...', '?!', '!?']
-        is_final_answer_started = False
+        logger.info(f"Запускаю Gemini Live API для: '{prompt[:50]}...'")
         
         try:
-            # Используем astream_events для получения контроля над потоком
-            async for event in self.agent_executor.astream_events({"input": prompt}, version="v1"):
-                kind = event["event"]
+            # Создаем сессию Live API
+            async with self.client.aio.live.connect(
+                model="models/gemini-2.0-flash-live-001", 
+                config=self.config
+            ) as session:
                 
-                # Логируем все события для отладки
-                logger.debug(f"📡 Событие: {kind} - {event.get('name', 'N/A')}")
+
                 
-                # Обрабатываем ответы от инструментов
-                if kind == "on_tool_end":
-                    tool_name = event.get("name", "unknown")
-                    tool_output = event.get("data", {}).get("output", "")
-                    logger.info(f"🔧 Инструмент {tool_name} завершил работу")
-                    
-                    # Если это Google Search, стримим результат
-                    if tool_name == "google_search" and tool_output:
-                        # Разбиваем результат поиска на предложения
-                        sentences = self._split_into_sentences(tool_output)
-                        for sentence in sentences:
-                            if sentence.strip():
-                                logger.info(f"📤 Отправляю результат поиска: '{sentence[:100]}...'")
-                                yield sentence.strip()
-                
-                # Обрабатываем финальный ответ от модели
-                elif kind == "on_chat_model_stream":
-                    content = event["data"]["chunk"].content
-                    if content:
-                        buffer += content
+                # Отправляем изображение и текст по отдельности (cookbook-style)
+                if screenshot_base64:
+                    try:
+                        # Отправляем JPEG изображение напрямую (без конвертации)
+                        await session.send(input={
+                            "mime_type": "image/jpeg",
+                            "data": screenshot_base64  # JPEG base64-строка
+                        })
                         
-                        # Отдаем готовые предложения
-                        while True:
-                            sentence_end_pos = -1
-                            for ending in sentence_endings:
-                                pos = buffer.find(ending)
-                                if pos != -1:
-                                    if sentence_end_pos == -1 or pos < sentence_end_pos:
-                                        sentence_end_pos = pos + len(ending)
+                        # Небольшая пауза для обработки изображения
+                        await asyncio.sleep(0.1)
+                        
+                        logger.info("📸 JPEG изображение отправлено")
+                    except Exception as img_error:
+                        logger.warning(f"Не удалось обработать скриншот: {img_error}")
+                
+                # Отправляем текстовый запрос
+                await session.send(input=prompt, end_of_turn=True)
+                logger.info("📝 Текст отправлен")
+                
+                # Получаем ответ
+                turn = session.receive()
+                accumulated_text = ""
+                
+                async for response in turn:
+                    if response.text:
+                        # Накапливаем текст
+                        accumulated_text += response.text
+                        logger.info(f"📝 Получен текст: '{response.text[:100]}...'")
+                        
+                        # Проверяем, есть ли полные предложения
+                        sentences = self._split_into_sentences(accumulated_text)
+                        
+                        # Если есть полные предложения, отправляем их
+                        if len(sentences) > 1:
+                            # Отправляем все предложения кроме последнего (оно может быть неполным)
+                            for sentence in sentences[:-1]:
+                                if sentence.strip():
+                                    logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
+                                    yield sentence.strip()
                             
-                            if sentence_end_pos != -1:
-                                sentence = buffer[:sentence_end_pos].strip()
-                                buffer = buffer[sentence_end_pos:]
-                                if sentence:
-                                    logger.info(f"📤 Отправляю готовое предложение: '{sentence}'")
-                                    yield sentence
-                            else:
-                                break
-            
-            # Отправляем остаток из буфера
-            if buffer.strip():
-                logger.info(f"📤 Отправляю остаток из буфера: '{buffer.strip()}'")
-                yield buffer.strip()
+                            # Оставляем последнее предложение для следующей итерации
+                            accumulated_text = sentences[-1]
+                        elif len(sentences) == 1 and self._is_complete_sentence(accumulated_text):
+                            # Если получили одно полное предложение
+                            sentence = sentences[0]
+                            if sentence.strip():
+                                logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
+                                yield sentence.strip()
+                            accumulated_text = ""
+                
+                # Отправляем оставшийся текст, если он есть
+                if accumulated_text.strip():
+                    logger.info(f"📤 Отправляю оставшийся текст: '{accumulated_text[:100]}...'")
+                    yield accumulated_text.strip()
+                
+                logger.info("✅ Gemini Live API ответ получен и обработан")
 
         except Exception as e:
-            logger.error(f"Ошибка в AgentExecutor stream: {e}", exc_info=True)
+            logger.error(f"Ошибка в Gemini Live API: {e}", exc_info=True)
             yield "Извините, произошла внутренняя ошибка при обработке вашего запроса."
-
+    
     def clean_text(self, text: str) -> str:
         """Простая очистка текста."""
         text = re.sub(r'\s+', ' ', text).strip()
         text = text.replace('*', '')
         return text
-    
+
     def _split_into_sentences(self, text: str) -> List[str]:
         """Разбивает текст на предложения для стриминга"""
         if not text:
@@ -174,21 +151,39 @@ class TextProcessor:
         # Очищаем текст
         text = self.clean_text(text)
         
-        # Разбиваем на предложения
-        sentences = []
-        current_sentence = ""
+        # Используем более точное разбиение на предложения
+        import re
+        
+        # Паттерн для разбиения на предложения
+        # Учитываем точки, восклицательные и вопросительные знаки
+        # Исключаем точки в сокращениях (например, "т.д.", "и т.п.")
+        sentence_pattern = r'(?<=[.!?])\s+(?=[A-ZА-Я])'
+        
+        # Разбиваем по паттерну
+        sentences = re.split(sentence_pattern, text)
+        
+        # Фильтруем пустые предложения и добавляем знаки препинания
+        result = []
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if sentence:
+                # Если это не последнее предложение, добавляем знак препинания
+                if i < len(sentences) - 1:
+                    # Ищем знак препинания в конце
+                    if not any(sentence.endswith(ending) for ending in ['.', '!', '?']):
+                        sentence += '.'
+                result.append(sentence)
+        
+        return result
+    
+    def _is_complete_sentence(self, text: str) -> bool:
+        """Проверяет, является ли предложение полным"""
+        if not text:
+            return False
+        
+        # Очищаем текст
+        text = self.clean_text(text)
+        
+        # Проверяем, заканчивается ли текст знаком окончания предложения
         sentence_endings = ['.', '!', '?', '...', '?!', '!?']
-        
-        for char in text:
-            current_sentence += char
-            if char in sentence_endings:
-                sentence = current_sentence.strip()
-                if sentence:
-                    sentences.append(sentence)
-                current_sentence = ""
-        
-        # Добавляем последнее предложение, если оно есть
-        if current_sentence.strip():
-            sentences.append(current_sentence.strip())
-        
-        return sentences
+        return any(text.endswith(ending) for ending in sentence_endings)
