@@ -14,9 +14,11 @@ class InputHandler:
         self.loop = loop
         self.queue = queue
         self.press_time = None
-        self.short_press_threshold = 0.3  # секунды для короткого нажатия
+        self.short_press_threshold = 0.15  # Уменьшаем порог для более точного определения коротких нажатий
         self.space_pressed = False
         self.recording_started = False
+        self.last_event_time = 0  # Добавляем отслеживание времени последнего события
+        self.event_cooldown = 0.1  # Минимальный интервал между событиями (100ms)
 
         # Запускаем listener в отдельном потоке
         self.listener_thread = Thread(target=self._run_listener, daemon=True)
@@ -28,8 +30,15 @@ class InputHandler:
 
     def on_press(self, key):
         if key == keyboard.Key.space and not self.space_pressed:
+            current_time = time.time()
+            
+            # Проверяем cooldown для предотвращения множественных событий
+            if current_time - self.last_event_time < self.event_cooldown:
+                return
+                
             self.space_pressed = True
-            self.press_time = time.time()
+            self.press_time = current_time
+            self.last_event_time = current_time
             
             # СРАЗУ при зажатии пробела активируем микрофон
             if not self.recording_started:
@@ -39,23 +48,29 @@ class InputHandler:
 
     def on_release(self, key):
         if key == keyboard.Key.space and self.space_pressed:
-            self.space_pressed = False
-            duration = time.time() - self.press_time
-            self.press_time = None
+            current_time = time.time()
             
-            # Останавливаем запись при отпускании пробела
+            # Проверяем cooldown для предотвращения множественных событий
+            if current_time - self.last_event_time < self.event_cooldown:
+                return
+                
+            self.space_pressed = False
+            duration = current_time - self.press_time
+            self.press_time = None
+            self.last_event_time = current_time
+            
+            # Сбрасываем флаг, так как клавиша отпущена
             if self.recording_started:
                 self.recording_started = False
-                self.loop.call_soon_threadsafe(self.queue.put_nowait, "stop_recording")
-                print("⏹️ Запись остановлена (пробел отпущен)")
-            
-            # Определяем тип события для прерывания речи ассистента
+
             if duration < self.short_press_threshold:
-                # Короткое нажатие = прерывание речи ассистента
-                print(f"🔇 Короткое нажатие ({duration:.2f}s) - прерывание речи ассистента")
-                self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_speech")
+                # Короткое нажатие: прервать/отменить текущее действие
+                print(f"🔇 Короткое нажатие ({duration:.2f}s) - прерывание/отмена")
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
             else:
+                # Длинное нажатие: завершить запись и обработать
                 print(f"⏹️ Длинное нажатие ({duration:.2f}s) - запись завершена")
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "stop_recording")
 
 async def main_test():
     """Функция для тестирования InputHandler"""

@@ -73,27 +73,37 @@ class TextProcessor:
                 config=self.config
             ) as session:
                 
+                # Добавляем системную инструкцию для поощрения использования инструментов
+                system_instruction = (
+                    "You are a helpful assistant. For questions about recent events or topics "
+                    "beyond your knowledge cutoff, you must use your tools, such as Google Search, "
+                    "to find the most current and accurate information available."
+                )
+                await session.send(input=system_instruction)
 
+                # --- Мультимодальный запрос ---
+                # Собираем контент в один список
+                content = [prompt]
                 
-                # Отправляем изображение и текст по отдельности (cookbook-style)
                 if screenshot_base64:
                     try:
-                        # Отправляем JPEG изображение напрямую (без конвертации)
-                        await session.send(input={
-                            "mime_type": "image/jpeg",
-                            "data": screenshot_base64  # JPEG base64-строка
-                        })
+                        # Декодируем изображение
+                        image_bytes = base64.b64decode(screenshot_base64)
                         
-                        # Небольшая пауза для обработки изображения
-                        await asyncio.sleep(0.1)
+                        # Используем PIL для проверки и получения формата
+                        img = Image.open(io.BytesIO(image_bytes))
                         
-                        logger.info("📸 JPEG изображение отправлено")
+                        # Добавляем изображение в контент
+                        content.append(img)
+                        
+                        logger.info(f"📸 Изображение ({img.format}, {img.size}) подготовлено к отправке")
+                        
                     except Exception as img_error:
                         logger.warning(f"Не удалось обработать скриншот: {img_error}")
-                
-                # Отправляем текстовый запрос
-                await session.send(input=prompt, end_of_turn=True)
-                logger.info("📝 Текст отправлен")
+
+                # Отправляем единый мультимодальный запрос
+                await session.send(input=content, end_of_turn=True)
+                logger.info("📝 Мультимодальный запрос (текст + изображение) отправлен")
                 
                 # Получаем ответ
                 turn = session.receive()
