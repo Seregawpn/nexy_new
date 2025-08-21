@@ -164,6 +164,9 @@ class AudioPlayer:
             self.stream.start()
             self.is_playing = True
             
+            # Запускаем мониторинг для правильного завершения воспроизведения
+            self.start_audio_monitoring()
+            
             logger.info("✅ Потоковое воспроизведение аудио запущено!")
             
         except Exception as e:
@@ -373,13 +376,11 @@ class AudioPlayer:
                     with self.buffer_lock:
                         buffer_size = len(self.internal_buffer)
                     
-                    # УБИРАЕМ дублирующую логику автоматической остановки!
-                    # Аудио должно воспроизводиться естественно до конца
-                    # Прерывание уже реализовано в StateManager через пробел
-                    
-                    # Просто логируем статус для отладки
+                    # ПРАВИЛЬНАЯ логика завершения: когда все чанки воспроизведены
                     if queue_size == 0 and buffer_size == 0:
-                        logger.info("✅ Аудио завершено естественным образом")
+                        logger.info("✅ Аудио завершено естественным образом - все чанки воспроизведены")
+                        # Естественно завершаем воспроизведение
+                        self.is_playing = False
                         break
                         
                 logger.info("✅ Мониторинг аудио завершен")
