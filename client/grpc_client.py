@@ -298,7 +298,8 @@ class GrpcClient:
                     console.print(f"[bold red]❌ Ошибка от сервера: {response.error_message}[/bold red]")
                     break
             
-            self.audio_player.wait_for_queue_empty()
+            # УБИРАЕМ дублирующую логику - аудио должно воспроизводиться естественно
+            # self.audio_player.wait_for_queue_empty()
             
         except grpc.aio.AioRpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
@@ -308,8 +309,10 @@ class GrpcClient:
         except Exception as e:
             console.print(f"[bold red]❌ Произошла непредвиденная ошибка в стриминге: {e}[/bold red]")
         finally:
-            if self.audio_player.is_playing:
-                self.audio_player.stop_playback()
+            # УБИРАЕМ дублирующую логику прерывания!
+            # Аудио должно воспроизводиться естественным образом до конца
+            # Прерывание уже реализовано в StateManager через пробел
+            
             # Убеждаемся, что call завершен, если он был создан
             if call and not call.done():
                 call.cancel()
