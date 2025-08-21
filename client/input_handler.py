@@ -34,45 +34,42 @@ class InputHandler:
 
     def on_press(self, key):
         """Обрабатывает нажатие клавиши"""
-        if key == keyboard.Key.space and not self.space_pressed:
+        if key == keyboard.Key.space:
             current_time = time.time()
             
-            # Проверяем cooldown для предотвращения множественных событий
-            if current_time - self.last_event_time < self.event_cooldown:
-                return
-                
-            # Устанавливаем флаги
-            self.space_pressed = True
-            self.press_time = current_time
-            self.last_event_time = current_time
+            # УБРАНО: cooldown - теперь КАЖДОЕ нажатие мгновенно прерывает!
+            # УБРАНО: проверка self.space_pressed - каждое нажатие важно!
             
-            # 1. ВСЕГДА немедленно отправляем прерывание
+            # 1. МГНОВЕННО отправляем прерывание при КАЖДОМ нажатии пробела
             self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
             console.print("[bold red]🔇 ПРОБЕЛ НАЖАТ - МГНОВЕННОЕ ПРЕРЫВАНИЕ РЕЧИ![/bold red]")
             
-            # 2. Отменяем предыдущий таймер, если он есть
-            if self.recording_timer:
-                self.recording_timer.cancel()
+            # 2. Если это первое нажатие (not space_pressed), начинаем логику записи
+            if not self.space_pressed:
+                self.space_pressed = True
+                self.press_time = current_time
+                self.last_event_time = current_time
+                
+                # 3. Отменяем предыдущий таймер, если он есть
+                if self.recording_timer:
+                    self.recording_timer.cancel()
 
-            # 3. УМЕНЬШАЕМ задержку с 50ms до 10ms для мгновенного отклика!
-            def start_recording_action():
-                # Эта функция будет вызвана, если отпускание не произошло в течение 10 мс
-                self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
-                console.print("[bold green]🎤 МИКРОФОН АКТИВИРОВАН - начинаю запись команды![/bold green]")
+                # 4. Запускаем таймер для активации микрофона (только для первого нажатия)
+                def start_recording_action():
+                    self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
+                    console.print("[bold green]🎤 МИКРОФОН АКТИВИРОВАН - начинаю запись команды![/bold green]")
 
-            # Задержка в 10мс - практически незаметна для пользователя, но достаточна для отмены
-            self.recording_timer = Timer(0.01, start_recording_action)
-            self.recording_timer.start()
+                # Задержка в 10мс для активации микрофона
+                self.recording_timer = Timer(0.01, start_recording_action)
+                self.recording_timer.start()
 
     def on_release(self, key):
         """Обрабатывает отпускание клавиши"""
         if key == keyboard.Key.space and self.space_pressed:
             current_time = time.time()
             
-            # Проверяем cooldown для предотвращения множественных событий
-            if current_time - self.last_event_time < self.event_cooldown:
-                return
-                
+            # УБРАНО: cooldown - больше не нужен, так как прерывание происходит при нажатии
+            
             # Сбрасываем флаг нажатия
             self.space_pressed = False
             
