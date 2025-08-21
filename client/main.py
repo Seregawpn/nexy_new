@@ -581,6 +581,11 @@ async def main():
     loop = asyncio.get_running_loop()
     input_handler = InputHandler(loop, event_queue)
     
+    # КРИТИЧНО: ждем инициализации InputHandler
+    console.print("[blue]⏳ Инициализация InputHandler...[/blue]")
+    await asyncio.sleep(0.5)  # Даем время на инициализацию
+    console.print("[blue]✅ InputHandler инициализирован[/blue]")
+    
     # Получаем информацию об экране
     screen_info = screen_capture.get_screen_info()
     console.print(f"[bold blue]📱 Экран: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
@@ -612,6 +617,7 @@ async def main():
     console.print("[yellow]  • Hardware ID отправляется с каждой командой[/yellow]")
 
     # Основной цикл обработки событий
+    console.print("[blue]🔄 Запуск основного цикла обработки событий...[/blue]")
     try:
         while True:
             try:
@@ -674,16 +680,24 @@ async def main():
                     # Сбрасываем таймер если не в SPEAKING
                     if hasattr(state_manager, '_speaking_start_time'):
                         state_manager._speaking_start_time = None
-                
-                # Проверяем состояние аудио каждые несколько событий
-                if hasattr(audio_player, 'get_audio_status'):
-                    audio_status = audio_player.get_audio_status()
-                    if audio_status.get('has_error'):
-                        console.print(f"[dim]🔇 Аудио статус: {audio_status.get('error_message', 'Ошибка')}[/dim]")
-
+                        
             except asyncio.TimeoutError:
-                # Таймаут для ожидания события, просто пропускаем
-                pass
+                # ✅ ОБРАБОТКА ТАЙМАУТА - это нормально, продолжаем цикл
+                # console.print("[dim]⏳ Ожидание событий...[/dim]")  # Убираем спам в логах
+                continue
+                
+            except Exception as e:
+                console.print(f"[bold red]❌ Критическая ошибка в основном цикле: {e}[/bold red]")
+                console.print("[bold red]🔧 Пытаюсь восстановить работу...[/bold red]")
+                try:
+                    # Попытка восстановления
+                    if hasattr(audio_player, 'force_stop'):
+                        audio_player.force_stop()
+                    state_manager.set_state(AppState.IDLE)
+                    console.print("[bold green]✅ Восстановление выполнено[/bold green]")
+                except Exception as recovery_error:
+                    console.print(f"[bold red]❌ Не удалось восстановить: {recovery_error}[/bold red]")
+                    break  # Выходим из цикла при критической ошибке
     except KeyboardInterrupt:
         console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
     except Exception as e:
