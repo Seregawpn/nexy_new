@@ -6,6 +6,9 @@ package streaming;
 service StreamingService {
   // Стриминг аудио и текста в ответ на промпт
   rpc StreamAudio(StreamRequest) returns (stream StreamResponse);
+  
+  // ПРИНУДИТЕЛЬНОЕ прерывание активной сессии на сервере
+  rpc InterruptSession(InterruptRequest) returns (InterruptResponse);
 }
 
 // Запрос на стриминг
@@ -32,4 +35,16 @@ message AudioChunk {
   bytes audio_data = 1;        // Аудио данные
   string dtype = 2;            // Тип данных (например, 'int16')
   repeated int32 shape = 3;    // Форма массива
+}
+
+// Запрос на прерывание сессии
+message InterruptRequest {
+  string hardware_id = 1;      // Hardware ID для прерывания
+}
+
+// Ответ на прерывание сессии
+message InterruptResponse {
+  bool success = 1;            // Успешность операции
+  repeated string interrupted_sessions = 2;  // Список прерванных сессий
+  string message = 3;          // Сообщение о результате
 }

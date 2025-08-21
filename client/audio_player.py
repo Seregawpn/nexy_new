@@ -23,7 +23,6 @@ class AudioPlayer:
         self.stop_event = threading.Event()
         self.stream = None
         self.is_playing = False
-        self.interrupt_flag = threading.Event()  # Флаг для мгновенного прерывания
         
         # Внутренний буфер для плавного воспроизведения
         self.internal_buffer = np.array([], dtype=np.int16)
@@ -33,6 +32,10 @@ class AudioPlayer:
         self.audio_error = False
         self.audio_error_message = ""
         
+        # ПРОСТАЯ блокировка буфера после прерывания
+        self.buffer_blocked_until = 0  # Время до которого буфер заблокирован
+        self.buffer_block_duration = 0.5  # Длительность блокировки в секундах
+        
         # Проверяем доступность аудио устройств
         self._check_audio_devices()
 
@@ -40,11 +43,6 @@ class AudioPlayer:
         """Callback-функция для sounddevice, вызывается для заполнения буфера вывода."""
         if status:
             logger.warning(f"Sounddevice status: {status}")
-
-        # Проверяем флаг прерывания
-        if self.interrupt_flag.is_set():
-            outdata.fill(0)
-            return
 
         try:
             with self.buffer_lock:
@@ -82,118 +80,163 @@ class AudioPlayer:
                         else:
                             # Если нет данных, принудительно проверяем очередь еще раз
                             try:
-                                while not self.audio_queue.empty():
-                                    chunk = self.audio_queue.get_nowait()
-                                    if chunk is not None and len(chunk) > 0:
-                                        self.internal_buffer = np.concatenate([self.internal_buffer, chunk])
-                                        logger.debug(f"🎵 Принудительно добавлен чанк в буфер: {len(chunk)} сэмплов")
-                                    self.audio_queue.task_done()
-                                    
-                                if len(self.internal_buffer) > 0:
-                                    # Теперь у нас есть данные
-                                    available = min(len(self.internal_buffer), frames)
-                                    outdata[:available] = self.internal_buffer[:available].reshape(available, self.channels)
-                                    self.internal_buffer = self.internal_buffer[available:]
-                                    outdata[available:frames] = 0
-                                    logger.debug(f"🎵 Принудительно отправлено: {available} сэмплов")
+                                chunk = self.audio_queue.get_nowait()
+                                if chunk is not None and len(chunk) > 0:
+                                    # Обрабатываем полученный чанк
+                                    if len(chunk) >= frames:
+                                        outdata[:frames] = chunk[:frames].reshape(frames, self.channels)
+                                        # Остаток чанка сохраняем в буфер
+                                        if len(chunk) > frames:
+                                            self.internal_buffer = chunk[frames:]
+                                        logger.debug(f"🎵 Чанк обработан напрямую: {frames} сэмплов")
+                                    else:
+                                        # Чанк меньше frames, заполняем тишиной
+                                        outdata[:len(chunk)] = chunk.reshape(-1, self.channels)
+                                        outdata[len(chunk):frames] = 0
+                                        logger.debug(f"🎵 Короткий чанк: {len(chunk)} сэмплов, остальное тишина")
                                 else:
+                                    # Нет данных, тишина
                                     outdata.fill(0)
+                                    logger.debug("🔇 Нет данных - тишина")
+                                self.audio_queue.task_done()
                             except queue.Empty:
+                                # Очередь пуста, тишина
                                 outdata.fill(0)
-                            
+                                logger.debug("🔇 Очередь пуста - тишина")
         except Exception as e:
-            logger.error(f"Ошибка в playback callback: {e}")
-            outdata.fill(0)
+            logger.error(f"❌ Ошибка в playback callback: {e}")
+            outdata.fill(0)  # В случае ошибки отправляем тишину
 
     def add_chunk(self, audio_chunk: np.ndarray):
-        """Добавляет фрагмент аудио (NumPy array) в очередь для воспроизведения."""
-        if not isinstance(audio_chunk, np.ndarray):
-            logger.error("В плеер был передан неверный формат аудио (ожидается NumPy array)")
+        """Добавляет аудио чанк в очередь воспроизведения."""
+        if audio_chunk is None or len(audio_chunk) == 0:
+            logger.warning("⚠️ Попытка добавить пустой аудио чанк!")
             return
-            
-        # Проверяем размер чанка
-        if len(audio_chunk) == 0:
-            logger.warning("Получен пустой аудио чанк")
-            return
-            
-        # Убираем задержку - она может замедлять обработку чанков
-        # time.sleep(0.01)  # 10ms задержка между чанками
         
-        self.audio_queue.put(audio_chunk)
-        logger.info(f"🎵 Аудио чанк размером {len(audio_chunk)} добавлен в очередь. Размер очереди: {self.audio_queue.qsize()}")
-        logger.info(f"📊 Общий размер внутреннего буфера: {len(self.internal_buffer)} сэмплов")
+        chunk_size = len(audio_chunk)
+        logger.debug(f"🎵 Добавляю аудио чанк размером {chunk_size} сэмплов")
+        
+        # Проверяем временную блокировку буфера
+        if self.is_buffer_locked():
+            logger.warning(f"🚨 БУФЕР ВРЕМЕННО ЗАБЛОКИРОВАН - пропускаю добавление аудио чанка размером {chunk_size}!")
+            return
+        
+        try:
+            # Добавляем чанк в очередь
+            self.audio_queue.put(audio_chunk)
+            logger.debug(f"✅ Аудио чанк добавлен в очередь. Размер очереди: {self.audio_queue.qsize()}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при добавлении аудио чанка: {e}")
+            # Попытка восстановления
+            try:
+                if not self.audio_queue.full():
+                    self.audio_queue.put(audio_chunk)
+                    logger.info("✅ Аудио чанк добавлен после восстановления")
+                else:
+                    logger.warning("⚠️ Очередь переполнена, чанк отброшен")
+            except Exception as e2:
+                logger.error(f"❌ Критическая ошибка при восстановлении: {e2}")
 
     def start_playback(self):
-        """Запускает аудиопоток для воспроизведения."""
+        """Запускает потоковое воспроизведение аудио."""
         if self.is_playing:
-            logger.info("Воспроизведение уже запущено.")
+            logger.warning("⚠️ Воспроизведение уже запущено!")
             return
-
+        
         logger.info("Запуск потокового воспроизведения аудио...")
         self.stop_event.clear()
-        self.interrupt_flag.clear()  # Сбрасываем флаг перед началом нового воспроизведения
         self._clear_buffers()  # Очищаем буферы перед началом
         
         try:
-            # Используем безопасную инициализацию
-            self.stream = self._safe_init_stream()
+            # Создаем новый поток воспроизведения
+            self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+            self.playback_thread.start()
+            
+            # Создаем звуковой поток
+            self.stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+                callback=self._playback_callback,
+                blocksize=1024
+            )
+            
+            self.stream.start()
             self.is_playing = True
-            logger.info("Аудиопоток успешно запущен.")
+            
+            logger.info("✅ Потоковое воспроизведение аудио запущено!")
+            
         except Exception as e:
-            logger.error(f"❌ Не удалось запустить аудиопоток: {e}")
-            self.audio_error = True
-            self.audio_error_message = str(e)
-            # Не устанавливаем is_playing = True, так как поток не создан
-            raise
+            logger.error(f"❌ Ошибка при запуске воспроизведения: {e}")
+            self.is_playing = False
+            self.playback_thread = None
+            self.stream = None
 
     def stop_playback(self):
-        """Останавливает аудиопоток и очищает ресурсы."""
+        """Останавливает потоковое воспроизведение аудио."""
         if not self.is_playing:
+            logger.warning("⚠️ Воспроизведение уже остановлено!")
             return
+        
+        logger.info("Остановка потокового воспроизведения аудио...")
+        
+        try:
+            # Устанавливаем флаг остановки
+            self.stop_event.set()
             
-        logger.info("Остановка потокового воспроизведения...")
-        self.stop_event.set()
-        
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-            logger.info("Аудиопоток остановлен и закрыт.")
-        
-        self._clear_buffers()
-        self.is_playing = False
-
-    def interrupt(self):
-        """
-        Мгновенно прерывает воспроизведение и очищает все очереди.
-        Используется для немедленной реакции на действия пользователя.
-        """
-        logger.info("🔇 Прерывание воспроизведения...")
-        
-        # Устанавливаем флаг прерывания
-        self.interrupt_flag.set()
-        
-        # Немедленно останавливаем поток воспроизведения
-        if self.stream and hasattr(self.stream, 'active') and self.stream.active:
-            try:
-                self.stream.stop()
+            # Останавливаем звуковой поток
+            if self.stream:
+                if hasattr(self.stream, 'active') and self.stream.active:
+                    self.stream.stop()
+                    logger.info("✅ Звуковой поток остановлен")
                 self.stream.close()
                 self.stream = None
-                logger.info("✅ Аудиопоток принудительно остановлен")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка при принудительной остановке потока: {e}")
+                logger.info("✅ Звуковой поток закрыт")
+            
+            # Ждем завершения потока воспроизведения
+            if self.playback_thread and self.playback_thread.is_alive():
+                self.playback_thread.join(timeout=1.0)
+                if self.playback_thread.is_alive():
+                    logger.warning("⚠️ Поток воспроизведения не завершился за 1 секунду")
+                else:
+                    logger.info("✅ Поток воспроизведения завершен")
+            
+            # Сбрасываем состояние
+            self.is_playing = False
+            self.playback_thread = None
+            
+            # Очищаем буферы
+            self._clear_buffers()
+            
+            logger.info("✅ Потоковое воспроизведение аудио остановлено!")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при остановке воспроизведения: {e}")
+            # Принудительно сбрасываем состояние
+            self.is_playing = False
+            self.playback_thread = None
+            self.stream = None
+
+
+
+    def _playback_loop(self):
+        """Фоновый поток для воспроизведения аудио"""
+        logger.info("🔄 Фоновый поток воспроизведения запущен")
         
-        # Немедленно очищаем все буферы и очереди
-        self._clear_buffers()
-        
-        # Сбрасываем состояние
-        self.is_playing = False
-        self.stop_event.set()
-        
-        # Сбрасываем флаг прерывания для следующего использования
-        self.interrupt_flag.clear()
-        
-        logger.info("✅ Воспроизведение прервано, очереди очищены.")
+        try:
+            while not self.stop_event.is_set():
+                # Проверяем, есть ли данные для воспроизведения
+                if not self.audio_queue.empty() or len(self.internal_buffer) > 0:
+                    # Небольшая пауза для снижения нагрузки на CPU
+                    time.sleep(0.001)  # 1ms
+                else:
+                    # Если нет данных, ждем немного
+                    time.sleep(0.01)  # 10ms
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновом потоке воспроизведения: {e}")
+        finally:
+            logger.info("🔄 Фоновый поток воспроизведения завершен")
 
     def _safe_init_stream(self):
         """
@@ -292,57 +335,60 @@ class AudioPlayer:
 
     def wait_for_queue_empty(self):
         """
-        Неблокирующее ожидание завершения воспроизведения.
-        Позволяет добавлять новые чанки во время ожидания.
+        НЕБЛОКИРУЮЩЕЕ ожидание завершения воспроизведения.
+        Возвращает управление НЕМЕДЛЕННО, не зависает!
         """
-        if not self.is_playing:
-            logger.info("Ожидание не требуется, плеер не активен.")
-            return
-            
-        logger.info(f"⏳ Ожидание завершения воспроизведения. В очереди: {self.audio_queue.qsize()}, в буфере: {len(self.internal_buffer)} сэмплов")
+        logger.info("🎵 Проверяю статус воспроизведения (НЕБЛОКИРУЮЩЕЕ)...")
         
-        # 1. Ждем, пока очередь аудио не будет полностью передана во внутренний буфер
-        timeout = 2.0  # Уменьшаем таймаут для более быстрой реакции
-        start_time = time.time()
-        
-        while (time.time() - start_time) < timeout:
-            if self.interrupt_flag.is_set() or not self.is_playing:
-                logger.info("🔇 Обнаружено прерывание, ожидание очереди остановлено.")
-                return
-                
-            if self.audio_queue.empty():
-                logger.info("✅ Очередь аудио пуста.")
-                break
+        # БЫСТРАЯ ПРОВЕРКА без ожидания
+        queue_size = self.audio_queue.qsize()
+        with self.buffer_lock:
+            buffer_size = len(self.internal_buffer)
             
-            logger.info(f"⏳ Ожидание опустошения очереди: {self.audio_queue.qsize()} чанков осталось...")
-            time.sleep(0.05)  # Уменьшаем интервал для более быстрой реакции
+        if queue_size == 0 and buffer_size == 0:
+            logger.info("✅ Аудио уже завершено")
+            return True
         else:
-            logger.warning(f"⚠️ Таймаут ожидания очереди! Осталось: {self.audio_queue.qsize()} чанков")
-        
-        # 2. Ждем, пока внутренний буфер не будет полностью воспроизведен
-        timeout = 3.0  # Уменьшаем таймаут для более быстрой реакции
-        start_time = time.time()
-        
-        while (time.time() - start_time) < timeout:
-            if self.interrupt_flag.is_set() or not self.is_playing:
-                logger.info("🔇 Обнаружено прерывание, ожидание буфера остановлено.")
-                return
-                
-            with self.buffer_lock:
-                buffer_size = len(self.internal_buffer)
-            
-            # Дополнительная проверка, чтобы убедиться, что очередь все еще пуста
-            if buffer_size == 0 and self.audio_queue.empty():
-                logger.info("✅ Внутренний буфер пуст и очередь пуста.")
-                break
-            
-            logger.info(f"⏳ Ожидание опустошения буфера: {buffer_size} сэмплов осталось...")
-            time.sleep(0.05)  # Уменьшаем интервал для более быстрой реакции
-        else:
-            logger.warning(f"⚠️ Таймаут ожидания буфера! Осталось: {len(self.internal_buffer)} сэмплов")
+            logger.info(f"📊 Аудио еще воспроизводится: очередь={queue_size}, буфер={buffer_size}")
+            return False
 
-        logger.info(f"✅ Воспроизведение завершено. Финальный размер очереди: {self.audio_queue.qsize()}, буфера: {len(self.internal_buffer)}")
-        self.stop_playback()
+    def start_audio_monitoring(self):
+        """
+        Запускает фоновый мониторинг завершения аудио.
+        НЕ блокирует основной поток!
+        """
+        logger.info("🎵 Запускаю фоновый мониторинг аудио...")
+        
+        # Создаем фоновую задачу для мониторинга
+        import threading
+        
+        def monitor_audio():
+            """Фоновая функция мониторинга"""
+            try:
+                while self.is_playing:
+                    time.sleep(0.5)  # Проверяем каждые 500ms
+                    
+                    # Проверяем статус
+                    queue_size = self.audio_queue.qsize()
+                    with self.buffer_lock:
+                        buffer_size = len(self.internal_buffer)
+                    
+                    # Если все воспроизведено - останавливаем
+                    if queue_size == 0 and buffer_size == 0:
+                        logger.info("✅ Аудио завершено, останавливаю мониторинг")
+                        self.is_playing = False
+                        break
+                        
+                logger.info("✅ Мониторинг аудио завершен")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка в мониторинге аудио: {e}")
+                self.is_playing = False
+        
+        # Запускаем мониторинг в отдельном потоке
+        self.monitor_thread = threading.Thread(target=monitor_audio, daemon=True)
+        self.monitor_thread.start()
+        logger.info("✅ Мониторинг аудио запущен в фоне")
 
     async def cleanup(self):
         """Очистка ресурсов плеера."""
@@ -369,6 +415,164 @@ class AudioPlayer:
         self.audio_error = False
         self.audio_error_message = ""
         logger.info("🔄 Флаги ошибок аудио сброшены")
+
+    def clear_all_audio_data(self):
+        """ПРИНУДИТЕЛЬНО очищает ВСЕ аудио данные - включая очередь и активное воспроизведение"""
+        clear_time = time.time()
+        logger.warning(f"🚨 clear_all_audio_data() вызван в {clear_time:.3f}")
+        
+        try:
+            # Логируем состояние ДО очистки
+            queue_before = self.audio_queue.qsize()
+            buffer_before = len(self.internal_buffer)
+            stream_active = hasattr(self, 'stream') and self.stream and hasattr(self.stream, 'active') and self.stream.active
+            logger.warning(f"   📊 Состояние ДО: queue={queue_before}, buffer={buffer_before}, stream_active={stream_active}")
+            
+            logger.warning("🚨 ПРИНУДИТЕЛЬНАЯ очистка ВСЕХ аудио данных...")
+            
+            # 1️⃣ ПРИНУДИТЕЛЬНО очищаем очередь чанков
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                    self.audio_queue.task_done()
+                except:
+                    pass
+            
+            # 2️⃣ ДОПОЛНИТЕЛЬНАЯ очистка очереди через mutex
+            try:
+                with self.audio_queue.mutex:
+                    self.audio_queue.queue.clear()
+                logger.warning("🚨 Очередь ПРИНУДИТЕЛЬНО очищена через mutex!")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка очистки через mutex: {e}")
+            
+            # 3️⃣ ПРИНУДИТЕЛЬНО очищаем внутренний буфер
+            with self.buffer_lock:
+                self.internal_buffer = np.array([], dtype=np.int16)
+            
+            # 4️⃣ ПРИНУДИТЕЛЬНО останавливаем поток воспроизведения
+            if hasattr(self, 'stream') and self.stream:
+                try:
+                    if hasattr(self.stream, 'active') and self.stream.active:
+                        self.stream.abort()  # Агрессивная остановка
+                        logger.warning("🚨 Аудио поток ПРИНУДИТЕЛЬНО остановлен через abort!")
+                    self.stream.close()
+                    self.stream = None
+                    logger.warning("🚨 Аудио поток ПРИНУДИТЕЛЬНО закрыт!")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка остановки потока: {e}")
+            
+            # 5️⃣ Сбрасываем состояние
+            self.is_playing = False
+            
+            # 6️⃣ ПРИНУДИТЕЛЬНО останавливаем все звуковые потоки
+            try:
+                sd.stop()  # Останавливает все звуковые потоки
+                logger.warning("🚨 ВСЕ звуковые потоки ПРИНУДИТЕЛЬНО остановлены!")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка остановки всех потоков: {e}")
+            
+            # 7️⃣ ДОПОЛНИТЕЛЬНАЯ очистка через _clear_buffers
+            try:
+                self._clear_buffers()
+                logger.warning("🚨 Дополнительная очистка буферов выполнена!")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка дополнительной очистки: {e}")
+            
+            # 8️⃣ Устанавливаем временную блокировку буфера
+            try:
+                self.set_buffer_lock()
+                logger.warning("🚨 Временная блокировка буфера установлена!")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка установки временной блокировки: {e}")
+            
+            # Логируем состояние ПОСЛЕ очистки
+            queue_after = self.audio_queue.qsize()
+            buffer_after = len(self.internal_buffer)
+            total_time = (time.time() - clear_time) * 1000
+            logger.warning(f"   📊 Состояние ПОСЛЕ: queue={queue_after}, buffer={buffer_after}")
+            logger.warning(f"   ⏱️ Общее время очистки: {total_time:.1f}ms")
+            
+            # Проверяем результат
+            if queue_after == 0 and buffer_after == 0:
+                logger.warning("   🎯 ОЧИСТКА УСПЕШНА - все буферы пусты!")
+            else:
+                logger.warning(f"   ⚠️ ОЧИСТКА НЕПОЛНАЯ - queue={queue_after}, buffer={buffer_after}")
+            
+            logger.warning("✅ ВСЕ аудио данные ПРИНУДИТЕЛЬНО очищены!")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при очистке всех аудио данных: {e}")
+            import traceback
+            logger.error(f"   🔍 Traceback: {traceback.format_exc()}")
+
+    def interrupt_immediately(self):
+        """МГНОВЕННОЕ прерывание без ожидания - для критических ситуаций"""
+        try:
+            logger.warning("🚨 МГНОВЕННОЕ прерывание аудио...")
+            
+            # 1️⃣ НЕМЕДЛЕННО устанавливаем флаги прерывания
+            self.interrupt_flag.set()
+            self.stop_event.set()
+            
+            # 2️⃣ ПРИНУДИТЕЛЬНО очищаем буферы
+            with self.buffer_lock:
+                self.internal_buffer = np.array([], dtype=np.int16)
+            
+            # 3️⃣ Очищаем очередь чанков
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                    self.audio_queue.task_done()
+                except:
+                    pass
+            
+            # 4️⃣ Сбрасываем состояние
+            self.is_playing = False
+            
+            logger.warning("✅ МГНОВЕННОЕ прерывание аудио выполнено!")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при мгновенном прерывании: {e}")
+
+    def force_stop_immediately(self):
+        """ПРИНУДИТЕЛЬНО останавливает воспроизведение БЕЗ ожидания чанков"""
+        try:
+            logger.warning("🚨 ПРИНУДИТЕЛЬНАЯ МГНОВЕННАЯ остановка воспроизведения...")
+            
+            # 1️⃣ НЕМЕДЛЕННО останавливаем поток воспроизведения
+            if hasattr(self, 'stream') and self.stream:
+                if hasattr(self.stream, 'active') and self.stream.active:
+                    self.stream.abort()  # Агрессивная остановка
+                    self.stream.close()
+                    self.stream = None
+                    logger.warning("🚨 Аудио поток ПРИНУДИТЕЛЬНО остановлен!")
+            
+            # 2️⃣ ПРИНУДИТЕЛЬНО очищаем ВСЕ буферы
+            with self.buffer_lock:
+                self.internal_buffer = np.array([], dtype=np.int16)
+            
+            # 3️⃣ Очищаем очередь чанков
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                    self.audio_queue.task_done()
+                except:
+                    pass
+            
+            # 4️⃣ Сбрасываем ВСЕ флаги
+            self.is_playing = False
+            self.interrupt_flag.set()
+            self.stop_event.set()
+            
+            # 5️⃣ ПРИНУДИТЕЛЬНО останавливаем все звуковые потоки
+            import sounddevice as sd
+            sd.stop()  # Останавливает все звуковые потоки
+            
+            logger.warning("🚨 АУДИО ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО!")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при принудительной остановке: {e}")
 
     def force_stop(self):
         """
@@ -410,3 +614,15 @@ class AudioPlayer:
             logger.warning(f"⚠️ Не удалось получить список аудио устройств: {e}")
             self.audio_error = True
             self.audio_error_message = f"Не удалось получить список аудио устройств: {e}"
+    
+    def set_buffer_lock(self, duration=None):
+        """Устанавливает временную блокировку буфера для предотвращения добавления новых чанков."""
+        if duration is None:
+            duration = self.buffer_block_duration
+        
+        self.buffer_blocked_until = time.time() + duration
+        logger.warning(f"🚨 Временная блокировка буфера установлена на {duration:.1f} секунд")
+    
+    def is_buffer_locked(self):
+        """Проверяет, заблокирован ли буфер временно."""
+        return time.time() < self.buffer_blocked_until

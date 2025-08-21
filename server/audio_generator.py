@@ -21,21 +21,28 @@ class AudioGenerator:
         self.rate = rate or Config.EDGE_TTS_RATE
         self.volume = volume or Config.EDGE_TTS_VOLUME
         self.pitch = pitch or "+0Hz"
+        # КРИТИЧНО: флаг для отслеживания состояния генерации
+        self.is_generating = False
         self._validate_voice()
         
     def _validate_voice(self):
         """Проверяет доступность выбранного голоса."""
         logger.info(f"Голос {self.voice} установлен")
 
-    async def generate_complete_audio_for_sentence(self, text: str) -> Optional[np.ndarray]:
+    async def generate_complete_audio_for_sentence(self, text: str, interrupt_checker=None) -> Optional[np.ndarray]:
         """
         Генерирует аудио для ЦЕЛОГО предложения и возвращает его ОДНИМ numpy-массивом.
+        interrupt_checker: функция для проверки необходимости прерывания
         """
         if not text or not text.strip():
             logger.warning("Пустой текст для генерации аудио")
             return None
 
         try:
+            # КРИТИЧНО: устанавливаем флаг генерации
+            self.is_generating = True
+            logger.info(f"🎵 Начинаю генерацию аудио для: {text[:50]}...")
+            
             communicate = edge_tts.Communicate(
                 text, 
                 self.voice,
@@ -49,6 +56,11 @@ class AudioGenerator:
             # 1. Накапливаем весь аудиопоток для предложения в памяти
             audio_stream = io.BytesIO()
             async for chunk in communicate.stream():
+                # КРИТИЧНО: проверяем необходимость прерывания в КАЖДОЙ итерации
+                if interrupt_checker and interrupt_checker():
+                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ АУДИО!")
+                    return None
+                
                 if chunk["type"] == "audio":
                     audio_stream.write(chunk["data"])
             
@@ -70,6 +82,10 @@ class AudioGenerator:
         except Exception as e:
             logger.error(f"Ошибка при генерации аудио для текста '{text[:30]}...': {e}")
             return None
+        finally:
+            # КРИТИЧНО: сбрасываем флаг генерации
+            self.is_generating = False
+            logger.info(f"🎵 Генерация аудио завершена")
 
     async def generate_audio_stream(self, text: str) -> AsyncGenerator[np.ndarray, None]:
         """
@@ -100,8 +116,48 @@ class AudioGenerator:
     def get_audio_params(self) -> dict:
         """Возвращает текущие параметры аудио."""
         return {
-            "voice": self.voice,
-            "rate": self.rate,
-            "volume": self.volume,
-            "pitch": self.pitch
+            'voice': self.voice,
+            'rate': self.rate,
+            'volume': self.volume,
+            'pitch': self.pitch
         }
+    
+    def clear_buffers(self):
+        """
+        МГНОВЕННО очищает все буферы и отменяет генерацию аудио.
+        Используется для принудительного прерывания.
+        """
+        try:
+            logger.warning("🚨 МГНОВЕННАЯ очистка буферов аудио генератора!")
+            
+            # КРИТИЧНО: очищаем все внутренние буферы
+            if hasattr(self, '_current_communicate'):
+                try:
+                    # Отменяем текущую генерацию edge-tts
+                    if hasattr(self._current_communicate, 'cancel'):
+                        self._current_communicate.cancel()
+                        logger.warning("🚨 Edge TTS генерация МГНОВЕННО ОТМЕНЕНА!")
+                except:
+                    pass
+                self._current_communicate = None
+            
+            # КРИТИЧНО: очищаем все временные буферы
+            if hasattr(self, '_temp_buffers'):
+                self._temp_buffers.clear()
+                logger.warning("🚨 Временные буферы МГНОВЕННО ОЧИЩЕНЫ!")
+            
+            logger.warning("✅ Все буферы аудио генератора МГНОВЕННО очищены!")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки буферов аудио: {e}")
+    
+    def cancel_generation(self):
+        """
+        МГНОВЕННО отменяет текущую генерацию аудио.
+        """
+        try:
+            logger.warning("🚨 МГНОВЕННАЯ отмена генерации аудио!")
+            self.clear_buffers()
+            logger.warning("✅ Генерация аудио МГНОВЕННО отменена!")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отмены генерации аудио: {e}")

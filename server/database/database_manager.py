@@ -305,6 +305,172 @@ class DatabaseManager:
             return []
 
 # =====================================================
+# УПРАВЛЕНИЕ ПАМЯТЬЮ ПОЛЬЗОВАТЕЛЯ
+# =====================================================
+
+    def get_user_memory(self, hardware_id_hash: str) -> Dict[str, str]:
+        """
+        Получает память пользователя по аппаратному ID.
+        
+        Args:
+            hardware_id_hash: Хеш аппаратного ID пользователя
+            
+        Returns:
+            Dict с ключами 'short' и 'long' для краткосрочной и долгосрочной памяти
+        """
+        try:
+            with self.connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT short_term_memory, long_term_memory
+                    FROM users 
+                    WHERE hardware_id_hash = %s
+                """, (hardware_id_hash,))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'short': result['short_term_memory'] or '',
+                        'long': result['long_term_memory'] or ''
+                    }
+                else:
+                    logger.warning(f"⚠️ Пользователь с hardware_id {hardware_id_hash} не найден")
+                    return {'short': '', 'long': ''}
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения памяти пользователя: {e}")
+            return {'short': '', 'long': ''}
+    
+    def update_user_memory(
+        self, 
+        hardware_id_hash: str, 
+        short_memory: str, 
+        long_memory: str
+    ) -> bool:
+        """
+        Обновляет память пользователя.
+        
+        Args:
+            hardware_id_hash: Хеш аппаратного ID пользователя
+            short_memory: Краткосрочная память
+            long_memory: Долгосрочная память
+            
+        Returns:
+            True если обновление прошло успешно
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                # Проверяем, существует ли пользователь
+                cursor.execute("""
+                    SELECT id FROM users WHERE hardware_id_hash = %s
+                """, (hardware_id_hash,))
+                
+                user_exists = cursor.fetchone()
+                
+                if user_exists:
+                    # Обновляем существующего пользователя
+                    cursor.execute("""
+                        UPDATE users 
+                        SET short_term_memory = %s,
+                            long_term_memory = %s,
+                            memory_updated_at = NOW()
+                        WHERE hardware_id_hash = %s
+                    """, (short_memory, long_memory, hardware_id_hash))
+                else:
+                    # Создаем нового пользователя с памятью
+                    cursor.execute("""
+                        INSERT INTO users (hardware_id_hash, short_term_memory, long_term_memory)
+                        VALUES (%s, %s, %s)
+                    """, (hardware_id_hash, short_memory, long_memory))
+                
+                self.connection.commit()
+                logger.info(f"✅ Память пользователя {hardware_id_hash} обновлена")
+                return True
+                
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f"❌ Ошибка обновления памяти пользователя: {e}")
+            return False
+    
+    def cleanup_expired_short_term_memory(self, hours: int = 24) -> int:
+        """
+        Очищает устаревшую краткосрочную память пользователей.
+        
+        Args:
+            hours: Количество часов, после которых память считается устаревшей
+            
+        Returns:
+            Количество очищенных записей
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT cleanup_expired_short_term_memory(%s)
+                """, (hours,))
+                
+                result = cursor.fetchone()
+                affected_rows = result[0] if result else 0
+                
+                self.connection.commit()
+                logger.info(f"🧹 Очищено {affected_rows} записей краткосрочной памяти старше {hours} часов")
+                return affected_rows
+                
+        except Exception as e:
+            self.connection.rollback()
+            logger.error(f"❌ Ошибка очистки устаревшей памяти: {e}")
+            return 0
+    
+    def get_memory_statistics(self) -> Dict[str, any]:
+        """
+        Получает статистику использования системы памяти.
+        
+        Returns:
+            Dict со статистикой памяти
+        """
+        try:
+            with self.connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("SELECT * FROM get_memory_stats()")
+                result = cursor.fetchone()
+                
+                if result:
+                    return dict(result)
+                else:
+                    logger.warning("⚠️ Не удалось получить статистику памяти")
+                    return {}
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статистики памяти: {e}")
+            return {}
+    
+    def get_users_with_active_memory(self, limit: int = 100) -> List[Dict[str, any]]:
+        """
+        Получает список пользователей с активной памятью.
+        
+        Args:
+            limit: Максимальное количество пользователей
+            
+        Returns:
+            Список пользователей с памятью
+        """
+        try:
+            with self.connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT hardware_id_hash, memory_updated_at,
+                           LENGTH(COALESCE(short_term_memory, '')) as short_memory_size,
+                           LENGTH(COALESCE(long_term_memory, '')) as long_memory_size
+                    FROM users 
+                    WHERE short_term_memory IS NOT NULL OR long_term_memory IS NOT NULL
+                    ORDER BY memory_updated_at DESC
+                    LIMIT %s
+                """, (limit,))
+                
+                results = cursor.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения пользователей с памятью: {e}")
+            return []
+
+# =====================================================
 # ПРИМЕР ИСПОЛЬЗОВАНИЯ
 # =====================================================
 

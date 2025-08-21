@@ -4,6 +4,7 @@ import numpy as np
 import grpc
 import sys
 import os
+import time
 
 # Добавляем корневую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +48,199 @@ class GrpcClient:
         if self.channel:
             await self.channel.close()
             console.print("[bold yellow]🔌 Отключено от сервера[/bold yellow]")
+    
+    def interrupt_stream(self):
+        """МГНОВЕННО прерывает активный gRPC стриминг на сервере!"""
+        try:
+            console.print(f"[bold red]🔍 ДИАГНОСТИКА gRPC: channel={self.channel}, stub={self.stub}[/bold red]")
+            
+            if self.channel:
+                # Проверяем статус канала
+                try:
+                    is_closed = self.channel.closed()
+                    console.print(f"[blue]🔍 Канал закрыт: {is_closed}[/blue]")
+                except AttributeError:
+                    console.print("[blue]🔍 Метод .closed() недоступен, пробуем другой способ[/blue]")
+                    is_closed = False
+                
+                if not is_closed:
+                    # МГНОВЕННО закрываем канал - это принудительно прервет все активные вызовы!
+                    console.print("[bold red]🚨 ЗАКРЫВАЮ gRPC канал...[/bold red]")
+                    
+                    # КРИТИЧНО: channel.close() - это корутина, нужно создать задачу для её выполнения
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Создаем задачу для асинхронного закрытия канала
+                        console.print("[blue]🔍 Создаю задачу для закрытия канала...[/blue]")
+                        loop.create_task(self._close_channel_and_recreate())
+                    else:
+                        # Если цикл не запущен, создаем канал напрямую
+                        console.print("[blue]🔍 Создаю канал напрямую...[/blue]")
+                        self.channel = grpc.aio.insecure_channel(self.server_address)
+                        self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
+                        console.print("[bold green]✅ Новый gRPC канал создан для следующих вызовов[/bold green]")
+                else:
+                    console.print("[yellow]⚠️ gRPC канал уже закрыт[/yellow]")
+            else:
+                console.print("[yellow]⚠️ gRPC канал = None[/yellow]")
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка прерывания gRPC стриминга: {e}[/red]")
+            import traceback
+            console.print(f"[red]🔍 Traceback: {traceback.format_exc()}[/red]")
+    
+    def force_interrupt_server(self):
+        """ПРИНУДИТЕЛЬНОЕ прерывание на сервере через вызов InterruptSession!"""
+        logger.info(f"🚨 force_interrupt_server() вызван в {time.time():.3f}")
+        
+        try:
+            console.print("[bold red]🚨 ПРИНУДИТЕЛЬНОЕ прерывание на СЕРВЕРЕ![/bold red]")
+            logger.info("   🚨 ПРИНУДИТЕЛЬНОЕ прерывание на СЕРВЕРЕ!")
+            
+            # КРИТИЧНО: вызываем новый метод InterruptSession на сервере!
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Создаем задачу для принудительного прерывания на сервере
+                logger.info("   🔄 Создаю задачу для прерывания на сервере...")
+                loop.create_task(self._force_interrupt_server_call())
+                console.print("[bold red]🚨 Задача принудительного прерывания на сервере запущена![/bold red]")
+            else:
+                # Если цикл не запущен, вызываем синхронно
+                console.print("[blue]🔍 Вызываю прерывание синхронно...[/blue]")
+                self._force_interrupt_server_sync()
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка принудительного прерывания: {e}[/red]")
+            import traceback
+            console.print(f"[red]🔍 Traceback: {traceback.format_exc()}[/red]")
+    
+    def interrupt_immediately(self):
+        """СИНХРОННОЕ мгновенное прерывание - атомарная операция!"""
+        try:
+            console.print("[bold red]🚨 СИНХРОННОЕ мгновенное прерывание![/bold red]")
+            
+            # 1. НЕМЕДЛЕННО отменяем текущий вызов
+            if hasattr(self, 'current_call') and self.current_call and not self.current_call.done():
+                self.current_call.cancel()
+                console.print("[bold red]🚨 Текущий gRPC вызов ОТМЕНЕН![/bold red]")
+            
+            # 2. Создаем НОВЫЙ канал ТОЛЬКО для команды прерывания
+            import grpc
+            interrupt_channel = grpc.insecure_channel(self.server_address)
+            interrupt_stub = streaming_pb2_grpc.StreamingServiceStub(interrupt_channel)
+            
+            # 3. СИНХРОННО вызываем InterruptSession
+            if hasattr(self, 'hardware_id') and self.hardware_id:
+                request = streaming_pb2.InterruptRequest(hardware_id=self.hardware_id)
+                try:
+                    response = interrupt_stub.InterruptSession(request, timeout=0.5)
+                    console.print(f"[bold green]✅ Сервер прервал {len(response.interrupted_sessions)} сессий![/bold green]")
+                except Exception as e:
+                    console.print(f"[red]⚠️ Ошибка вызова InterruptSession: {e}[/red]")
+                finally:
+                    interrupt_channel.close()
+                    console.print("[bold red]🚨 Канал прерывания закрыт![/bold red]")
+            else:
+                console.print("[yellow]⚠️ Hardware ID недоступен для прерывания[/yellow]")
+                
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка синхронного прерывания: {e}[/red]")
+            import traceback
+            console.print(f"[red]🔍 Traceback: {traceback.format_exc()}[/red]")
+    
+    async def _force_interrupt_server_call(self):
+        """Асинхронно вызывает прерывание на сервере"""
+        logger.info(f"🚨 _force_interrupt_server_call() начат в {time.time():.3f}")
+        
+        try:
+            if hasattr(self, 'hardware_id') and self.hardware_id:
+                logger.info(f"   🆔 Hardware ID: {self.hardware_id[:20]}...")
+                
+                # Создаем запрос на прерывание
+                request = streaming_pb2.InterruptRequest(hardware_id=self.hardware_id)
+                logger.info("   📤 Создан InterruptRequest")
+                
+                # Вызываем метод на сервере
+                logger.info("   🔄 Вызываю stub.InterruptSession...")
+                start_time = time.time()
+                response = await self.stub.InterruptSession(request)
+                call_time = (time.time() - start_time) * 1000
+                logger.info(f"   ⏱️ stub.InterruptSession: {call_time:.1f}ms")
+                
+                if response.success:
+                    logger.info(f"   ✅ Сервер успешно прервал {len(response.interrupted_sessions)} сессий")
+                    console.print(f"[bold green]✅ Сервер успешно прервал {len(response.interrupted_sessions)} сессий![/bold green]")
+                    console.print(f"[bold green]✅ Прерванные сессии: {response.interrupted_sessions}[/bold green]")
+                else:
+                    logger.warning("   ⚠️ Сервер не нашел активных сессий для прерывания")
+                    console.print(f"[yellow]⚠️ Сервер не нашел активных сессий для прерывания[/yellow]")
+            else:
+                logger.warning("   ⚠️ Hardware ID недоступен для прерывания")
+                console.print("[yellow]⚠️ Hardware ID недоступен для прерывания[/yellow]")
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка вызова прерывания на сервере: {e}")
+            console.print(f"[red]⚠️ Ошибка вызова прерывания на сервере: {e}[/red]")
+        
+        logger.info(f"   🏁 _force_interrupt_server_call завершен в {time.time():.3f}")
+    
+    def _force_interrupt_server_sync(self):
+        """Синхронно вызывает прерывание на сервере (fallback)"""
+        try:
+            if hasattr(self, 'hardware_id') and self.hardware_id:
+                # Создаем запрос на прерывание
+                request = streaming_pb2.InterruptRequest(hardware_id=self.hardware_id)
+                
+                # Вызываем метод на сервере синхронно
+                response = self.stub.InterruptSession(request)
+                
+                if response.success:
+                    console.print(f"[bold green]✅ Сервер успешно прервал {len(response.interrupted_sessions)} сессий![/bold green]")
+                    console.print(f"[bold green]✅ Прерванные сессии: {response.interrupted_sessions}[/bold green]")
+                else:
+                    console.print(f"[yellow]⚠️ Сервер не нашел активных сессий для прерывания[/yellow]")
+            else:
+                console.print("[yellow]⚠️ Hardware ID недоступен для прерывания[/yellow]")
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка вызова прерывания на сервере: {e}[/red]")
+    
+    async def _force_recreate_channel(self):
+        """Принудительно создает новый канал для прерывания старого"""
+        try:
+            # Сначала закрываем старый канал
+            if self.channel:
+                try:
+                    await self.channel.close()
+                    console.print("[bold red]🚨 Старый канал ПРИНУДИТЕЛЬНО закрыт![/bold red]")
+                except:
+                    pass
+            
+            # Создаем новый канал
+            self.channel = grpc.aio.insecure_channel(self.server_address)
+            self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
+            console.print("[bold green]✅ Новый gRPC канал создан для принудительного прерывания[/bold green]")
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка принудительного создания канала: {e}[/red]")
+    
+    async def _close_channel_and_recreate(self):
+        """Асинхронно закрывает канал и воссоздает его"""
+        try:
+            # Асинхронно закрываем канал
+            await self.channel.close()
+            console.print("[bold red]🚨 МГНОВЕННОЕ прерывание gRPC канала![/bold red]")
+            
+            # Создаем новый канал
+            await self._recreate_channel()
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка закрытия канала: {e}[/red]")
+    
+    async def _recreate_channel(self):
+        """Воссоздает gRPC канал асинхронно"""
+        try:
+            self.channel = grpc.aio.insecure_channel(self.server_address)
+            self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
+            console.print("[bold green]✅ Новый gRPC канал создан для следующих вызовов[/bold green]")
+        except Exception as e:
+            console.print(f"[red]⚠️ Ошибка воссоздания gRPC канала: {e}[/red]")
     
     async def stream_audio(self, prompt: str, screenshot_base64: str = None, screen_info: dict = None, hardware_id: str = None):
         """

@@ -13,8 +13,8 @@ class StreamRecognizer:
     Записывает аудио только при удержании пробела.
     """
     
-    def __init__(self, sample_rate=44100, chunk_size=1024, channels=1):
-        self.sample_rate = sample_rate
+    def __init__(self, sample_rate=16000, chunk_size=1024, channels=1):
+        self.sample_rate = sample_rate  # 16kHz - оптимально для распознавания речи
         self.chunk_size = chunk_size
         self.channels = channels
         self.format = pyaudio.paInt16
@@ -25,16 +25,22 @@ class StreamRecognizer:
         self.audio_chunks = []
         self.recording_thread = None
         
-        # Инициализируем распознаватель
+        # Инициализируем распознаватель с оптимизированными параметрами
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 300  # Снижаем порог энергии
+        self.recognizer.energy_threshold = 100  # Снижаем порог энергии для лучшего распознавания
         self.recognizer.dynamic_energy_threshold = True  # Динамический порог
-        self.recognizer.pause_threshold = 0.8  # Порог паузы
+        self.recognizer.pause_threshold = 0.5  # Уменьшаем порог паузы
+        self.recognizer.phrase_threshold = 0.3  # Порог фразы
+        self.recognizer.non_speaking_duration = 0.3  # Длительность не-речи
         
     def start_recording(self):
         """Начинает запись аудио при нажатии пробела"""
+        # КРИТИЧНО: если уже записываем - сначала останавливаем предыдущую запись
         if self.is_recording:
-            return
+            console.print("[yellow]⚠️ Запись уже идет - сначала останавливаю предыдущую...[/yellow]")
+            self.stop_recording_and_recognize()
+            # Небольшая задержка для стабилизации
+            time.sleep(0.05)
             
         self.is_recording = True
         self.audio_chunks = []
@@ -63,15 +69,28 @@ class StreamRecognizer:
             
         self.is_recording = False
         
-        # Даем время потоку записи завершиться
+        # КРИТИЧНО: принудительно останавливаем поток записи
         if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=1.0)  # Ждем максимум 1 секунду
+            # Даем время потоку записи завершиться
+            self.recording_thread.join(timeout=0.5)  # Уменьшаем таймаут до 500ms
             
-        # Останавливаем поток
+            # Если поток не завершился - принудительно прерываем
+            if self.recording_thread.is_alive():
+                console.print("[yellow]⚠️ Поток записи не завершился - принудительно прерываю...[/yellow]")
+                # В Python нет прямого способа убить поток, но можно сбросить флаг
+                self.is_recording = False
+            
+        # КРИТИЧНО: принудительно останавливаем аудиопоток
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+            try:
+                if self.stream.is_active():
+                    self.stream.stop_stream()
+                self.stream.close()
+                console.print("[blue]🔇 Аудиопоток остановлен и закрыт[/blue]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Ошибка при остановке аудиопотока: {e}[/yellow]")
+            finally:
+                self.stream = None
             
         console.print("[bold blue]🔍 Распознавание речи...[/bold blue]")
         
@@ -97,11 +116,18 @@ class StreamRecognizer:
             # Конвертируем в формат для SpeechRecognition
             audio_bytes = (audio_data * 32767).astype(np.int16).tobytes()
             
+            # ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА АУДИО
+            console.print(f"[blue]🔍 Размер аудио данных: {len(audio_data)} сэмплов[/blue]")
+            console.print(f"[blue]🔍 Диапазон значений: {audio_data.min():.4f} до {audio_data.max():.4f}[/blue]")
+            console.print(f"[blue]🔍 Среднее значение: {np.mean(np.abs(audio_data)):.4f}[/blue]")
+            console.print(f"[blue]🔍 Размер байтов: {len(audio_bytes)} байт[/blue]")
+            
             # Создаем AudioData объект для распознавания
+            # paInt16 = 16 бит = 2 байта на сэмпл
             audio = sr.AudioData(audio_bytes, self.sample_rate, 2)  # 2 bytes per sample
             
-            # Пробуем разные языки для распознавания
-            languages = ['ru-RU', 'en-US', 'en-GB']
+            # Пробуем разные языки для распознавания (английский в приоритете)
+            languages = ['en-US', 'en-GB', 'ru-RU']
             
             for lang in languages:
                 try:
@@ -116,6 +142,28 @@ class StreamRecognizer:
                     console.print(f"[red]❌ Ошибка сервиса распознавания на {lang}: {e}[/red]")
                     continue
             
+            # АЛЬТЕРНАТИВНЫЙ МЕТОД - прямой PyAudio
+            console.print("[blue]🔄 Пробую альтернативный метод распознавания...[/blue]")
+            try:
+                # Создаем аудио данные напрямую из PyAudio
+                raw_audio = b''.join([chunk.tobytes() for chunk in self.audio_chunks])
+                alternative_audio = sr.AudioData(raw_audio, self.sample_rate, 2)
+                
+                # Пробуем распознать
+                for lang in languages:
+                    try:
+                        console.print(f"[blue]🔄 Альтернативный метод, язык: {lang}[/blue]")
+                        text = self.recognizer.recognize_google(alternative_audio, language=lang)
+                        console.print(f"[bold magenta]✅ Распознано альтернативным методом ({lang}): {text}[/bold magenta]")
+                        return text
+                    except sr.UnknownValueError:
+                        continue
+                    except sr.RequestError:
+                        continue
+                        
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Альтернативный метод не сработал: {e}[/yellow]")
+            
             # Если все языки не сработали
             console.print("[red]❌ Не удалось распознать речь ни на одном языке[/red]")
             return None
@@ -124,6 +172,37 @@ class StreamRecognizer:
             console.print(f"[red]❌ Ошибка распознавания: {e}[/red]")
             console.print(f"[red]Детали: {type(e).__name__}: {str(e)}[/red]")
             return None
+    
+    def force_stop_recording(self):
+        """
+        ПРИНУДИТЕЛЬНО останавливает запись БЕЗ распознавания.
+        Используется для прерывания/отмены.
+        """
+        if not self.is_recording:
+            return
+            
+        console.print("[bold red]🚨 ПРИНУДИТЕЛЬНАЯ остановка записи![/bold red]")
+        self.is_recording = False
+        
+        # КРИТИЧНО: принудительно останавливаем поток записи
+        if self.recording_thread and self.recording_thread.is_alive():
+            self.recording_thread.join(timeout=0.2)  # Быстрый таймаут для прерывания
+            
+        # КРИТИЧНО: принудительно останавливаем аудиопоток
+        if self.stream:
+            try:
+                if self.stream.is_active():
+                    self.stream.stop_stream()
+                self.stream.close()
+                console.print("[bold red]🚨 Аудиопоток ПРИНУДИТЕЛЬНО остановлен![/bold red]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Ошибка при принудительной остановке: {e}[/yellow]")
+            finally:
+                self.stream = None
+        
+        # Очищаем буферы
+        self.audio_chunks = []
+        console.print("[bold green]✅ Запись ПРИНУДИТЕЛЬНО остановлена![/bold green]")
             
     def _record_audio(self):
         """Записывает аудио в отдельном потоке"""
@@ -153,7 +232,7 @@ class StreamRecognizer:
             self.audio.terminate()
 
 # Оставляем старую функцию для совместимости
-def listen_for_command(lang: str = 'ru-RU') -> str | None:
+def listen_for_command(lang: str = 'en-US') -> str | None:
     """
     Захватывает аудио с микрофона, распознает речь и возвращает текст.
     УСТАРЕВШАЯ ФУНКЦИЯ - используйте StreamRecognizer для push-to-talk.

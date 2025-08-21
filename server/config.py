@@ -30,7 +30,7 @@ class Config:
     # =====================================================
     # EDGE TTS
     # =====================================================
-    EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'ru-RU-SvetlanaNeural')
+    EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'en-US-JennyNeural')
     EDGE_TTS_RATE = os.getenv('EDGE_TTS_RATE', '+0%')
     EDGE_TTS_VOLUME = os.getenv('EDGE_TTS_VOLUME', '+0%')
     

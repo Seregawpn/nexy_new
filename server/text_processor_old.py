@@ -68,45 +68,6 @@ class TextProcessor:
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации TextProcessor: {e}", exc_info=True)
             self.client = None
-    
-    def cancel_generation(self):
-        """
-        МГНОВЕННО отменяет текущую генерацию LLM и очищает все процессы.
-        Используется для принудительного прерывания.
-        """
-        try:
-            logger.warning("🚨 МГНОВЕННАЯ отмена генерации LLM!")
-            
-            # КРИТИЧНО: отменяем текущую генерацию Gemini
-            if hasattr(self, '_current_generation'):
-                try:
-                    if hasattr(self._current_generation, 'cancel'):
-                        self._current_generation.cancel()
-                        logger.warning("🚨 Gemini генерация МГНОВЕННО ОТМЕНЕНА!")
-                except:
-                    pass
-                self._current_generation = None
-            
-            # КРИТИЧНО: очищаем все внутренние буферы
-            if hasattr(self, '_text_buffer'):
-                self._text_buffer.clear()
-                logger.warning("🚨 Текстовые буферы МГНОВЕННО ОЧИЩЕНЫ!")
-            
-            # КРИТИЧНО: очищаем все временные переменные
-            if hasattr(self, '_current_prompt'):
-                self._current_prompt = None
-                logger.warning("🚨 Текущий промпт МГНОВЕННО ОЧИЩЕН!")
-            
-            logger.warning("✅ Все процессы LLM МГНОВЕННО отменены!")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка отмены генерации LLM: {e}")
-    
-    def clear_buffers(self):
-        """
-        МГНОВЕННО очищает все буферы и отменяет генерацию.
-        """
-        self.cancel_generation()
 
     def set_database_manager(self, db_manager):
         """
@@ -118,10 +79,9 @@ class TextProcessor:
         self.db_manager = db_manager
         logger.info("✅ DatabaseManager установлен в TextProcessor")
     
-    async def generate_response_stream(self, prompt: str, hardware_id: str = None, screenshot_base64: str = None, interrupt_checker=None, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_response_stream(self, prompt: str, hardware_id: str = None, screenshot_base64: str = None, **kwargs) -> AsyncGenerator[str, None]:
         """
         Генерирует ответ с помощью Gemini Live API и стримит результат.
-        interrupt_checker: функция для проверки необходимости прерывания
         """
         if not self.client:
             logger.error("Gemini клиент не инициализирован.")
@@ -129,10 +89,6 @@ class TextProcessor:
             return
 
         logger.info(f"Запускаю Gemini Live API для: '{prompt[:50]}...'")
-        
-        # КРИТИЧНО: сохраняем функцию проверки прерывания
-        self._interrupt_checker = interrupt_checker
-        self._current_prompt = prompt
         
         # Получаем память пользователя (если доступна)
         memory_context = ""
@@ -160,14 +116,12 @@ class TextProcessor:
                 logger.warning(f"⚠️ Ошибка получения памяти: {e}")
         
         try:
-            # Создаем сессию Live API
-            async with self.client.aio.live.connect(
-                model="models/gemini-2.0-flash-live-001", 
-                config=self.config
-            ) as session:
-                
-                # Формируем системную инструкцию с учетом памяти
-                base_system_instruction = (
+            logger.info(f"🔌 Использую обычный Gemini API...")
+            # Используем обычный Gemini API вместо Live API
+            model = self.client.GenerativeModel('gemini-2.0-flash-exp')
+            
+            # Формируем системную инструкцию с учетом памяти
+            base_system_instruction = (
                     "You are a friendly, caring AI assistant for blind and visually impaired users. "
                     "Be warm, conversational, and supportive while maintaining the highest standards of accuracy and safety.\n\n"
                     " When you give the answer, you need to give just answer short and clear and not too long And just important.\n\n"
@@ -219,11 +173,9 @@ class TextProcessor:
                     system_instruction = base_system_instruction
                     logger.info(f"🧠 Системная инструкция без контекста памяти")
                 
-                await session.send(input=system_instruction)
-
                 # --- УМНАЯ ОБРАБОТКА СКРИНШОТА ---
                 # Анализируем запрос и решаем, нужен ли скриншот
-                content = [prompt]
+                content = [system_instruction, prompt]
                 
                 # Определяем, нужен ли скриншот для данного запроса
                 needs_screenshot = self._should_analyze_screenshot(prompt)
@@ -249,75 +201,40 @@ class TextProcessor:
                     logger.info(f"📝 Скриншот не предоставлен")
 
                 # Отправляем запрос (с изображением или без)
-                await session.send(input=content, end_of_turn=True)
-                if len(content) > 1:
-                    logger.info("📝 Мультимодальный запрос (текст + изображение) отправлен")
-                else:
-                    logger.info("📝 Текстовый запрос отправлен")
+                logger.info(f"📤 Отправляю запрос в Gemini API...")
                 
-                # Получаем ответ
-                turn = session.receive()
-                accumulated_text = ""
-                
-                # КРИТИЧНО: проверяем прерывание ПЕРЕД началом цикла
-                if self._interrupt_checker and self._interrupt_checker():
-                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ LLM!")
-                    return
-                
-                async for response in turn:
-                    # КРИТИЧНО: проверяем необходимость прерывания в КАЖДОЙ итерации
-                    if self._interrupt_checker and self._interrupt_checker():
-                        logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ LLM!")
-                        return
+                try:
+                    # Используем обычный Gemini API
+                    response = model.generate_content(content)
+                    logger.info(f"✅ Ответ получен от Gemini API!")
                     
                     if response.text:
-                        # Накапливаем текст
-                        accumulated_text += response.text
-                        logger.info(f"📝 Получен текст: '{response.text[:100]}...'")
+                        accumulated_text = response.text
+                        logger.info(f"📝 Получен текст: '{accumulated_text[:100]}...'")
                         
-                        # Проверяем, есть ли полные предложения
+                        # Разбиваем на предложения и отправляем
                         sentences = self._split_into_sentences(accumulated_text)
                         
-                        # Если есть полные предложения, отправляем их
-                        if len(sentences) > 1:
-                            # Отправляем все предложения кроме последнего (оно может быть неполным)
-                            for sentence in sentences[:-1]:
-                                if sentence.strip():
-                                    # КРИТИЧНО: проверяем прерывание перед отправкой каждого предложения
-                                    if self._interrupt_checker and self._interrupt_checker():
-                                        logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ОТПРАВКУ ПРЕДЛОЖЕНИЯ!")
-                                        return
-                                    
-                                    logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
-                                    yield sentence.strip()
-                            
-                            # Оставляем последнее предложение для следующей итерации
-                            accumulated_text = sentences[-1]
-                        elif len(sentences) == 1 and self._is_complete_sentence(accumulated_text):
-                            # Если получили одно полное предложение
-                            sentence = sentences[0]
+                        for sentence in sentences:
                             if sentence.strip():
-                                # КРИТИЧНО: проверяем прерывание перед отправкой предложения
-                                if self._interrupt_checker and self._interrupt_checker():
-                                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ОТПРАВКУ ПРЕДЛОЖЕНИЯ!")
-                                    return
-                                
                                 logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
                                 yield sentence.strip()
-                            accumulated_text = ""
+                        
+                    else:
+                        logger.warning("⚠️ Gemini API вернул пустой ответ")
+                        yield "Извините, не удалось получить ответ от ассистента."
+                        
+                except Exception as api_error:
+                    logger.error(f"❌ Ошибка Gemini API: {api_error}")
+                    yield "Извините, произошла ошибка при получении ответа от ассистента."
                 
-                # Отправляем оставшийся текст, если он есть
-                if accumulated_text.strip():
-                    logger.info(f"📤 Отправляю оставшийся текст: '{accumulated_text[:100]}...'")
-                    yield accumulated_text.strip()
+                logger.info("✅ Gemini API ответ получен и обработан")
                 
-                logger.info("✅ Gemini Live API ответ получен и обработан")
-                
-                # ФОНОВОЕ обновление памяти (НЕ БЛОКИРУЕТ)
-                if hardware_id and self.db_manager and self.memory_analyzer:
+                # ФОНОВОЕ обновление памяти (НЕ БЛОКИРУЕТ) - только если есть ответ
+                if 'response' in locals() and response.text and hardware_id and self.db_manager and self.memory_analyzer:
                     # Создаем задачу в фоне - НЕ ЖДЕМ завершения
                     asyncio.create_task(
-                        self._update_memory_background(hardware_id, prompt, accumulated_text)
+                        self._update_memory_background(hardware_id, prompt, response.text)
                     )
                     logger.info(f"🔄 Задача обновления памяти запущена в фоне для {hardware_id}")
                 elif hardware_id and self.db_manager:
