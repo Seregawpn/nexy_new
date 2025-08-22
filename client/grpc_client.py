@@ -43,6 +43,21 @@ class GrpcClient:
             console.print(f"[bold red]❌ Ошибка подключения к серверу: {e}[/bold red]")
             return False
     
+    def connect_sync(self):
+        """Синхронное подключение к gRPC серверу (для восстановления соединения)"""
+        try:
+            # Создаем синхронный канал для восстановления
+            import grpc
+            self.channel = grpc.insecure_channel(self.server_address)
+            self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
+            
+            console.print(f"[bold green]✅ Синхронное подключение к gRPC серверу {self.server_address} восстановлено[/bold green]")
+            return True
+            
+        except Exception as e:
+            console.print(f"[bold red]❌ Ошибка синхронного подключения к серверу: {e}[/bold red]")
+            return False
+    
     async def disconnect(self):
         """Отключение от сервера"""
         if self.channel:
@@ -98,21 +113,197 @@ class GrpcClient:
             logger.info("   🚨 ПРИНУДИТЕЛЬНОЕ прерывание на СЕРВЕРЕ!")
             
             # КРИТИЧНО: вызываем новый метод InterruptSession на сервере!
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Создаем задачу для принудительного прерывания на сервере
-                logger.info("   🔄 Создаю задачу для прерывания на сервере...")
-                loop.create_task(self._force_interrupt_server_call())
-                console.print("[bold red]🚨 Задача принудительного прерывания на сервере запущена![/bold red]")
+            if self.stub:
+                try:
+                    # Создаем запрос прерывания
+                    interrupt_request = streaming_pb2.InterruptSessionRequest(
+                        session_id="force_interrupt",
+                        reason="user_interruption"
+                    )
+                    
+                    # Отправляем запрос прерывания
+                    console.print("[blue]🔍 Отправляю запрос прерывания на сервер...[/blue]")
+                    logger.info("   🔍 Отправляю запрос прерывания на сервер...")
+                    
+                    # Создаем задачу для асинхронного вызова
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Создаем задачу для асинхронного вызова
+                        loop.create_task(self._send_interrupt_request(interrupt_request))
+                    else:
+                        console.print("[yellow]⚠️ Цикл событий не запущен[/yellow]")
+                        
+                except Exception as e:
+                    console.print(f"[red]❌ Ошибка отправки запроса прерывания: {e}[/red]")
+                    logger.error(f"   ❌ Ошибка отправки запроса прерывания: {e}")
             else:
-                # Если цикл не запущен, вызываем синхронно
-                console.print("[blue]🔍 Вызываю прерывание синхронно...[/blue]")
-                self._force_interrupt_server_sync()
+                console.print("[yellow]⚠️ gRPC stub недоступен[/yellow]")
+                logger.warning("   ⚠️ gRPC stub недоступен")
+                
         except Exception as e:
-            console.print(f"[red]⚠️ Ошибка принудительного прерывания: {e}[/red]")
-            import traceback
-            console.print(f"[red]🔍 Traceback: {traceback.format_exc()}[/red]")
+            console.print(f"[red]❌ Ошибка в force_interrupt_server: {e}[/red]")
+            logger.error(f"   ❌ Ошибка в force_interrupt_server: {e}")
+    
+    async def _send_interrupt_request(self, interrupt_request):
+        """Асинхронно отправляет запрос прерывания на сервер"""
+        try:
+            console.print("[blue]🔍 Асинхронно отправляю запрос прерывания...[/blue]")
+            logger.info("   🔍 Асинхронно отправляю запрос прерывания...")
+            
+            # Вызываем метод InterruptSession
+            response = await self.stub.InterruptSession(interrupt_request)
+            
+            console.print(f"[bold green]✅ Прерывание на сервере успешно! Ответ: {response}[/bold green]")
+            logger.info(f"   ✅ Прерывание на сервере успешно! Ответ: {response}")
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка асинхронной отправки прерывания: {e}[/red]")
+            logger.error(f"   ❌ Ошибка асинхронной отправки прерывания: {e}")
+    
+    def close_connection(self):
+        """ПРИНУДИТЕЛЬНО закрывает gRPC соединение"""
+        logger.info(f"🚨 close_connection() вызван в {time.time():.3f}")
+        
+        try:
+            console.print("[bold red]🚨 ПРИНУДИТЕЛЬНО закрываю gRPC соединение![/bold red]")
+            logger.info("   🚨 ПРИНУДИТЕЛЬНО закрываю gRPC соединение!")
+            
+            # 1️⃣ Закрываем канал
+            if self.channel:
+                try:
+                    # Создаем задачу для асинхронного закрытия
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Создаем задачу для закрытия
+                        close_task = loop.create_task(self._force_close_channel())
+                        console.print("[blue]🔍 Задача закрытия канала создана[/blue]")
+                    else:
+                        # Если цикл не запущен, закрываем напрямую
+                        self.channel.close()
+                        console.print("[bold green]✅ gRPC канал закрыт напрямую[/bold green]")
+                except Exception as e:
+                    console.print(f"[red]❌ Ошибка закрытия канала: {e}[/red]")
+                    logger.error(f"   ❌ Ошибка закрытия канала: {e}")
+            
+            # 2️⃣ Сбрасываем stub
+            self.stub = None
+            console.print("[bold green]✅ gRPC stub сброшен[/bold green]")
+            
+            # 3️⃣ Сбрасываем канал
+            self.channel = None
+            console.print("[bold green]✅ gRPC канал сброшен[/bold green]")
+            
+            logger.info("   ✅ gRPC соединение принудительно закрыто")
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка в close_connection: {e}[/red]")
+            logger.error(f"   ❌ Ошибка в close_connection: {e}")
+    
+    async def _force_close_channel(self):
+        """Принудительно закрывает gRPC канал"""
+        try:
+            console.print("[blue]🔍 Принудительно закрываю gRPC канал...[/blue]")
+            logger.info("   🔍 Принудительно закрываю gRPC канал...")
+            
+            # Проверяем, что канал существует
+            if self.channel is None:
+                console.print("[yellow]⚠️ gRPC канал уже закрыт или не существует[/yellow]")
+                logger.info("   ⚠️ gRPC канал уже закрыт или не существует")
+                return
+            
+            # Закрываем канал
+            await self.channel.close()
+            
+            console.print("[bold green]✅ gRPC канал принудительно закрыт[/bold green]")
+            logger.info("   ✅ gRPC канал принудительно закрыт")
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка принудительного закрытия канала: {e}[/red]")
+            logger.error(f"   ❌ Ошибка принудительного закрытия канала: {e}")
+    
+    def reset_state(self):
+        """Сбрасывает состояние gRPC клиента"""
+        logger.info(f"🚨 reset_state() вызван в {time.time():.3f}")
+        
+        try:
+            console.print("[bold blue]🔄 Сбрасываю состояние gRPC клиента...[/bold blue]")
+            logger.info("   🔄 Сбрасываю состояние gRPC клиента...")
+            
+            # 1️⃣ Сбрасываем stub
+            self.stub = None
+            console.print("[green]✅ gRPC stub сброшен[/green]")
+            
+            # 2️⃣ Сбрасываем канал
+            self.channel = None
+            console.print("[green]✅ gRPC канал сброшен[/green]")
+            
+            # 3️⃣ Сбрасываем аудио плеер
+            if self.audio_player:
+                try:
+                    if hasattr(self.audio_player, 'clear_all_audio_data'):
+                        self.audio_player.clear_all_audio_data()
+                        console.print("[green]✅ Аудио плеер очищен[/green]")
+                    elif hasattr(self.audio_player, 'force_stop'):
+                        self.audio_player.force_stop()
+                        console.print("[green]✅ Аудио плеер остановлен[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]⚠️ Ошибка сброса аудио плеера: {e}[/yellow]")
+                    logger.warning(f"   ⚠️ Ошибка сброса аудио плеера: {e}")
+            
+            console.print("[bold green]✅ Состояние gRPC клиента сброшено![/bold green]")
+            logger.info("   ✅ Состояние gRPC клиента сброшено!")
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка в reset_state: {e}[/red]")
+            logger.error(f"   ❌ Ошибка в reset_state: {e}")
+    
+    def clear_buffers(self):
+        """Очищает все gRPC буферы"""
+        logger.info(f"🧹 clear_buffers() вызван в {time.time():.3f}")
+        
+        try:
+            console.print("[bold blue]🧹 Очищаю все gRPC буферы...[/bold blue]")
+            logger.info("   🧹 Очищаю все gRPC буферы...")
+            
+            # 1️⃣ Очищаем буферы канала
+            if self.channel and hasattr(self.channel, 'close'):
+                try:
+                    # Принудительно закрываем канал для очистки буферов
+                    # Создаем задачу для асинхронного закрытия
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self._force_close_channel())
+                        console.print("[blue]🔍 Задача очистки gRPC буферов создана[/blue]")
+                    else:
+                        # Если цикл не запущен, закрываем напрямую
+                        self.channel.close()
+                        console.print("[bold green]✅ gRPC буферы очищены напрямую[/bold green]")
+                except Exception as e:
+                    console.print(f"[yellow]⚠️ Ошибка очистки gRPC буферов: {e}[/yellow]")
+                    logger.warning(f"   ⚠️ Ошибка очистки gRPC буферов: {e}")
+            else:
+                console.print("[blue]ℹ️ gRPC канал уже закрыт или не существует[/blue]")
+                logger.info("   ℹ️ gRPC канал уже закрыт или не существует")
+            
+            # 2️⃣ Очищаем буферы stub
+            if self.stub:
+                self.stub = None
+                console.print("[green]✅ gRPC stub буферы очищены[/green]")
+            
+            # 3️⃣ Очищаем системные буферы
+            import gc
+            gc.collect()
+            console.print("[green]✅ Системные буферы очищены[/green]")
+            
+            console.print("[bold green]✅ Все gRPC буферы очищены![/bold green]")
+            logger.info("   ✅ Все gRPC буферы очищены!")
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка в clear_buffers: {e}[/red]")
+            logger.error(f"   ❌ Ошибка в clear_buffers: {e}")
     
     def interrupt_immediately(self):
         """СИНХРОННОЕ мгновенное прерывание - атомарная операция!"""
@@ -302,7 +493,18 @@ class GrpcClient:
             # self.audio_player.wait_for_queue_empty()
             
             # Запускаем ожидание естественного завершения воспроизведения
-            self.audio_player.wait_for_natural_completion()
+            # self.audio_player.wait_for_natural_completion()  # ← ЭТОТ МЕТОД НЕ СУЩЕСТВУЕТ!
+            
+            # Используем существующий метод для проверки статуса
+            if hasattr(self.audio_player, 'wait_for_queue_empty'):
+                # Проверяем статус без блокировки
+                is_completed = self.audio_player.wait_for_queue_empty()
+                if is_completed:
+                    console.print("[blue]🎵 Аудио уже завершено[/blue]")
+                else:
+                    console.print("[blue]🎵 Аудио продолжает воспроизводиться...[/blue]")
+            else:
+                console.print("[yellow]⚠️ Метод wait_for_queue_empty недоступен[/yellow]")
             
             # Логируем завершение стрима, но НЕ останавливаем воспроизведение
             console.print("[bold green]✅ gRPC стрим завершен, аудио продолжает воспроизводиться...[/bold green]")

@@ -1,7 +1,7 @@
 import asyncio
 import time
 from pynput import keyboard
-from threading import Thread, Timer
+from threading import Thread
 from rich.console import Console
 
 console = Console()
@@ -16,12 +16,14 @@ class InputHandler:
         self.loop = loop
         self.queue = queue
         self.press_time = None
-        self.short_press_threshold = 0.3   # Порог для коротких нажатий (300ms - оптимальное время)
+        self.short_press_threshold = 0.3   # Порог для коротких нажатий (300ms)
         self.space_pressed = False
         self.last_event_time = 0
         self.event_cooldown = 0.1
         self.recording_started = False
-        self.recording_timer = None # Таймер для отложенного старта записи
+        
+        # Флаг для отслеживания состояния прерывания
+        self.interrupting = False
 
         # Запускаем listener в отдельном потоке
         self.listener_thread = Thread(target=self._run_listener, daemon=True)
@@ -34,80 +36,90 @@ class InputHandler:
 
     def on_press(self, key):
         """Обрабатывает нажатие клавиши"""
-        if key == keyboard.Key.space:
+        if key == keyboard.Key.space and not self.space_pressed:
             current_time = time.time()
             
-            # 1. МГНОВЕННО отправляем прерывание при КАЖДОМ нажатии пробела
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
-            console.print("[bold red]🔇 ПРОБЕЛ НАЖАТ - МГНОВЕННОЕ ПРЕРЫВАНИЕ РЕЧИ![/bold red]")
-            
-            # 2. Если запись уже активна, останавливаем её
-            if self.recording_started:
-                console.print("[yellow]⏹️ Запись уже активна - останавливаю и отправляю команду[/yellow]")
-                self.loop.call_soon_threadsafe(self.queue.put_nowait, "stop_recording")
-                self.recording_started = False
+            # Проверяем cooldown для предотвращения множественных событий
+            if current_time - self.last_event_time < self.event_cooldown:
+                console.print(f"[dim]⏰ Cooldown активен: {self.event_cooldown - (current_time - self.last_event_time):.3f}s[/dim]")
                 return
-            
-            # 3. Если это первое нажатие (not space_pressed), начинаем логику записи
-            if not self.space_pressed:
-                self.space_pressed = True
-                self.press_time = current_time
-                self.last_event_time = current_time
                 
-                # 4. НЕ запускаем таймер сразу - ждем отпускания для определения длительности
-                # Таймер будет запущен только если нажатие длительное
-                console.print("[blue]⏳ Жду отпускания пробела для определения действия...[/blue]")
+            # Устанавливаем флаг нажатия и время
+            self.space_pressed = True
+            self.press_time = current_time
+            self.last_event_time = current_time
+            
+            # 1. УСТАНАВЛИВАЕМ ФЛАГ ПРЕРЫВАНИЯ
+            self.interrupting = True
+            console.print(f"[bold red]🔇 ПРОБЕЛ НАЖАТ - МГНОВЕННОЕ ПРЕРЫВАНИЕ РЕЧИ! (время: {current_time:.3f})[/bold red]")
+            console.print(f"[dim]🔍 Флаг interrupting установлен: {self.interrupting}[/dim]")
+            
+            # 2. ОТПРАВЛЯЕМ ТОЛЬКО ПРЕРЫВАНИЕ
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
+            console.print(f"[dim]📤 Событие interrupt_or_cancel отправлено в очередь[/dim]")
+            
+            # 3. МИКРОФОН БУДЕТ АКТИВИРОВАН АВТОМАТИЧЕСКИ ПОСЛЕ ПРЕРЫВАНИЯ!
+            console.print(f"[dim]🎤 Микрофон будет активирован автоматически после прерывания (2-5ms)[/dim]")
+            
+            # УБИРАЕМ ТАЙМЕР ПОЛНОСТЬЮ - НИКАКИХ ЗАДЕРЖЕК!
 
     def on_release(self, key):
         """Обрабатывает отпускание клавиши"""
         if key == keyboard.Key.space and self.space_pressed:
             current_time = time.time()
             
-            # УБРАНО: cooldown - больше не нужен, так как прерывание происходит при нажатии
-            
+            # Проверяем cooldown для предотвращения множественных событий
+            if current_time - self.last_event_time < self.event_cooldown:
+                console.print(f"[dim]⏰ Cooldown активен при отпускании: {self.event_cooldown - (current_time - self.last_event_time):.3f}s[/dim]")
+                return
+                
             # Сбрасываем флаг нажатия
             self.space_pressed = False
-            
-            # Отменяем таймер, если он еще не сработал
-            if self.recording_timer:
-                self.recording_timer.cancel()
+            console.print(f"[dim]🔍 Флаг space_pressed сброшен в {current_time:.3f}[/dim]")
             
             # Вычисляем длительность нажатия
             duration = current_time - self.press_time
             self.press_time = None
             self.last_event_time = current_time
+            console.print(f"[dim]📊 Длительность нажатия: {duration:.3f}s[/dim]")
 
             # ПРОСТАЯ ЛОГИКА: определяем действие по длительности
             if duration >= self.short_press_threshold:
-                # ДЛИННОЕ нажатие: запускаем таймер для активации микрофона
-                console.print(f"⏹️ Длинное нажатие ({duration:.2f}s) - активирую микрофон для записи команды")
-                
-                # Запускаем таймер для активации микрофона
-                def start_recording_action():
-                    self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
-                    console.print("[bold green]🎤 МИКРОФОН АКТИВИРОВАН - начинаю запись команды![/bold green]")
-
-                # Задержка в 10мс для активации микрофона
-                self.recording_timer = Timer(0.01, start_recording_action)
-                self.recording_timer.start()
-                
-                # Устанавливаем флаг что запись активна
-                self.recording_started = True
-                
+                # ДЛИННОЕ нажатие: останавливаем запись и отправляем команду
+                console.print(f"⏹️ Длинное нажатие ({duration:.2f}s) - останавливаю запись и отправляю команду")
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "stop_recording")
+                console.print(f"[dim]📤 Событие stop_recording отправлено в очередь[/dim]")
             else:
-                # КОРОТКОЕ нажатие: только прерывание, микрофон НЕ активируется
-                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - только прерывание, микрофон НЕ активируется")
-                self.recording_started = False
+                # КОРОТКОЕ нажатие: только прерывание, запись не начиналась
+                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - только прерывание, запись не начиналась")
+                console.print(f"[dim]🔍 Длительность {duration:.3f}s < {self.short_press_threshold}s - короткое нажатие[/dim]")
             
+            # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ
+            console.print(f"[dim]🔍 Флаг interrupting ДО сброса: {self.interrupting}[/dim]")
+            self.interrupting = False
+            console.print(f"[dim]🔍 Флаг interrupting ПОСЛЕ сброса: {self.interrupting}[/dim]")
             console.print("🔄 Готов к новым событиям")
+
+    def reset_interrupt_flag(self):
+        """Сбрасывает флаг прерывания - вызывается из StateManager"""
+        current_time = time.time()
+        console.print(f"[dim]🔍 reset_interrupt_flag() вызван в {current_time:.3f}[/dim]")
+        console.print(f"[dim]🔍 Флаг interrupting ДО сброса: {self.interrupting}[/dim]")
+        self.interrupting = False
+        console.print(f"[dim]🔍 Флаг interrupting ПОСЛЕ сброса: {self.interrupting}[/dim]")
+        console.print("[dim]🔄 Флаг прерывания сброшен[/dim]")
+    
+    def get_interrupt_status(self):
+        """Возвращает текущий статус прерывания"""
+        return self.interrupting
 
 async def main_test():
     """Функция для тестирования InputHandler"""
     print("🧪 Тест упрощенного InputHandler:")
-    print("• Зажмите пробел → СРАЗУ активируется микрофон")
+    print("• Зажмите пробел → СРАЗУ прерывание + автоматическая активация микрофона")
     print("• Удерживайте пробел → продолжается запись")
     print("• Отпустите пробел → останавливается запись + отправка команды")
-    print("• Короткое нажатие → прерывание речи ассистента")
+    print("• Короткое нажатие → только прерывание речи ассистента")
     print("• Нажмите Ctrl+C для выхода")
     
     event_queue = asyncio.Queue()
