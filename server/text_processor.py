@@ -22,6 +22,9 @@ class TextProcessor:
     Обрабатывает текстовые запросы с использованием Google Gemini Live API,
     который может использовать инструменты (например, Google Search)
     и поддерживает стриминг финального ответа.
+    
+    🚨 ВАЖНО: System Prompt теперь правильно передается в конфигурации сессии,
+    а не как обычное сообщение. Это обеспечивает корректное поведение ассистента.
     """
     
     def __init__(self):
@@ -146,11 +149,21 @@ class TextProcessor:
                     )
                     if memory_data.get('short') or memory_data.get('long'):
                         memory_context = f"""
-                        
-                        Контекст из памяти:
-                        Краткосрочная: {memory_data.get('short', 'Нет')}
-                        Долгосрочная: {memory_data.get('long', 'Нет')}
-                        """
+🧠 MEMORY CONTEXT (для контекста ответа):
+
+📋 КРАТКОСРОЧНАЯ ПАМЯТЬ (текущая сессия):
+{memory_data.get('short', 'Нет краткосрочной памяти')}
+
+📚 ДОЛГОСРОЧНАЯ ПАМЯТЬ (информация о пользователе):
+{memory_data.get('long', 'Нет долгосрочной памяти')}
+
+💡 ИНСТРУКЦИИ ПО ИСПОЛЬЗОВАНИЮ ПАМЯТИ:
+- Используй краткосрочную память для понимания текущего контекста разговора
+- Используй долгосрочную память для персонализации ответов (имя, предпочтения, важные детали)
+- Если память не релевантна текущему запросу - игнорируй её
+- Память должна дополнять ответ, а не заменять его
+- Приоритет: текущий запрос > краткосрочная память > долгосрочная память
+"""
                         logger.info(f"🧠 Получена память для {hardware_id}: краткосрочная ({len(memory_data.get('short', ''))} символов), долгосрочная ({len(memory_data.get('long', ''))} символов)")
                     else:
                         logger.info(f"🧠 Память для {hardware_id} пуста")
@@ -160,70 +173,100 @@ class TextProcessor:
                 logger.warning(f"⚠️ Ошибка получения памяти: {e}")
         
         try:
-            # Создаем сессию Live API
+            # Формируем системную инструкцию с учетом памяти
+            base_system_instruction = (
+                "You are a helpful assistant for blind and visually impaired users. Respond naturally and directly - just give the information they need without extra explanations about what you're doing.\n\n"
+                "TYPES OF REQUESTS:\n\n"
+
+                "🔍 SEARCH REQUESTS - Use web search for:\n\n"
+                "- Current news, weather, sports\n"
+                "- Recent events, today's happenings  \n"
+                "- Live information (stock prices, schedules)\n"
+                "- Any question about current/recent events\n\n"
+
+                "📱 SCREEN ANALYSIS - Take screenshot when user asks:\n\n"
+                "- 'What's on my screen?'\n"
+                "- 'What do you see?'\n"
+                "- 'Describe what's here'\n"
+                "- 'What's on the left/right side?'\n\n"
+
+                "💭 CONVERSATION - Use your knowledge for:\n\n"
+                "- General questions (how things work, definitions)\n"
+                "- Cooking, calculations, explanations\n"
+                "- Historical facts, science concepts\n\n"
+
+                "RESPONSE STYLE:\n\n"
+                "- Answer directly without saying 'Based on your request' or 'I understand'\n"
+                "- Don't mention what category the request is\n"
+                "- Be conversational but focused\n"
+                "- Talk like a real person, be their friend\n\n"
+
+                "🧠 MEMORY RULES:\n\n"
+                "- Use memory when user specifically references previous conversations\n"
+                "- Don't use memory for unrelated topics\n"
+                "- Memory should enhance, not replace current context\n"
+                "- Be selective about what to recall\n"
+                "- If memory context is provided, use it to provide more relevant answers\n\n"
+
+                "⚠️ SAFETY WARNINGS:\n\n"
+                "- If you see suspicious websites, dangerous links, or harmful content on screen - warn them immediately\n"
+                "- Alert about phishing emails, malicious downloads, or unsafe websites\n"
+                "- Since they can't see, they depend on you to keep them safe from clicking dangerous things\n\n"
+
+                "EXAMPLES:\n\n"
+                "❌ Bad: 'I understand you want me to analyze your screen. Based on your request, I can see...'\n"
+                "✅ Good: 'I can see your desktop with Chrome browser open and three folders...'\n\n"
+
+                " ❌ Bad: 'Based on your search request for weather, let me find that information...'\n"
+                "✅ Good: 'Today in Montreal it's 15°C and partly cloudy...'\n\n"
+
+                "Just be helpful and direct - they want information, not explanations of your process. "
+                           
+            )
+            
+            # 🚨 ГИБРИДНЫЙ ПОДХОД: базовые правила в System Prompt, контекст в User Prompt
+            if memory_context:
+                # System Prompt остается базовым (правила памяти)
+                system_instruction = base_system_instruction
+                logger.info(f"🧠 System Prompt: базовые правила памяти + правила поведения")
+                logger.info(f"🧠 Контекст памяти будет добавлен в User Prompt")
+            else:
+                system_instruction = base_system_instruction
+                logger.info(f"🧠 System Prompt: базовые правила памяти + правила поведения")
+                logger.info(f"🧠 Контекст памяти не предоставлен")
+            
+            # Создаем сессию Live API с System Prompt
             async with self.client.aio.live.connect(
                 model="models/gemini-2.0-flash-live-001", 
-                config=self.config
+                config=self.config,
+                system_instruction=system_instruction  # 🚨 ПЕРЕДАЕМ КАК SYSTEM PROMPT!
             ) as session:
                 
-                # Формируем системную инструкцию с учетом памяти
-                base_system_instruction = (
-                    "You are a friendly, caring AI assistant for blind and visually impaired users. "
-                    "Be warm, conversational, and supportive while maintaining the highest standards of accuracy and safety.\n\n"
-                    " When you give the answer, you need to give just answer short and clear and not too long And just important.\n\n"
-
-                    "🎯 REQUEST ANALYSIS - READ THIS FIRST:\n"
-                    "   You MUST analyze the user's request and respond accordingly and understand, which kind of question is it or which kind of request is it:\n\n"
-                    
-                    "1️⃣ Search: related to search information online, for example, news, sport news, or ticket important information, which you can get just online:\n this is example of questions requests"                    "   - 'What's the latest news?' → Search for current news\n"
-                    "   - 'What happened today?' → Search for today's events\n"
-                    "   - 'Weather today?' → Search for current weather\n"
-                    "   - 'Current stock prices?' → Search for market data\n"
-                    "   - ANY question about recent events, current time, or live information\n"
-                    
-                    
-                    "2️⃣ SCREEN ANALYSIS → this kind of request which user asked about to tell what do you see on the screen or you need to qualify him? What is on the screen because he cannot see and you need to help him with:\n these are kind of requests"
-                    "   - 'What do I see on screen?' → Analyze screenshot\n"
-                    "   - 'What's on the right side?' → Analyze screenshot\n"
-                    "   - 'Describe my desktop' → Analyze screenshot\n"
-                    "   - 'What am I working on?' → Analyze screenshot\n"
-                    
-                    "3️⃣ conversation → you need to ask some question just to talk as a question or other questions which you don't need to use screenshot or you don't need to use search for example, if he asked to help with something to answer any question (NOT for recent events): these are kind of requests\n"
-                    "   - 'How do computers work?' → Use your knowledge\n"
-                    "   - 'What is gravity?' → Use your knowledge\n"
-                    "   - 'How to cook pasta?' → Use your knowledge\n"
-                    " calculation"
-                    
-                    
-                    "🚨 CRITICAL RULES:\n"
-                    "   - never mix them for example if user ask one category or request you need to answer exactly what you want. You cannot meet them."
-                    
-                    "💬 PERSONALITY:\n"
-                    "   - Be warm, friendly, and supportive\n"
-                    "   - Use encouraging language\n"
-                    "   - Show genuine care and empathy\n\n"
-                    
-                    "🧠 MEMORY (OPTIONAL):\n"
-                    "   - you need to use memory when it related to the topic to the request and if user ask you about some information which was talking about so use memory when it's really important to use and sense of topic"
-                    
-                    "⚠️ SAFETY:\n"
-                    "   - Warn about suspicious content or dangerous websites or leads or emails messages whatever if something can be dangerous you need to tell about this that user I want to go one click because he's a Brian and he cannot see so you need to take care about it\n"
-
-                )
+                # ✅ System Prompt теперь правильно установлен в конфигурации сессии!
+                logger.info(f"🧠 System Prompt установлен: {len(system_instruction)} символов")
+                logger.info(f"🧠 System Prompt: {system_instruction[:200]}...")
                 
-                if memory_context:
-                    system_instruction = base_system_instruction + memory_context
-                    logger.info(f"🧠 Системная инструкция дополнена контекстом памяти")
-                    logger.info(f"🧠 Контекст памяти: {memory_context[:200]}...")
-                else:
-                    system_instruction = base_system_instruction
-                    logger.info(f"🧠 Системная инструкция без контекста памяти")
-                
-                await session.send(input=system_instruction)
-
                 # --- УМНАЯ ОБРАБОТКА СКРИНШОТА ---
                 # Анализируем запрос и решаем, нужен ли скриншот
-                content = [prompt]
+                
+                # 🚨 ГИБРИДНЫЙ ПОДХОД: контекст памяти добавляется в User Prompt
+                if memory_context:
+                    # Формируем расширенный User Prompt с четким разделением памяти
+                    enhanced_prompt = f"""{memory_context}
+
+👤 USER REQUEST:
+{prompt}
+
+🎯 ЗАДАЧА:
+Ответь на запрос пользователя, используя контекст памяти если он релевантен.
+Если память не связана с текущим запросом - игнорируй её.
+Приоритет: текущий запрос > краткосрочная память > долгосрочная память."""
+                    content = [enhanced_prompt]
+                    logger.info(f"🧠 User Prompt расширен контекстом памяти: {len(memory_context)} символов")
+                    logger.info(f"🧠 Структура: Memory Context + User Request + Task")
+                else:
+                    content = [prompt]
+                    logger.info(f"🧠 User Prompt без контекста памяти")
                 
                 # Определяем, нужен ли скриншот для данного запроса
                 needs_screenshot = self._should_analyze_screenshot(prompt)
@@ -248,6 +291,44 @@ class TextProcessor:
                 else:
                     logger.info(f"📝 Скриншот не предоставлен")
 
+                # 📋 ЛОГИРУЕМ СТРУКТУРУ СООБЩЕНИЙ
+                logger.info(f"📋 СТРУКТУРА СООБЩЕНИЙ:")
+                logger.info(f"   🧠 System Prompt: {len(system_instruction)} символов (базовые правила + правила памяти)")
+                if memory_context:
+                    logger.info(f"   🧠 Memory Context: краткосрочная + долгосрочная память")
+                    logger.info(f"   👤 User Prompt: расширен контекстом памяти + запрос + задача")
+                else:
+                    logger.info(f"   👤 User Prompt: только запрос пользователя")
+                if len(content) > 1:
+                    logger.info(f"   📸 Мультимодальный контент: текст + изображение")
+                else:
+                    logger.info(f"   📝 Только текстовый контент")
+                
+                # 🚨 ВАЖНО: Структура сообщений в Gemini Live API:
+                # 
+                # 1️⃣ SYSTEM PROMPT (system_instruction):
+                #    - Передается в конфигурации сессии
+                #    - Определяет поведение ассистента
+                #    - Включает правила, стиль, безопасность
+                #    - НЕ тратит токены на генерацию
+                #
+                # 2️⃣ USER PROMPT (content):
+                #    - Отправляется через session.send()
+                #    - Содержит: Memory Context + User Request + Task
+                #    - Memory Context: краткосрочная + долгосрочная память
+                #    - Может включать текст + изображение
+                #    - Помечается как end_of_turn=True
+                #
+                # 3️⃣ ASSISTANT RESPONSE:
+                #    - Получается через session.receive()
+                #    - Стримится по частям
+                #    - Обрабатывается и отправляется пользователю
+                #
+                # 🧠 MEMORY STRUCTURE:
+                #    - Краткосрочная: текущий разговор, контекст сессии
+                #    - Долгосрочная: информация о пользователе, предпочтения
+                #    - Приоритет: запрос > краткосрочная > долгосрочная
+                
                 # Отправляем запрос (с изображением или без)
                 await session.send(input=content, end_of_turn=True)
                 if len(content) > 1:
