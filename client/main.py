@@ -338,17 +338,34 @@ class StateManager:
                     if loop.is_running():
                         # Создаем задачу для асинхронного восстановления
                         restore_task = loop.create_task(self.grpc_client.connect())
-                        # Ждем завершения (неблокирующе)
-                        if not restore_task.done():
-                            self.console.print("[blue]⏳ Восстановление соединения в фоне...[/blue]")
+                        
+                        # Даем время на восстановление (неблокирующе)
+                        # Ждем максимум 3 секунды
+                        import time
+                        start_time = time.time()
+                        timeout = 3.0
+                        
+                        while not restore_task.done() and (time.time() - start_time) < timeout:
+                            time.sleep(0.1)  # Небольшая пауза
+                        
+                        if restore_task.done():
+                            try:
+                                if restore_task.result():
+                                    self.console.print("[green]✅ gRPC соединение восстановлено![/green]")
+                                    logger.info("   ✅ gRPC соединение восстановлено")
+                                else:
+                                    self.console.print("[red]❌ Не удалось восстановить gRPC соединение[/red]")
+                                    logger.error("   ❌ Не удалось восстановить gRPC соединение")
+                                    raise Exception("gRPC соединение не восстановлено")
+                            except Exception as e:
+                                self.console.print(f"[red]❌ Ошибка восстановления gRPC соединения: {e}[/red]")
+                                logger.error(f"   ❌ Ошибка восстановления gRPC соединения: {e}")
+                                raise Exception(f"gRPC соединение не восстановлено: {e}")
                         else:
-                            if restore_task.result():
-                                self.console.print("[green]✅ gRPC соединение восстановлено![/green]")
-                                logger.info("   ✅ gRPC соединение восстановлено")
-                            else:
-                                self.console.print("[red]❌ Не удалось восстановить gRPC соединение[/red]")
-                                logger.error("   ❌ Не удалось восстановить gRPC соединение")
-                                raise Exception("gRPC соединение не восстановлено")
+                            self.console.print("[yellow]⏰ Таймаут восстановления gRPC соединения (3 сек)[/yellow]")
+                            logger.warning("   ⏰ Таймаут восстановления gRPC соединения")
+                            raise Exception("gRPC соединение не восстановлено - таймаут")
+                            
                     else:
                         # Если цикл не запущен, восстанавливаем синхронно
                         if self.grpc_client.connect_sync():
@@ -358,7 +375,7 @@ class StateManager:
                             self.console.print("[red]❌ Не удалось восстановить gRPC соединение синхронно[/red]")
                             logger.error("   ❌ Не удалось восстановить gRPC соединение синхронно")
                             raise Exception("gRPC соединение не восстановлено синхронно")
-                            
+                
                 except Exception as e:
                     self.console.print(f"[bold red]❌ Ошибка восстановления gRPC соединения: {e}[/bold red]")
                     logger.error(f"   ❌ Ошибка восстановления gRPC соединения: {e}")
