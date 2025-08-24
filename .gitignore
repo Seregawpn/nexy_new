@@ -98,6 +98,17 @@ __pypackages__/
 celerybeat-schedule
 celerybeat.pid
 
+# Protobuf generated files (keep them for now as they are needed for gRPC communication)
+# *_pb2.py
+# *_pb2_grpc.py
+
+# Temporary audio files
+temp_audio/
+
+# Environment files
+.env
+config.env
+
 # Environment variables and secrets
 .env
 *.env

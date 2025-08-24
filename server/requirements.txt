@@ -10,6 +10,11 @@ protobuf
 # Google Gemini Live API
 google-genai
 
+# 🚨 НОВЫЕ ЗАВИСИМОСТИ: LangChain + Google Gemini
+langchain>=0.2.0
+langchain-google-genai>=2.1.9
+langchain-core>=0.2.0
+
 # Обработка изображений
 Pillow
 

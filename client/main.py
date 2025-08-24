@@ -66,12 +66,19 @@ class StateManager:
             self.console.print(f"[dim]✅ Состояние: {self.state.name}[/dim]")
     
     def handle_start_recording(self):
-        """Обрабатывает событие начала записи - теперь только для состояний IN_PROCESS"""
-        self.console.print(f"[blue]🎤 Начинаю запись (текущее состояние: {self.state.name})[/blue]")
+        """ПРОБЕЛ ЗАЖАТ - включаем микрофон"""
         
-        if self.state == AppState.IN_PROCESS:
-            # Ассистент работает → ПРЕРЫВАЕМ работу и переходим в LISTENING
+        if self.state == AppState.SLEEPING:
+            # Переходим в LISTENING и включаем микрофон
+            self.set_state(AppState.LISTENING)
+            self.stt_recognizer.start_recording()
+            self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
+            logger.info("   🎤 Микрофон активирован из состояния SLEEPING")
+        
+        elif self.state == AppState.IN_PROCESS:
+            # Прерываем работу и переходим в LISTENING
             self.console.print("[bold yellow]🔇 Ассистент работает - ПРЕРЫВАЮ и перехожу в LISTENING![/bold yellow]")
+            logger.info("   🚨 Прерывание работы ассистента")
             
             # 🚨 ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНЫЙ МЕТОД!
             success = self.force_stop_everything()
@@ -83,49 +90,144 @@ class StateManager:
                 logger.warning("   ⚠️ Универсальная остановка неполная")
                 self.console.print("[yellow]⚠️ Остановка неполная[/yellow]")
             
-            # 2️⃣ СРАЗУ ПЕРЕХОДИМ В LISTENING
+            # Переходим в LISTENING и включаем микрофон
             self.set_state(AppState.LISTENING)
-            self.console.print("[bold green]✅ Переход в LISTENING - готов к новым командам![/bold green]")
+            self.stt_recognizer.start_recording()
+            self.console.print("[bold green]✅ Переход в LISTENING - микрофон включен![/bold green]")
+            logger.info("   🎤 Микрофон активирован после прерывания")
             
-            # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
+            # СБРАСЫВАЕМ ФЛАГИ В INPUT_HANDLER
             if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
                 self.input_handler.reset_interrupt_flag()
                 logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler после прерывания IN_PROCESS")
+            
+            if self.input_handler and hasattr(self.input_handler, 'reset_command_processed_flag'):
+                self.input_handler.reset_command_processed_flag()
+                logger.info(f"   🔄 Флаг обработки команды сброшен в InputHandler")
         
         elif self.state == AppState.LISTENING:
-            # Уже слушаем → ничего не делаем
-            self.console.print("[blue]ℹ️ Уже слушаю - ничего не делаю[/blue]")
-            return
+            # Уже слушаем → перезапускаем запись для надежности
+            self.console.print("[blue]🔄 Уже слушаю - перезапускаю запись для надежности[/blue]")
+            logger.info("   🔄 Перезапуск записи в состоянии LISTENING")
             
-        elif self.state == AppState.SLEEPING:
-            # Ассистент спит → микрофон уже активирован в handle_interrupt_or_cancel
-            self.console.print("[blue]ℹ️ Ассистент спит - микрофон уже активирован автоматически[/blue]")
-            return
+            # Останавливаем текущую запись и начинаем новую
+            try:
+                self.stt_recognizer.stop_recording_and_recognize()
+                logger.info("   ✅ Текущая запись остановлена")
+            except:
+                pass
+            
+            # Начинаем новую запись
+            self.stt_recognizer.start_recording()
+            logger.info("   ✅ Новая запись запущена")
+            self.console.print("[green]🎤 Запись перезапущена - говорите команду[/green]")
+            
+            # Сбрасываем флаг обработки команды
+            if self.input_handler and hasattr(self.input_handler, 'reset_command_processed_flag'):
+                self.input_handler.reset_command_processed_flag()
+                logger.info(f"   🔄 Флаг обработки команды сброшен в InputHandler")
         
-        # ПРИМЕЧАНИЕ: Микрофон теперь активируется автоматически в handle_interrupt_or_cancel
-        # Этот метод больше не активирует микрофон напрямую
-        console.print("[dim]ℹ️ Микрофон активируется автоматически после прерывания[/dim]")
+        else:
+            # Неизвестное состояние → переходим в LISTENING
+            self.console.print(f"[yellow]⚠️ Неизвестное состояние {self.state.name}, перехожу в LISTENING[/yellow]")
+            self.set_state(AppState.LISTENING)
+            self.stt_recognizer.start_recording()
+            self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
+            logger.info("   🎤 Микрофон активирован из неизвестного состояния")
     
     def handle_stop_recording(self):
-        """Обрабатывает событие остановки записи - логика для 3 состояний"""
-        if self.state != AppState.LISTENING:
-            self.console.print(f"[yellow]⚠️ Получено stop_recording в состоянии {self.state.name}, игнорирую[/yellow]")
-            return
+        """ПРОБЕЛ ОТПУЩЕН - выключаем микрофон и обрабатываем команду"""
         
-        # Получаем команду
-        command = self.stt_recognizer.stop_recording_and_recognize()
+        # 🚨 ИСПРАВЛЕНИЕ: Обрабатываем stop_recording из любого состояния
         
-        if command and command.strip():
-            # КОМАНДА ПРИНЯТА → переходим в IN_PROCESS
-            self.console.print(f"[bold green]📝 Команда принята: {command}[/bold green]")
-            self.set_state(AppState.IN_PROCESS)
-            self.console.print("[blue]🔄 Переход в IN_PROCESS - обрабатываю команду...[/blue]")
-            self._process_command(command)
+        if self.state == AppState.LISTENING:
+            # Нормальная остановка записи
+            command = self.stt_recognizer.stop_recording_and_recognize()
+            logger.info("   ✅ Запись остановлена, микрофон выключен")
+            
+            if command and command.strip():
+                # КОМАНДА ПРИНЯТА → переходим в IN_PROCESS
+                self.console.print(f"[bold green]📝 Команда принята: {command}[/bold green]")
+                self.set_state(AppState.IN_PROCESS)
+                self.console.print("[blue]🔄 Переход в IN_PROCESS - обрабатываю команду...[/blue]")
+                self._process_command(command)
+            else:
+                # КОМАНДА НЕ ПРИНЯТА → возвращаемся в SLEEPING
+                self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
+                self.set_state(AppState.SLEEPING)
+                self.console.print("[blue]✅ Возврат в SLEEPING - готов к новым командам[/blue]")
+                
+        elif self.state == AppState.IN_PROCESS:
+            # Ассистент работает → прерываем и переходим в LISTENING
+            self.console.print("[bold yellow]🔇 Ассистент работает - ПРЕРЫВАЮ и перехожу в LISTENING![/bold yellow]")
+            
+            # Прерываем работу
+            success = self.force_stop_everything()
+            if success:
+                logger.info("   ✅ Универсальная остановка успешна")
+                self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
+            
+            # Переходим в LISTENING и включаем микрофон
+            self.set_state(AppState.LISTENING)
+            self.stt_recognizer.start_recording()
+            self.console.print("[bold green]✅ Переход в LISTENING - микрофон включен![/bold green]")
+            
+        elif self.state == AppState.SLEEPING:
+            # Ассистент спит → активируем микрофон
+            self.console.print("[blue]🎤 Активирую микрофон из состояния SLEEPING[/blue]")
+            self.set_state(AppState.LISTENING)
+            self.stt_recognizer.start_recording()
+            self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
+            
         else:
-            # КОМАНДА НЕ ПРИНЯТА → возвращаемся в SLEEPING
-            self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
+            # Неизвестное состояние → возвращаемся в SLEEPING
+            self.console.print(f"[yellow]⚠️ Неизвестное состояние {self.state.name}, возвращаюсь в SLEEPING[/yellow]")
             self.set_state(AppState.SLEEPING)
-            self.console.print("[blue]✅ Возврат в SLEEPING - готов к новым командам[/blue]")
+    
+    def handle_deactivate_microphone(self):
+        """ПРОБЕЛ ОТПУЩЕН - деактивируем микрофон и возвращаемся в SLEEPING"""
+        logger.info("   🔇 handle_deactivate_microphone() вызван")
+        
+        if self.state == AppState.LISTENING:
+            # Останавливаем запись и РАСПОЗНАЕМ КОМАНДУ
+            command = None
+            try:
+                if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
+                    command = self.stt_recognizer.stop_recording_and_recognize()
+                    logger.info("   ✅ Запись остановлена")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Ошибка остановки записи: {e}")
+            
+            # Если команда распознана - ОБРАБАТЫВАЕМ ЕЕ
+            if command and command.strip():
+                self.console.print(f"[bold green]📝 Команда распознана: {command}[/bold green]")
+                logger.info(f"   📝 Команда распознана: {command}")
+                
+                # Переходим в IN_PROCESS для обработки команды
+                self.set_state(AppState.IN_PROCESS)
+                logger.info("   🔄 Переход в IN_PROCESS для обработки команды")
+                
+                # Обрабатываем команду
+                self._process_command(command)
+            else:
+                # Команда не распознана - переходим в SLEEPING
+                self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
+                logger.info("   ⚠️ Команда не распознана")
+                
+                # Переходим в SLEEPING
+                self.set_state(AppState.SLEEPING)
+                self.console.print("[blue]🔇 Микрофон деактивирован - возврат в SLEEPING[/blue]")
+                logger.info("   🔄 Переход в SLEEPING после деактивации микрофона")
+            
+        elif self.state == AppState.IN_PROCESS:
+            # Ассистент работает → ничего не делаем
+            self.console.print("[blue]ℹ️ Ассистент работает - микрофон неактивен[/blue]")
+            logger.info("   ℹ️ Ассистент работает - микрофон неактивен")
+            
+        elif self.state == AppState.SLEEPING:
+            # Уже спим → ничего не делаем
+            self.console.print("[blue]ℹ️ Уже в состоянии SLEEPING[/blue]")
+            logger.info("   ℹ️ Уже в состоянии SLEEPING")
     
     async def handle_interrupt_or_cancel(self):
         """Обрабатывает событие прерывания или отмены"""
@@ -162,25 +264,24 @@ class StateManager:
                 self._capture_screen()
                 logger.info("   ✅ Экран захвачен")
                 
-                # Активируем микрофон
-                self.stt_recognizer.start_recording()
-                logger.info("   ✅ Микрофон активирован")
+                # АВТОМАТИЧЕСКИ активируем микрофон после прерывания!
+                logger.info("   🎤 АВТОМАТИЧЕСКАЯ активация микрофона после прерывания...")
                 
-                # Переходим в LISTENING
+                # Переходим в LISTENING и активируем микрофон
                 self.set_state(AppState.LISTENING)
-                logger.info("   🔄 Переход в LISTENING после прерывания")
+                self.stt_recognizer.start_recording()
+                logger.info("   ✅ Микрофон активирован автоматически после прерывания")
                 
                 self.console.print("[bold green]✅ Микрофон активирован автоматически![/bold green]")
                 self.console.print("[bold green]🎤 Слушаю команду...[/bold green]")
-                self.console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
                 
             except Exception as e:
-                logger.error(f"   ❌ Ошибка автоматической активации микрофона: {e}")
-                self.console.print(f"[red]❌ Ошибка активации микрофона: {e}[/red]")
+                logger.error(f"   ❌ Ошибка обработки прерывания: {e}")
+                self.console.print(f"[red]❌ Ошибка обработки прерывания: {e}[/red]")
                 
                 # В случае ошибки переходим в SLEEPING
                 self.set_state(AppState.SLEEPING)
-                logger.info("   🔄 Переход в SLEEPING после ошибки активации микрофона")
+                logger.info("   🔄 Переход в SLEEPING после ошибки")
             
             # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
             if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
@@ -208,23 +309,23 @@ class StateManager:
                     # Обрабатываем команду
                     self._process_command(command)
                     
-                else:
-                    # Команда не распознана - переходим в SLEEPING
-                    self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
-                    logger.info("   ⚠️ Команда не распознана")
-                    
-                    # Переходим в SLEEPING
-                    self.set_state(AppState.SLEEPING)
-                    logger.info("   🔄 Переход в SLEEPING после неудачного распознавания")
-                    
             else:
-                # STT recognizer недоступен
-                self.console.print("[yellow]⚠️ STT recognizer недоступен[/yellow]")
-                logger.warning("   ⚠️ STT recognizer недоступен")
+                # Команда не распознана - переходим в SLEEPING
+                self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
+                logger.info("   ⚠️ Команда не распознана")
                 
                 # Переходим в SLEEPING
                 self.set_state(AppState.SLEEPING)
-                logger.info("   🔄 Переход в SLEEPING - STT недоступен")
+                logger.info("   🔄 Переход в SLEEPING после неудачного распознавания")
+                
+        elif not hasattr(self, 'stt_recognizer') or not self.stt_recognizer:
+            # STT recognizer недоступен
+            self.console.print("[yellow]⚠️ STT recognizer недоступен[/yellow]")
+            logger.warning("   ⚠️ STT recognizer недоступен")
+            
+            # Переходим в SLEEPING
+            self.set_state(AppState.SLEEPING)
+            logger.info("   🔄 Переход в SLEEPING - STT недоступен")
             
             # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
             if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
@@ -300,6 +401,9 @@ class StateManager:
             elif event == "stop_recording":
                 logger.info(f"   ⏹️ Маршрутизация события stop_recording")
                 self.handle_stop_recording()
+            elif event == "deactivate_microphone":
+                logger.info(f"   🔇 Маршрутизация события deactivate_microphone")
+                self.handle_deactivate_microphone()
             elif event == "process_command":
                 logger.info(f"   ⚙️ Маршрутизация события process_command")
                 self.handle_process_command()
@@ -338,34 +442,17 @@ class StateManager:
                     if loop.is_running():
                         # Создаем задачу для асинхронного восстановления
                         restore_task = loop.create_task(self.grpc_client.connect())
-                        
-                        # Даем время на восстановление (неблокирующе)
-                        # Ждем максимум 3 секунды
-                        import time
-                        start_time = time.time()
-                        timeout = 3.0
-                        
-                        while not restore_task.done() and (time.time() - start_time) < timeout:
-                            time.sleep(0.1)  # Небольшая пауза
-                        
-                        if restore_task.done():
-                            try:
-                                if restore_task.result():
-                                    self.console.print("[green]✅ gRPC соединение восстановлено![/green]")
-                                    logger.info("   ✅ gRPC соединение восстановлено")
-                                else:
-                                    self.console.print("[red]❌ Не удалось восстановить gRPC соединение[/red]")
-                                    logger.error("   ❌ Не удалось восстановить gRPC соединение")
-                                    raise Exception("gRPC соединение не восстановлено")
-                            except Exception as e:
-                                self.console.print(f"[red]❌ Ошибка восстановления gRPC соединения: {e}[/red]")
-                                logger.error(f"   ❌ Ошибка восстановления gRPC соединения: {e}")
-                                raise Exception(f"gRPC соединение не восстановлено: {e}")
+                        # Ждем завершения (неблокирующе)
+                        if not restore_task.done():
+                            self.console.print("[blue]⏳ Восстановление соединения в фоне...[/blue]")
                         else:
-                            self.console.print("[yellow]⏰ Таймаут восстановления gRPC соединения (3 сек)[/yellow]")
-                            logger.warning("   ⏰ Таймаут восстановления gRPC соединения")
-                            raise Exception("gRPC соединение не восстановлено - таймаут")
-                            
+                            if restore_task.result():
+                                self.console.print("[green]✅ gRPC соединение восстановлено![/green]")
+                                logger.info("   ✅ gRPC соединение восстановлено")
+                            else:
+                                self.console.print("[red]❌ Не удалось восстановить gRPC соединение[/red]")
+                                logger.error("   ❌ Не удалось восстановить gRPC соединение")
+                                raise Exception("gRPC соединение не восстановлено")
                     else:
                         # Если цикл не запущен, восстанавливаем синхронно
                         if self.grpc_client.connect_sync():

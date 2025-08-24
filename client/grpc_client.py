@@ -32,11 +32,19 @@ class GrpcClient:
     async def connect(self):
         """Подключение к gRPC серверу"""
         try:
-            # Создаем неблокирующий канал
-            self.channel = grpc.aio.insecure_channel(self.server_address)
+            # Настройки для больших сообщений (аудио + скриншоты)
+            options = [
+                ('grpc.max_send_message_length', 50 * 1024 * 1024),  # 50MB
+                ('grpc.max_receive_message_length', 50 * 1024 * 1024),  # 50MB
+                ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
+            ]
+            
+            # Создаем неблокирующий канал с увеличенными лимитами
+            self.channel = grpc.aio.insecure_channel(self.server_address, options=options)
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
             console.print(f"[bold green]✅ Подключение к gRPC серверу {self.server_address} установлено[/bold green]")
+            console.print(f"[blue]📏 Максимальный размер сообщения: 50MB[/blue]")
             return True
             
         except Exception as e:
@@ -46,12 +54,20 @@ class GrpcClient:
     def connect_sync(self):
         """Синхронное подключение к gRPC серверу (для восстановления соединения)"""
         try:
-            # Создаем синхронный канал для восстановления
+            # Настройки для больших сообщений (аудио + скриншоты)
+            options = [
+                ('grpc.max_send_message_length', 50 * 1024 * 1024),  # 50MB
+                ('grpc.max_receive_message_length', 50 * 1024 * 1024),  # 50MB
+                ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
+            ]
+            
+            # Создаем синхронный канал для восстановления с увеличенными лимитами
             import grpc
-            self.channel = grpc.insecure_channel(self.server_address)
+            self.channel = grpc.insecure_channel(self.server_address, options=options)
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
             console.print(f"[bold green]✅ Синхронное подключение к gRPC серверу {self.server_address} восстановлено[/bold green]")
+            console.print(f"[blue]📏 Максимальный размер сообщения: 50MB[/blue]")
             return True
             
         except Exception as e:

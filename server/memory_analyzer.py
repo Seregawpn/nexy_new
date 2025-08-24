@@ -23,13 +23,13 @@ class MemoryAnalyzer:
     какую информацию следует сохранить в памяти пользователя.
     """
     
-    def __init__(self, gemini_api_key: str, model_name: str = "gemini-2.0-flash-exp"):
+    def __init__(self, gemini_api_key: str, model_name: str = "gemini-2.5-flash-lite"):
         """
         Инициализация анализатора памяти.
         
         Args:
             gemini_api_key: API ключ для Google Gemini
-            model_name: Название модели Gemini для использования
+            model_name: Название модели Gemini для использования (по умолчанию gemini-2.5-flash-lite)
         """
         self.gemini_api_key = gemini_api_key
         self.model_name = model_name
@@ -39,9 +39,9 @@ class MemoryAnalyzer:
         try:
             genai.configure(api_key=gemini_api_key)
             self.model = genai.GenerativeModel(model_name)
-            logger.info(f"✅ MemoryAnalyzer инициализирован с моделью {model_name}")
+            logger.info(f"✅ MemoryAnalyzer initialized with model {model_name}")
         except Exception as e:
-            logger.error(f"❌ Ошибка инициализации MemoryAnalyzer: {e}")
+            logger.error(f"❌ MemoryAnalyzer initialization error: {e}")
             self.model = None
     
     async def analyze_conversation(
@@ -62,7 +62,7 @@ class MemoryAnalyzer:
             Tuple[str, str]: (краткосрочная_память, долгосрочная_память)
         """
         if not self.model:
-            logger.warning("⚠️ Gemini модель недоступна, возвращаем пустую память")
+            logger.warning("⚠️ Gemini model is not available, returning empty memory")
             return "", ""
         
         try:
@@ -77,14 +77,14 @@ class MemoryAnalyzer:
             short_memory, long_memory = await self._call_gemini_analysis(analysis_prompt)
             
             # Логируем результат
-            logger.info(f"🧠 Анализ памяти завершен:")
-            logger.info(f"   Краткосрочная: {len(short_memory)} символов")
-            logger.info(f"   Долгосрочная: {len(long_memory)} символов")
+            logger.info(f"🧠 Memory analysis completed:")
+            logger.info(f"   Short Memory: {len(short_memory)} characters")
+            logger.info(f"   Long Memory: {len(long_memory)} characters")
             
             return short_memory, long_memory
             
         except Exception as e:
-            logger.error(f"❌ Ошибка анализа разговора: {e}")
+            logger.error(f"❌ Conversation analysis error: {e}")
             return "", ""
     
     def _create_analysis_prompt(
@@ -106,9 +106,75 @@ class MemoryAnalyzer:
         """
         context_part = ""
         if conversation_context:
-            context_part = f"\n\nКонтекст разговора:\n{conversation_context}"
+            context_part = f"\n\nConversation context:\n{conversation_context}"
         
-        return f"""**You are an assistant responsible for managing memory. You have two types of memory: Short Memory and Long Memory.**\n\n**Short Memory** is temporary memory that stores information about the current conversation and recent interactions. It is updated frequently and can be cleared after a period of inactivity.\n\n**Long Memory** is long-term memory that stores only important information about the user, their preferences, habits, and key events. This information must be explicitly marked as important by the user, repeated multiple times, or be contextually significant.\n\n---\n\n**You are provided with the following information:**\n1. **User''s request** — the current request sent by the user.\n2. **LLM''s response** — the response generated based on the user''s request.\n3. **Current summarization of Short Memory and Long Memory** — the general information already stored in memory.\n\n---\n\n**Your task:**\n1. Analyze the user''s request and the LLM''s response.\n2. Determine if there is any information that needs to be added to **Short Memory** and/or **Long Memory**.\n3. If the information requires addition, update the corresponding memory (Short Memory or Long Memory) and return the updated summarization.\n4. If the information does not require addition, return the response in the format:\n   - **Short Memory: none**\n   - **Long Memory: none**\n\n---\n\n**Rules for adding information to memory:**\n\n- **Short Memory**:\n  - Add in summary content that relates to the current conversation or recent interactions while not repeating if the conversation is repetitive.\n  - Example: current conversation context, temporary preferences, ongoing tasks.\n\n- **Long Memory**:\n  - **Explicit importance**:\n    - If the user explicitly says \"remember\" or \"save,\" the information is added to Long Memory. For example:\n      - \"Remember that my birthday is on May 15th.\"\n      - \"Save that I don't like spicy food.\"\n  - **Contextual importance**:\n    - If the context of the conversation makes it clear that the information is important to the user, it is also added to Long Memory. For example:\n      - \"My birthday is on May 15th, and it's important to me.\"\n      - \"I don't like noisy places, and it's important to keep that in mind.\"\n  - **Personal data**:\n    - Name, surname, nickname.\n    - Contact information (if provided by the user).\n    - Important dates (birthday, anniversaries).\n    - Place of residence or work (if provided by the user).\n  - **Professional data**:      - professional information or requests.\n  - **Preferences and habits**:\n    - Favorite activities (hobbies, sports, travel).\n    - Preferences in food, drinks, music, movies, etc.\n    - Regular habits (e.g., \"I always drink coffee in the morning\").\n    - Communication preferences (e.g., \"I don't like noisy places\").\n  - **Important events**:\n    - Birthdays, anniversaries, holidays.\n    - Important meetings or events (e.g., \"I have a presentation tomorrow\").\n    - Future plans (e.g., \"I'm planning a trip to Paris next month\").\n  - **Repetition**:\n    - Information must be either explicitly marked as important by the user or repeated multiple times in different conversations. For example:\n      - The user mentions several times that they love traveling.\n      - The user mentions several times that they dislike noisy places.\n  - **Usefulness for personalization**:\n    - Information should be useful for personalizing future interactions. For example:\n      - Personal data can be used to address the user.\n      - Preferences and habits can be used for recommendations.\n      - Important events can be used for reminders or congratulations.\n\n---\n\n**What is NOT added to Long Memory:**\n\n1. **Temporary information**:\n   - Information that relates only to the current conversation or temporary preferences. For example:\n     - \"Today I want pizza.\"\n     - \"I'm looking for a pasta recipe right now.\"\n\n2. **One-time mentions**:\n   - If the user mentions something once, and it is not related to key preferences or important events, it is not added to Long Memory. For example:\n     - \"Yesterday I went to the cinema.\"\n     - \"I watched a movie about space.\"\n\n3. **General information unrelated to the user**:\n   - Information that is not directly related to the user or their preferences."""
+        return f"""**You are an assistant responsible for managing memory. You have two types of memory: Short Memory and Long Memory.**
+
+**CRITICAL: You MUST ALWAYS respond in this EXACT format:**
+```
+SHORT MEMORY: [content to save to short memory or "none"]
+LONG MEMORY: [content to save to long memory or "none"]
+```
+
+**Short Memory** is temporary memory that stores information about the current conversation and recent interactions. It is updated frequently and can be cleared after a period of inactivity.
+
+**Long Memory** is long-term memory that stores only important information about the user, their preferences, habits, and key events.
+
+**You are provided with:**
+1. **User's request** — the current request sent by the user.
+2. **LLM's response** — the response generated based on the user's request.
+
+**Your task:**
+1. Analyze the user's request and the LLM's response.
+2. Determine if there is any information that needs to be added to Short Memory and/or Long Memory.
+3. **ALWAYS respond in the exact format above.**
+
+**Rules for adding information to memory:**
+
+- **Short Memory:**
+  - Current conversation context, temporary preferences, ongoing tasks.
+  - Example: "User introduced themselves as Sergei, developer from Moscow"
+
+- **Long Memory:**
+  - **Personal data**: Name, surname, nickname, profession, location.
+  - **Preferences and habits**: Important likes/dislikes, regular habits.
+  - **Important events**: Birthdays, anniversaries, future plans.
+  - **Professional data**: Job, skills, work preferences.
+
+**Examples of what goes to Long Memory:**
+- "User's name is Sergei"
+- "User is a developer from Moscow"
+- "User prefers quiet working environments"
+- **ALWAYS save personal information like names, professions, locations**
+- **ALWAYS save when user introduces themselves**
+
+**What is NOT added to Long Memory:**
+- Temporary information (e.g., "Today I want pizza")
+- One-time mentions without importance
+- General information unrelated to the user
+
+**IMPORTANT: When a user introduces themselves (name, profession, location), this information MUST go to Long Memory as it's essential for personalization!**
+
+**EXAMPLE ANALYSIS:**
+If user says "Меня зовут Сергей, я разработчик из Москвы", you MUST respond:
+```
+SHORT MEMORY: User introduced themselves in Russian
+LONG MEMORY: User's name is Sergei, they are a developer from Moscow
+```
+
+**REMEMBER: ALWAYS use the exact format with SHORT MEMORY: and LONG MEMORY: labels!**
+
+---
+
+**ACTUAL CONVERSATION TO ANALYZE:**
+
+**User's request:**
+{user_prompt}
+
+**LLM's response:**
+{assistant_response}
+
+**Now analyze this conversation and respond in the required format.**"""
     
     async def _call_gemini_analysis(self, analysis_prompt: str) -> Tuple[str, str]:
         """
@@ -129,17 +195,17 @@ class MemoryAnalyzer:
                 )
                 
                 if response and response.text:
-                    logger.info(f"🧠 Получен ответ от Gemini: {response.text[:200]}...")
+                    logger.info(f"🧠 Received response from Gemini: {response.text[:200]}...")
                     return self._extract_memory_from_response(response.text)
                 else:
-                    logger.warning("⚠️ Gemini вернул пустой ответ")
+                    logger.warning("⚠️ Gemini returned empty response")
                     return "", ""
                     
         except asyncio.TimeoutError:
-            logger.warning("⏰ Таймаут анализа памяти (10 сек)")
+            logger.warning("⏰ Memory analysis timeout (10 sec)")
             return "", ""
         except Exception as e:
-            logger.error(f"❌ Ошибка вызова Gemini: {e}")
+            logger.error(f"❌ Gemini call error: {e}")
             return "", ""
     
     def _extract_memory_from_response(self, response_text: str) -> Tuple[str, str]:
@@ -157,29 +223,48 @@ class MemoryAnalyzer:
             short_memory = ""
             long_memory = ""
             
-            logger.info(f"🧠 Анализирую ответ Gemini: {len(lines)} строк")
+            logger.info(f"🧠 Analyzing Gemini response: {len(lines)} lines")
+            logger.debug(f"🧠 Full response: {response_text[:500]}...")
             
             for line in lines:
                 line = line.strip()
-                logger.debug(f"🧠 Строка: '{line}'")
+                logger.debug(f"🧠 Line: '{line}'")
                 
-                if line.startswith("КРАТКОСРОЧНАЯ:"):
-                    short_memory = line.replace("КРАТКОСРОЧНАЯ:", "").strip()
-                    logger.info(f"🧠 Найдена краткосрочная память: '{short_memory}'")
-                elif line.startswith("ДОЛГОСРОЧНАЯ:"):
-                    long_memory = line.replace("ДОЛГОСРОЧНАЯ:", "").strip()
-                    logger.info(f"🧠 Найдена долгосрочная память: '{long_memory}'")
+                # 🔧 Улучшенный парсинг с поддержкой разных форматов
+                if line.startswith("SHORT MEMORY:"):
+                    short_memory = line.replace("SHORT MEMORY:", "").strip()
+                    logger.info(f"🧠 Found short memory: '{short_memory}'")
+                elif line.startswith("LONG MEMORY:"):
+                    long_memory = line.replace("LONG MEMORY:", "").strip()
+                    logger.info(f"🧠 Found long memory: '{long_memory}'")
+                # 🔧 Fallback: ищем без двоеточия
+                elif line.startswith("SHORT MEMORY"):
+                    short_memory = line.replace("SHORT MEMORY", "").strip()
+                    if short_memory.startswith(":"):
+                        short_memory = short_memory[1:].strip()
+                    logger.info(f"🧠 Found short memory (fallback): '{short_memory}'")
+                elif line.startswith("LONG MEMORY"):
+                    long_memory = line.replace("LONG MEMORY", "").strip()
+                    if long_memory.startswith(":"):
+                        long_memory = long_memory[1:].strip()
+                    logger.info(f"🧠 Found long memory (fallback): '{long_memory}'")
+            
+            # 🔧 Обработка "none" значений
+            if short_memory.lower() == "none":
+                short_memory = ""
+            if long_memory.lower() == "none":
+                long_memory = ""
             
             # Ограничиваем размер памяти
             short_memory = short_memory[:200] if short_memory else ""
             long_memory = long_memory[:500] if long_memory else ""
             
-            logger.info(f"🧠 Итоговая память: краткосрочная ({len(short_memory)} символов), долгосрочная ({len(long_memory)} символов)")
+            logger.info(f"🧠 Final memory: short ({len(short_memory)} characters), long ({len(long_memory)} characters)")
             
             return short_memory, long_memory
             
         except Exception as e:
-            logger.error(f"❌ Ошибка извлечения памяти из ответа: {e}")
+            logger.error(f"❌ Error extracting memory from response: {e}")
             return "", ""
     
     async def is_available(self) -> bool:
@@ -197,7 +282,7 @@ class MemoryAnalyzer:
             async with asyncio.timeout(5.0):
                 test_response = await asyncio.to_thread(
                     self.model.generate_content,
-                    "Тест доступности"
+                    "Test availability"
                 )
                 return test_response is not None
         except Exception:
@@ -221,26 +306,11 @@ class MemoryAnalyzer:
 if __name__ == "__main__":
     import os
     
-    # Тестовый пример
-    async def test_memory_analyzer():
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            print("❌ GEMINI_API_KEY не установлен")
-            return
-        
-        analyzer = MemoryAnalyzer(api_key)
-        
-        # Тестовый разговор
-        user_prompt = "Привет! Меня зовут Сергей, я разработчик на Python. Мне нравится работать с AI и машинным обучением."
-        assistant_response = "Привет, Сергей! Очень приятно познакомиться. Python и AI - отличная комбинация! Чем конкретно занимаешься в области машинного обучения?"
-        
-        short_memory, long_memory = await analyzer.analyze_conversation(
-            user_prompt, 
-            assistant_response
-        )
-        
-        print(f"🧠 Краткосрочная память: {short_memory}")
-        print(f"🧠 Долгосрочная память: {long_memory}")
-    
     # Запуск теста
-    asyncio.run(test_memory_analyzer())
+    # Проверяем доступность API ключа
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("❌ GEMINI_API_KEY is not set")
+    else:
+        print("✅ MemoryAnalyzer is ready for real conversation analysis")
+        print("📝 Use analyze_conversation() method with actual user prompts and responses")

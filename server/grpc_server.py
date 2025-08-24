@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import grpc.aio
+import grpc.aio              
 from concurrent.futures import ThreadPoolExecutor
 import sys                     
 import os
@@ -10,6 +10,7 @@ from datetime import datetime
 # Добавляем корневую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Protobuf файлы генерируются автоматически из streaming.proto
 import streaming_pb2
 import streaming_pb2_grpc
 from config import Config
@@ -531,13 +532,22 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
 
 async def serve():
     """Запуск асинхронного gRPC сервера"""
-    server = grpc.aio.server()
+    
+    # Настройки для больших сообщений (аудио + скриншоты)
+    options = [
+        ('grpc.max_send_message_length', 50 * 1024 * 1024),  # 50MB
+        ('grpc.max_receive_message_length', 50 * 1024 * 1024),  # 50MB
+        ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
+    ]
+    
+    server = grpc.aio.server(options=options)
     streaming_pb2_grpc.add_StreamingServiceServicer_to_server(StreamingServicer(), server)
     
     server_address = f"{Config.GRPC_HOST}:{Config.GRPC_PORT}"
     server.add_insecure_port(server_address)
     
     logger.info(f"Асинхронный gRPC сервер запускается на {server_address}")
+    logger.info(f"📏 Максимальный размер сообщения: 50MB")
     await server.start()
     logger.info("Сервер запущен. Нажмите Ctrl+C для остановки.")
     

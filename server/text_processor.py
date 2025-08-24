@@ -2,24 +2,32 @@ import asyncio
 import logging
 import os
 import re
-import base64
-import io
 from typing import AsyncGenerator, List
-from PIL import Image
 
-from google import genai
-from google.genai import types
+# 🚨 ЗАМЕНА: Gemini Live API → LangChain + Google Gemini
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+    LANGCHAIN_AVAILABLE = True
+except ImportError as e:
+    LANGCHAIN_AVAILABLE = False
 
 # --- Загрузка конфигурации ---
 # Проверка наличия необходимых ключей API
 if not os.environ.get("GEMINI_API_KEY"):
-    raise ValueError("Не найден GEMINI_API_KEY. Проверьте config.env")
+    raise ValueError("GEMINI_API_KEY not found. Check config.env")
 
 logger = logging.getLogger(__name__)
 
+# Логируем статус импорта LangChain
+if LANGCHAIN_AVAILABLE:
+    logger.info("✅ LangChain + Google Gemini imported successfully")
+else:
+    logger.warning(f"⚠️ LangChain unavailable: {e}")
+
 class TextProcessor:
     """
-    Обрабатывает текстовые запросы с использованием Google Gemini Live API,
+    Обрабатывает текстовые запросы с использованием Google Gemini через LangChain,
     который может использовать инструменты (например, Google Search)
     и поддерживает стриминг финального ответа.
     
@@ -32,45 +40,92 @@ class TextProcessor:
         self.memory_analyzer = None
         self.db_manager = None
         
+        # ✅ МАКСИМАЛЬНО ПРОСТОЙ System Prompt (только то, что работает)
+        self.base_system_instruction = (
+            "You are a helpful assistant for blind and visually impaired users. "
+            "Answer on question, exactly what user wants to know or get. Don't mix  answers of conversations or describe screenshot.\n"
+   
+            
+            "🎯 YOUR CAPABILITIES:\n\n"
+            
+            "💬 BASIC CONVERSATION - for:\n"
+            "- General questions and explanations\n"
+            "- How things work\n"
+            "- Definitions and concepts\n"
+            "- Historical facts\n"
+            "- Scientific explanations\n"
+            "- Simple advice and help\n\n"
+            
+            "📱 SCREEN ANALYSIS - if screenshot available:\n"
+            "- Use screenshot ONLY as visual context for your response\n"
+            "- DO NOT return JSON coordinates or technical image analysis\n"
+            "- Simply describe what you see on screen in natural language\n"
+            "- Focus on helping the user with their question\n"
+            "- If you see any dangerous content, warn about it\n\n"
+            
+            "📋 RESPONSE RULES:\n"
+            "- Answer briefly and clearly\n"
+            "- Be friendly and helpful\n"
+            "- Don't over-explain\n"
+            "- Focus on what the user needs\n"
+            
+            
+            
+            
+            "REMEMBER: Keep it simple, helpful, Use memory just in case if you need to use, it's really helpful but otherwise don't use it, also Screenshot if user don't ask you to describe or talk about you don't need to talk about this if user ask you about a screenshot then in this case, you need to talk about screenshot and describe it!"
+        )
+        
+        logger.info(f"✅ base_system_instruction created: {len(self.base_system_instruction)} characters")
+        
         try:
-            # Инициализация Gemini Live API клиента
-            self.client = genai.Client(
-                http_options={"api_version": "v1beta"},
-                api_key=os.environ.get("GEMINI_API_KEY"),
-            )
+            # ✅ УПРОЩЕННАЯ ИНИЦИАЛИЗАЦИЯ (как в langchain_test)
+            if LANGCHAIN_AVAILABLE:
+                logger.info("✅ Using LangChain + Google Gemini (simplified version)")
+                
+                # ✅ Устанавливаем флаг использования LangChain
+                self.use_langchain = True
+                
+                # ✅ ПРОСТАЯ ИНИЦИАЛИЗАЦИЯ LangChain БЕЗ инструментов в конструкторе
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash-lite",
+                    google_api_key=os.environ.get("GEMINI_API_KEY"),
+                    temperature=0.7,
+                    max_output_tokens=2048,
+                    streaming=True,  # 🔧 ВКЛЮЧАЕМ СТРИМИНГ!
+                    cache=False,
+                    # 🔧 ОТКЛЮЧАЕМ КЭШИРОВАНИЕ для получения свежих результатов
+                    force_refresh=True
+                )
+                
+                # ✅ МАКСИМАЛЬНО ПРОСТАЯ СИСТЕМА (только то, что работает)
+                logger.info("✅ System simplified - no tools, only basic conversation")
+                
+                logger.info(f"✅ TextProcessor with LangChain initialized successfully")
+                
+            else:
+                # ❌ LangChain недоступен - критическая ошибка
+                logger.error("❌ CRITICAL ERROR: LangChain unavailable!")
+                raise ImportError("LangChain unavailable. Install required dependencies.")
             
-            # Настройка инструментов
-            self.tools = [
-                types.Tool(google_search=types.GoogleSearch()),
-            ]
-            
-            # Конфигурация для Live API
-            self.config = types.LiveConnectConfig(
-                response_modalities=["TEXT"],
-                media_resolution="MEDIA_RESOLUTION_MEDIUM",
-                context_window_compression=types.ContextWindowCompressionConfig(
-                    trigger_tokens=25600,
-                    sliding_window=types.SlidingWindow(target_tokens=12800),
-                ),
-                tools=self.tools,
-            )
-            
-            # Инициализируем MemoryAnalyzer
+            # Инициализируем MemoryAnalyzer (если доступен)
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
             if gemini_api_key:
                 try:
                     from memory_analyzer import MemoryAnalyzer
                     self.memory_analyzer = MemoryAnalyzer(gemini_api_key)
-                    logger.info(f"✅ MemoryAnalyzer инициализирован")
+                    logger.info(f"✅ MemoryAnalyzer initialized")
+                except ImportError as e:
+                    logger.warning(f"⚠️ MemoryAnalyzer cannot be imported: {e}")
+                    self.memory_analyzer = None
                 except Exception as e:
-                    logger.warning(f"⚠️ MemoryAnalyzer не инициализирован: {e}")
-            
-            logger.info(f"✅ TextProcessor с Gemini Live API инициализирован успешно")
-            logger.info(f"🔍 Google Search tool создан")
+                    logger.warning(f"⚠️ MemoryAnalyzer not initialized: {e}")
+                    self.memory_analyzer = None
             
         except Exception as e:
-            logger.error(f"❌ Ошибка инициализации TextProcessor: {e}", exc_info=True)
-            self.client = None
+            logger.error(f"❌ Error initializing TextProcessor: {e}", exc_info=True)
+            self.llm = None
+    
+
     
     def cancel_generation(self):
         """
@@ -78,14 +133,14 @@ class TextProcessor:
         Используется для принудительного прерывания.
         """
         try:
-            logger.warning("🚨 МГНОВЕННАЯ отмена генерации LLM!")
+            logger.warning("🚨 IMMEDIATELY canceling LLM generation!")
             
             # КРИТИЧНО: отменяем текущую генерацию Gemini
             if hasattr(self, '_current_generation'):
                 try:
                     if hasattr(self._current_generation, 'cancel'):
                         self._current_generation.cancel()
-                        logger.warning("🚨 Gemini генерация МГНОВЕННО ОТМЕНЕНА!")
+                        logger.warning("🚨 Gemini generation IMMEDIATELY CANCELLED!")
                 except:
                     pass
                 self._current_generation = None
@@ -93,17 +148,17 @@ class TextProcessor:
             # КРИТИЧНО: очищаем все внутренние буферы
             if hasattr(self, '_text_buffer'):
                 self._text_buffer.clear()
-                logger.warning("🚨 Текстовые буферы МГНОВЕННО ОЧИЩЕНЫ!")
+                logger.warning("🚨 Text buffers IMMEDIATELY CLEARED!")
             
             # КРИТИЧНО: очищаем все временные переменные
             if hasattr(self, '_current_prompt'):
                 self._current_prompt = None
-                logger.warning("🚨 Текущий промпт МГНОВЕННО ОЧИЩЕН!")
+                logger.warning("�� Current prompt IMMEDIATELY CLEARED!")
             
-            logger.warning("✅ Все процессы LLM МГНОВЕННО отменены!")
+            logger.warning("✅ All LLM processes IMMEDIATELY cancelled!")
             
         except Exception as e:
-            logger.error(f"❌ Ошибка отмены генерации LLM: {e}")
+            logger.error(f"❌ Error canceling LLM generation: {e}")
     
     def clear_buffers(self):
         """
@@ -119,348 +174,243 @@ class TextProcessor:
             db_manager: Экземпляр DatabaseManager
         """
         self.db_manager = db_manager
-        logger.info("✅ DatabaseManager установлен в TextProcessor")
+        logger.info("✅ DatabaseManager set in TextProcessor")
     
     async def generate_response_stream(self, prompt: str, hardware_id: str = None, screenshot_base64: str = None, interrupt_checker=None, **kwargs) -> AsyncGenerator[str, None]:
         """
-        Генерирует ответ с помощью Gemini Live API и стримит результат.
-        interrupt_checker: функция для проверки необходимости прерывания
+        🎯 УПРОЩЕННЫЙ МЕТОД: Генерация ответа через LangChain (как в langchain_test)
         """
-        if not self.client:
-            logger.error("Gemini клиент не инициализирован.")
-            yield "Извините, произошла ошибка конфигурации ассистента."
-            return
-
-        logger.info(f"Запускаю Gemini Live API для: '{prompt[:50]}...'")
-        
-        # КРИТИЧНО: сохраняем функцию проверки прерывания
-        self._interrupt_checker = interrupt_checker
-        self._current_prompt = prompt
-        
-        # Получаем память пользователя (если доступна)
-        memory_context = ""
-        if hardware_id and self.db_manager:
-            try:
-                # Таймаут 2 секунды на получение памяти
-                async with asyncio.timeout(2.0):
-                    memory_data = await asyncio.to_thread(
-                        self.db_manager.get_user_memory, 
-                        hardware_id
-                    )
-                    if memory_data.get('short') or memory_data.get('long'):
-                        memory_context = f"""
-🧠 MEMORY CONTEXT (для контекста ответа):
-
-📋 КРАТКОСРОЧНАЯ ПАМЯТЬ (текущая сессия):
-{memory_data.get('short', 'Нет краткосрочной памяти')}
-
-📚 ДОЛГОСРОЧНАЯ ПАМЯТЬ (информация о пользователе):
-{memory_data.get('long', 'Нет долгосрочной памяти')}
-
-💡 ИНСТРУКЦИИ ПО ИСПОЛЬЗОВАНИЮ ПАМЯТИ:
-- Используй краткосрочную память для понимания текущего контекста разговора
-- Используй долгосрочную память для персонализации ответов (имя, предпочтения, важные детали)
-- Если память не релевантна текущему запросу - игнорируй её
-- Память должна дополнять ответ, а не заменять его
-- Приоритет: текущий запрос > краткосрочная память > долгосрочная память
-"""
-                        logger.info(f"🧠 Получена память для {hardware_id}: краткосрочная ({len(memory_data.get('short', ''))} символов), долгосрочная ({len(memory_data.get('long', ''))} символов)")
-                    else:
-                        logger.info(f"🧠 Память для {hardware_id} пуста")
-            except asyncio.TimeoutError:
-                logger.warning(f"⏰ Таймаут получения памяти для {hardware_id}")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка получения памяти: {e}")
-        
         try:
-            # Формируем системную инструкцию с учетом памяти
-            base_system_instruction = (
-                "You are a helpful assistant for blind and visually impaired users. Respond naturally and directly - just give the information they need without extra explanations about what you're doing.\n\n"
-                "TYPES OF REQUESTS:\n\n"
-
-                "🔍 SEARCH REQUESTS - Use web search for:\n\n"
-                "- Current news, weather, sports\n"
-                "- Recent events, today's happenings  \n"
-                "- Live information (stock prices, schedules)\n"
-                "- Any question about current/recent events\n\n"
-
-                "📱 SCREEN ANALYSIS - Take screenshot when user asks:\n\n"
-                "- 'What's on my screen?'\n"
-                "- 'What do you see?'\n"
-                "- 'Describe what's here'\n"
-                "- 'What's on the left/right side?'\n\n"
-
-                "💭 CONVERSATION - Use your knowledge for:\n\n"
-                "- General questions (how things work, definitions)\n"
-                "- Cooking, calculations, explanations\n"
-                "- Historical facts, science concepts\n\n"
-
-                "RESPONSE STYLE:\n\n"
-                "- Answer directly without saying 'Based on your request' or 'I understand'\n"
-                "- Don't mention what category the request is\n"
-                "- Be conversational but focused\n"
-                "- Talk like a real person, be their friend\n\n"
-
-                "🧠 MEMORY RULES:\n\n"
-                "- Use memory when user specifically references previous conversations\n"
-                "- Don't use memory for unrelated topics\n"
-                "- Memory should enhance, not replace current context\n"
-                "- Be selective about what to recall\n"
-                "- If memory context is provided, use it to provide more relevant answers\n\n"
-
-                "⚠️ SAFETY WARNINGS:\n\n"
-                "- If you see suspicious websites, dangerous links, or harmful content on screen - warn them immediately\n"
-                "- Alert about phishing emails, malicious downloads, or unsafe websites\n"
-                "- Since they can't see, they depend on you to keep them safe from clicking dangerous things\n\n"
-
-                "EXAMPLES:\n\n"
-                "❌ Bad: 'I understand you want me to analyze your screen. Based on your request, I can see...'\n"
-                "✅ Good: 'I can see your desktop with Chrome browser open and three folders...'\n\n"
-
-                " ❌ Bad: 'Based on your search request for weather, let me find that information...'\n"
-                "✅ Good: 'Today in Montreal it's 15°C and partly cloudy...'\n\n"
-
-                "Just be helpful and direct - they want information, not explanations of your process. "
-                           
-            )
+            logger.info(f"🚀 Starting request processing: '{prompt[:100]}...'")
             
-            # 🚨 ГИБРИДНЫЙ ПОДХОД: базовые правила в System Prompt, контекст в User Prompt
+            # КРИТИЧНО: сохраняем функцию проверки прерывания
+            self._interrupt_checker = interrupt_checker
+            self._current_prompt = prompt
+            
+            # Получаем контекст памяти (если доступен)
+            memory_context = ""
+            if hardware_id and self.db_manager:
+                try:
+                    # Таймаут 2 секунды на получение памяти
+                    async with asyncio.timeout(2.0):
+                        memory_data = await asyncio.to_thread(
+                            self.db_manager.get_user_memory, 
+                            hardware_id
+                        )
+                        if memory_data.get('short') or memory_data.get('long'):
+                            memory_context = f"""
+🧠 MEMORY CONTEXT (for response context):
+
+📋 SHORT-TERM MEMORY (current session):
+{memory_data.get('short', 'No short-term memory')}
+
+📚 LONG-TERM MEMORY (user information):
+{memory_data.get('long', 'No long-term memory')}
+
+💡 MEMORY USAGE INSTRUCTIONS:
+- Use short-term memory to understand current conversation context
+- Use long-term memory for response personalization (name, preferences, important details)
+- If memory is not relevant to current request - ignore it
+- Memory should complement the answer, not replace it
+- Priority: current request > short-term memory > long-term memory
+                            """
+                            logger.info(f"🧠 Memory obtained for {hardware_id}: short-term ({len(memory_data.get('short', ''))} chars), long-term ({len(memory_data.get('long', ''))} chars)")
+                        else:
+                            logger.info(f"🧠 Memory for {hardware_id} is empty")
+                except asyncio.TimeoutError:
+                    logger.warning(f"⏰ Timeout getting memory for {hardware_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error getting memory: {e}")
+            
+            # 🚨 УПРОЩЕННЫЙ ПОДХОД: используем только прямой вызов LLM
+            logger.info("🚀 Using direct LLM call (no chain)")
+                
+            # 🔧 Формируем контент для запроса
+            user_content = prompt
             if memory_context:
-                # System Prompt остается базовым (правила памяти)
-                system_instruction = base_system_instruction
-                logger.info(f"🧠 System Prompt: базовые правила памяти + правила поведения")
-                logger.info(f"🧠 Контекст памяти будет добавлен в User Prompt")
-            else:
-                system_instruction = base_system_instruction
-                logger.info(f"🧠 System Prompt: базовые правила памяти + правила поведения")
-                logger.info(f"🧠 Контекст памяти не предоставлен")
+                user_content = f"{memory_context}\n\n{prompt}"
             
-            # Создаем сессию Live API с System Prompt
-            async with self.client.aio.live.connect(
-                model="models/gemini-2.0-flash-live-001", 
-                config=self.config,
-                system_instruction=system_instruction  # 🚨 ПЕРЕДАЕМ КАК SYSTEM PROMPT!
-            ) as session:
+            # 🚨 УБРАНО: дублирующая логика языка - теперь используется только base_system_instruction
                 
-                # ✅ System Prompt теперь правильно установлен в конфигурации сессии!
-                logger.info(f"🧠 System Prompt установлен: {len(system_instruction)} символов")
-                logger.info(f"🧠 System Prompt: {system_instruction[:200]}...")
-                
-                # --- УМНАЯ ОБРАБОТКА СКРИНШОТА ---
-                # Анализируем запрос и решаем, нужен ли скриншот
-                
-                # 🚨 ГИБРИДНЫЙ ПОДХОД: контекст памяти добавляется в User Prompt
-                if memory_context:
-                    # Формируем расширенный User Prompt с четким разделением памяти
-                    enhanced_prompt = f"""{memory_context}
-
-👤 USER REQUEST:
-{prompt}
-
-🎯 ЗАДАЧА:
-Ответь на запрос пользователя, используя контекст памяти если он релевантен.
-Если память не связана с текущим запросом - игнорируй её.
-Приоритет: текущий запрос > краткосрочная память > долгосрочная память."""
-                    content = [enhanced_prompt]
-                    logger.info(f"🧠 User Prompt расширен контекстом памяти: {len(memory_context)} символов")
-                    logger.info(f"🧠 Структура: Memory Context + User Request + Task")
-                else:
-                    content = [prompt]
-                    logger.info(f"🧠 User Prompt без контекста памяти")
-                
-                # Определяем, нужен ли скриншот для данного запроса
-                needs_screenshot = self._should_analyze_screenshot(prompt)
-                
-                if screenshot_base64 and needs_screenshot:
-                    try:
-                        # Декодируем изображение
-                        image_bytes = base64.b64decode(screenshot_base64)
-                        
-                        # Используем PIL для проверки и получения формата
-                        img = Image.open(io.BytesIO(image_bytes))
-                        
-                        # Добавляем изображение в контент
-                        content.append(img)
-                        
-                        logger.info(f"📸 Скриншот АНАЛИЗИРУЕТСЯ ({img.format}, {img.size}) - запрос требует анализа экрана")
-                        
-                    except Exception as img_error:
-                        logger.warning(f"Не удалось обработать скриншот: {img_error}")
-                elif screenshot_base64:
-                    logger.info(f"📸 Скриншот ИГНОРИРУЕТСЯ - запрос не требует анализа экрана")
-                else:
-                    logger.info(f"📝 Скриншот не предоставлен")
-
-                # 📋 ЛОГИРУЕМ СТРУКТУРУ СООБЩЕНИЙ
-                logger.info(f"📋 СТРУКТУРА СООБЩЕНИЙ:")
-                logger.info(f"   🧠 System Prompt: {len(system_instruction)} символов (базовые правила + правила памяти)")
-                if memory_context:
-                    logger.info(f"   🧠 Memory Context: краткосрочная + долгосрочная память")
-                    logger.info(f"   👤 User Prompt: расширен контекстом памяти + запрос + задача")
-                else:
-                    logger.info(f"   👤 User Prompt: только запрос пользователя")
-                if len(content) > 1:
-                    logger.info(f"   📸 Мультимодальный контент: текст + изображение")
-                else:
-                    logger.info(f"   📝 Только текстовый контент")
-                
-                # 🚨 ВАЖНО: Структура сообщений в Gemini Live API:
-                # 
-                # 1️⃣ SYSTEM PROMPT (system_instruction):
-                #    - Передается в конфигурации сессии
-                #    - Определяет поведение ассистента
-                #    - Включает правила, стиль, безопасность
-                #    - НЕ тратит токены на генерацию
-                #
-                # 2️⃣ USER PROMPT (content):
-                #    - Отправляется через session.send()
-                #    - Содержит: Memory Context + User Request + Task
-                #    - Memory Context: краткосрочная + долгосрочная память
-                #    - Может включать текст + изображение
-                #    - Помечается как end_of_turn=True
-                #
-                # 3️⃣ ASSISTANT RESPONSE:
-                #    - Получается через session.receive()
-                #    - Стримится по частям
-                #    - Обрабатывается и отправляется пользователю
-                #
-                # 🧠 MEMORY STRUCTURE:
-                #    - Краткосрочная: текущий разговор, контекст сессии
-                #    - Долгосрочная: информация о пользователе, предпочтения
-                #    - Приоритет: запрос > краткосрочная > долгосрочная
-                
-                # Отправляем запрос (с изображением или без)
-                await session.send(input=content, end_of_turn=True)
-                if len(content) > 1:
-                    logger.info("📝 Мультимодальный запрос (текст + изображение) отправлен")
-                else:
-                    logger.info("📝 Текстовый запрос отправлен")
-                
-                # Получаем ответ
-                turn = session.receive()
-                accumulated_text = ""
-                
-                # КРИТИЧНО: проверяем прерывание ПЕРЕД началом цикла
-                if self._interrupt_checker and self._interrupt_checker():
-                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ LLM!")
-                    return
-                
-                async for response in turn:
-                    # КРИТИЧНО: проверяем необходимость прерывания в КАЖДОЙ итерации
-                    if self._interrupt_checker and self._interrupt_checker():
-                        logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ LLM!")
-                        return
+            # 🔧 ПРЯМОЙ ВЫЗОВ LLM без цепочки
+            try:
+                # 🔧 Убираем служебный текст - сразу обрабатываем запрос
+                async with asyncio.timeout(15.0):  # 15 секунд на простую обработку
                     
-                    if response.text:
-                        # Накапливаем текст
-                        accumulated_text += response.text
-                        logger.info(f"📝 Получен текст: '{response.text[:100]}...'")
+                    # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ: создаем мультимодальные сообщения
+                    if screenshot_base64:
+                        logger.info("🖼️ Screenshot detected - creating multimodal request")
                         
-                        # Проверяем, есть ли полные предложения
-                        sentences = self._split_into_sentences(accumulated_text)
+                        # Создаем мультимодальное сообщение с изображением
+                        # 🔧 System Prompt передается в конфигурации, а не как сообщение
+                        messages = [
+                            SystemMessage(content=self.base_system_instruction),
+                            HumanMessage(content=[
+                                {
+                                    "type": "text",
+                                    "text": user_content
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/webp;base64,{screenshot_base64}"
+                                    }
+                                }
+                            ])
+                        ]
+                        logger.info("✅ Multimodal message created with WebP image")
+                    else:
+                        # Только текст
+                        # ✅ System Prompt передается как SystemMessage в списке сообщений
+                        messages = [
+                            SystemMessage(content=self.base_system_instruction),
+                            HumanMessage(content=user_content)
+                        ]
+                        logger.info("✅ Text-only message created")
+                    
+                    # 🔧 Прямой вызов LLM со стримингом
+                    buffer = ""  # Буфер для накопления текста
+                    full_response = ""  # 🔧 Полный ответ для анализа памяти
+                    
+                    async for chunk in self.llm.astream(messages, config={
+                        "cache": False,
+                        "force_refresh": True
+                    }):
+                        # 🔧 Извлекаем контент из чанка
+                        if hasattr(chunk, 'content'):
+                            content = chunk.content
+                        elif hasattr(chunk, 'text'):
+                            content = chunk.text
+                        else:
+                            content = str(chunk)
+                        
+                        # 🔧 Накопление в буфере и полном ответе
+                        if content:
+                            buffer += content
+                            full_response += content  # 🔧 Собираем полный ответ для памяти
+                            
+                            # 🔧 Проверяем, есть ли полные предложения
+                            sentences = self._split_into_sentences(buffer)
+                            
+                            # Если есть полные предложения, отправляем их
+                            if len(sentences) > 1:
+                                # Отправляем все предложения кроме последнего (оно может быть неполным)
+                                for sentence in sentences[:-1]:
+                                    if sentence.strip():
+                                        yield sentence.strip()
+                                
+                                # Оставляем последнее предложение в буфере
+                                buffer = sentences[-1]
+                    
+                    # 🔧 Отправляем оставшийся текст в буфере
+                    if buffer.strip():
+                        yield buffer.strip()
+                        full_response += buffer.strip()  # 🔧 Добавляем последний фрагмент
+                    
+                    logger.info("✅ Direct LLM streaming completed successfully")
+                    
+                    # 🔧 ФОНОВОЕ обновление памяти с РЕАЛЬНЫМ ответом
+                    if hardware_id and self.db_manager and self.memory_analyzer:
+                        # Создаем задачу в фоне с РЕАЛЬНЫМ ответом
+                        asyncio.create_task(
+                            self._update_memory_background(hardware_id, prompt, full_response)
+                        )
+                        logger.info(f"🔄 Memory update task started in background for {hardware_id} with real response ({len(full_response)} chars)")
+                    elif hardware_id and self.db_manager:
+                        logger.warning(f"⚠️ MemoryAnalyzer unavailable for {hardware_id}, memory will not be updated")
+                    elif hardware_id:
+                        logger.warning(f"⚠️ DatabaseManager unavailable for {hardware_id}, memory will not be updated")
+                    
+            except asyncio.TimeoutError:
+                logger.warning("⏰ Timeout - using fallback")
+                # Fallback: синхронный вызов со стримингом
+                
+                # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ В FALLBACK
+                if screenshot_base64:
+                    logger.info("🖼️ Screenshot detected in fallback - creating multimodal request")
+                    # ✅ System Prompt передается как SystemMessage в списке сообщений
+                    messages = [
+                        SystemMessage(content=self.base_system_instruction),
+                        HumanMessage(content=[
+                            {
+                                "type": "text",
+                                "text": user_content
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/webp;base64,{screenshot_base64}"
+                                }
+                            }
+                        ])
+                    ]
+                else:
+                    # ✅ System Prompt передается как SystemMessage в списке сообщений
+                    messages = [
+                        SystemMessage(content=self.base_system_instruction),
+                        HumanMessage(content=user_content)
+                    ]
+                
+                # 🔧 Fallback стриминг с разбивкой на предложения
+                buffer = ""  # Буфер для накопления текста
+                
+                for chunk in self.llm.stream(messages, config={
+                    "cache": False,
+                    "force_refresh": True
+                }):
+                    # 🔧 Извлекаем контент из чанка
+                    if hasattr(chunk, 'content'):
+                        content = chunk.content
+                    elif hasattr(chunk, 'text'):
+                        content = chunk.text
+                    else:
+                        content = str(chunk)
+                    
+                    # 🔧 Накопление в буфере
+                    if content:
+                        buffer += content
+                        
+                        # 🔧 Проверяем, есть ли полные предложения
+                        sentences = self._split_into_sentences(buffer)
                         
                         # Если есть полные предложения, отправляем их
                         if len(sentences) > 1:
                             # Отправляем все предложения кроме последнего (оно может быть неполным)
                             for sentence in sentences[:-1]:
                                 if sentence.strip():
-                                    # КРИТИЧНО: проверяем прерывание перед отправкой каждого предложения
-                                    if self._interrupt_checker and self._interrupt_checker():
-                                        logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ОТПРАВКУ ПРЕДЛОЖЕНИЯ!")
-                                        return
-                                    
-                                    logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
                                     yield sentence.strip()
                             
-                            # Оставляем последнее предложение для следующей итерации
-                            accumulated_text = sentences[-1]
-                        elif len(sentences) == 1 and self._is_complete_sentence(accumulated_text):
-                            # Если получили одно полное предложение
-                            sentence = sentences[0]
-                            if sentence.strip():
-                                # КРИТИЧНО: проверяем прерывание перед отправкой предложения
-                                if self._interrupt_checker and self._interrupt_checker():
-                                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ОТПРАВКУ ПРЕДЛОЖЕНИЯ!")
-                                    return
-                                
-                                logger.info(f"📤 Отправляю предложение: '{sentence[:100]}...'")
-                                yield sentence.strip()
-                            accumulated_text = ""
+                            # Оставляем последнее предложение в буфере
+                            buffer = sentences[-1]
                 
-                # Отправляем оставшийся текст, если он есть
-                if accumulated_text.strip():
-                    logger.info(f"📤 Отправляю оставшийся текст: '{accumulated_text[:100]}...'")
-                    yield accumulated_text.strip()
+                # 🔧 Отправляем оставшийся текст в буфере
+                if buffer.strip():
+                    yield buffer.strip()
                 
-                logger.info("✅ Gemini Live API ответ получен и обработан")
-                
-                # ФОНОВОЕ обновление памяти (НЕ БЛОКИРУЕТ)
-                if hardware_id and self.db_manager and self.memory_analyzer:
-                    # Создаем задачу в фоне - НЕ ЖДЕМ завершения
-                    asyncio.create_task(
-                        self._update_memory_background(hardware_id, prompt, accumulated_text)
-                    )
-                    logger.info(f"🔄 Задача обновления памяти запущена в фоне для {hardware_id}")
-                elif hardware_id and self.db_manager:
-                    logger.warning(f"⚠️ MemoryAnalyzer недоступен для {hardware_id}, память не будет обновлена")
-                elif hardware_id:
-                    logger.warning(f"⚠️ DatabaseManager недоступен для {hardware_id}, память не будет обновлена")
+                logger.info("✅ Fallback LLM streaming completed successfully")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error in direct LLM call: {e}")
+                yield f"Sorry, an error occurred while processing your request: {e}"
+            
+            # 🔧 ПАМЯТЬ ОБНОВЛЯЕТСЯ В ОСНОВНОМ СТРИМЕ с реальным ответом
 
         except Exception as e:
-            logger.error(f"Ошибка в Gemini Live API: {e}", exc_info=True)
-            yield "Извините, произошла внутренняя ошибка при обработке вашего запроса."
+            logger.error(f"Error in request processing: {e}", exc_info=True)
+            yield "Sorry, an internal error occurred while processing your request."
     
     def clean_text(self, text: str) -> str:
-        """Простая очистка текста."""
-        text = re.sub(r'\s+', ' ', text).strip()
-        text = text.replace('*', '')
-        return text
-
-    def _should_analyze_screenshot(self, prompt: str) -> bool:
-        """
-        Определяет, нужен ли анализ скриншота для данного запроса.
-        Возвращает True только если пользователь явно просит проанализировать экран.
-        """
-        prompt_lower = prompt.lower().strip()
+        """Очищает текст от лишних символов и форматирования"""
+        if not text:
+            return ""
         
-        # Ключевые фразы, которые ТРЕБУЮТ анализа экрана
-        screen_analysis_keywords = [
-            'what do i see', 'what is on screen', 'what is on the screen',
-            'describe screen', 'describe my screen', 'what am i working on',
-            'what is on the right', 'what is on the left', 'what is on top',
-            'what is on bottom', 'describe desktop', 'describe my desktop',
-            'what is visible', 'what can you see', 'tell me what you see',
-            'analyze screen', 'analyze my screen', 'what does my screen show',
-            'screen content', 'screen information', 'what is displayed',
-            'что я вижу', 'что на экране', 'опиши экран', 'что я делаю',
-            'что справа', 'что слева', 'что сверху', 'что снизу',
-            'описать рабочий стол', 'что видно', 'что показывается'
-        ]
+        # Убираем лишние пробелы и переносы строк
+        text = ' '.join(text.split())
         
-        # Проверяем, содержит ли запрос ключевые фразы для анализа экрана
-        for keyword in screen_analysis_keywords:
-            if keyword in prompt_lower:
-                logger.info(f"🔍 Запрос требует анализа экрана: '{keyword}' найдено в '{prompt}'")
-                return True
+        # Убираем специальные символы, которые могут мешать
+        text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\[\]\{\}\"\']', '', text)
         
-        # Если это общий вопрос, новости, поиск - скриншот НЕ нужен
-        general_keywords = [
-            'how are you', 'hello', 'hi', 'good morning', 'good evening',
-            'what is', 'how does', 'explain', 'tell me about', 'search for',
-            'latest news', 'weather', 'current', 'today', 'now',
-            'как дела', 'привет', 'доброе утро', 'добрый вечер',
-            'что такое', 'как работает', 'объясни', 'расскажи про', 'найди',
-            'последние новости', 'погода', 'текущий', 'сегодня', 'сейчас'
-        ]
-        
-        for keyword in general_keywords:
-            if keyword in prompt_lower:
-                logger.info(f"🔍 Запрос НЕ требует анализа экрана: '{keyword}' найдено в '{prompt}'")
-                return False
-        
-        # По умолчанию - скриншот НЕ нужен (безопасный выбор)
-        logger.info(f"🔍 Запрос не содержит явных указаний на анализ экрана: '{prompt}'")
-        return False
+        return text.strip()
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """Разбивает текст на предложения для стриминга"""
@@ -471,29 +421,47 @@ class TextProcessor:
         text = self.clean_text(text)
         
         # Используем более точное разбиение на предложения
-        import re
+        
+        # 🎯 УЛУЧШЕННЫЙ ПАТТЕРН для разбиения на предложения
+        # Учитываем:
+        # - Точки (.)
+        # - Восклицательные знаки (!)
+        # - Вопросительные знаки (?)
+        # - Многоточие (...)
+        # - Комбинации (!?, ?!)
+        # Исключаем точки в сокращениях (т.д., и т.п., Dr., Mr., etc.)
         
         # Паттерн для разбиения на предложения
-        # Учитываем точки, восклицательные и вопросительные знаки
-        # Исключаем точки в сокращениях (например, "т.д.", "и т.п.")
         sentence_pattern = r'(?<=[.!?])\s+(?=[A-ZА-Я])'
         
         # Разбиваем по паттерну
         sentences = re.split(sentence_pattern, text)
         
-        # Фильтруем пустые предложения и добавляем знаки препинания
+        # Фильтруем и обрабатываем предложения
         result = []
         for i, sentence in enumerate(sentences):
             sentence = sentence.strip()
             if sentence:
-                # Если это не последнее предложение, добавляем знак препинания
+                # Если это не последнее предложение, проверяем знак препинания
                 if i < len(sentences) - 1:
                     # Ищем знак препинания в конце
-                    if not any(sentence.endswith(ending) for ending in ['.', '!', '?']):
+                    if not any(sentence.endswith(ending) for ending in ['.', '!', '?', '...', '?!', '!?']):
                         sentence += '.'
                 result.append(sentence)
         
         return result
+    
+    async def _smart_stream_content(self, content: str) -> AsyncGenerator[str, None]:
+        """Умный стриминг контента с разбивкой на предложения"""
+        if not content or not content.strip():
+            return
+        
+        # Разбиваем на предложения
+        sentences = self._split_into_sentences(content)
+        
+        for sentence in sentences:
+            if sentence.strip():
+                yield sentence.strip()
     
     def _is_complete_sentence(self, text: str) -> bool:
         """Проверяет, является ли предложение полным"""
@@ -517,7 +485,7 @@ class TextProcessor:
             response: Ответ ассистента
         """
         try:
-            logger.debug(f"🔄 Начинаю фоновое обновление памяти для {hardware_id}")
+            logger.debug(f"🔄 Starting background memory update for {hardware_id}")
             
             # Анализируем разговор для извлечения памяти
             short_memory, long_memory = await self.memory_analyzer.analyze_conversation(
@@ -536,12 +504,12 @@ class TextProcessor:
                 )
                 
                 if success:
-                    logger.info(f"✅ Память для {hardware_id} обновлена: краткосрочная ({len(short_memory)} символов), долгосрочная ({len(long_memory)} символов)")
+                    logger.info(f"✅ Memory for {hardware_id} updated: short-term ({len(short_memory)} chars), long-term ({len(long_memory)} chars)")
                 else:
-                    logger.warning(f"⚠️ Не удалось обновить память для {hardware_id}")
+                    logger.warning(f"⚠️ Could not update memory for {hardware_id}")
             else:
-                logger.debug(f"🧠 Для {hardware_id} не найдено информации для запоминания")
+                logger.debug(f"🧠 No information found for {hardware_id} to remember")
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка фонового обновления памяти для {hardware_id}: {e}")
+            logger.error(f"❌ Error in background memory update for {hardware_id}: {e}")
             # НЕ поднимаем исключение - это фоновая задача
