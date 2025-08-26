@@ -278,7 +278,7 @@ class TextProcessor:
             if memory_context:
                 user_content = f"Memory context: {memory_context}\n\n User command: {prompt}"
                 logger.info(f"🧠 User content prepared with memory: {len(user_content)} chars")
-                    else:
+            else:
                 logger.info(f"📝 User content without memory: {len(user_content)} chars")
             
             # 🔧 ОПТИМИЗАЦИЯ: скриншот уже Base64 строка
