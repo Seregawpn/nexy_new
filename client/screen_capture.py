@@ -1,215 +1,199 @@
+#!/usr/bin/env python3
+"""
+📸 РЕАЛЬНЫЙ ЗАХВАТ ЭКРАНА ЧЕРЕЗ MSS
+🎯 Быстрый и надежный захват экрана только через mss
+
+✅ ПРИОРИТЕТ: mss (быстрый, Windows/Linux/macOS)
+"""
+
 import base64
 import io
 import logging
 from PIL import Image
-import numpy as np
-from Quartz import (
-    CGDisplayBounds,
-    CGMainDisplayID,
-    CGWindowListCreateImage,
-    kCGWindowListOptionOnScreenOnly,
-    kCGNullWindowID,
-    CGImageGetDataProvider,
-    CGDataProviderCopyData,
-    CGImageGetWidth,
-    CGImageGetHeight,
-    CGImageGetBytesPerRow,
-    CGImageGetBitsPerPixel,
-    CGImageGetColorSpace,
-    CGColorSpaceGetModel,
-    kCGColorSpaceModelRGB
-)
 
 logger = logging.getLogger(__name__)
 
 class ScreenCapture:
-    """Захват экрана macOS с конвертацией в WebP + Base64"""
+    """Реальный захват экрана через mss"""
     
     def __init__(self):
-        self.main_display_id = CGMainDisplayID()
-        self.display_bounds = CGDisplayBounds(self.main_display_id)
+        logger.info("📸 Инициализирую захват экрана через mss...")
         
-    def capture_screen(self, quality: int = 85) -> str:
+        # Проверяем доступность mss
+        self.mss_available = False
+        
+        try:
+            import mss
+            self.mss_available = True
+            logger.info("✅ mss доступен для быстрого захвата экрана")
+        except ImportError:
+            logger.error("❌ mss не установлен - используйте: pip install mss")
+            raise ImportError("mss не установлен. Установите: pip install mss")
+    
+    def capture_screen(self, quality: int = 85, max_size: int = 1024) -> str:
         """
-        Захватывает экран и возвращает Base64 строку WebP изображения
+        Захватывает реальный экран через mss
         
         Args:
-            quality (int): Качество WebP (1-100)
+            quality (int): Качество JPEG (1-100)
+            max_size (int): Максимальный размер стороны изображения
             
         Returns:
-            str: Base64 строка WebP изображения
+            str: Base64 строка JPEG изображения
+            
+        Raises:
+            RuntimeError: Если не удалось захватить экран
         """
         try:
-            logger.info("Начинаю захват экрана...")
+            logger.info("📸 Захватываю реальный экран через mss...")
             
-            # Захватываем изображение экрана
-            image = CGWindowListCreateImage(
-                self.display_bounds,
-                kCGWindowListOptionOnScreenOnly,
-                kCGNullWindowID,
-                kCGNullWindowID
-            )
+            if not self.mss_available:
+                error_msg = "❌ mss недоступен для захвата экрана!"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
-            if not image:
-                logger.error("Не удалось захватить экран")
-                return None
-            
-            # Получаем размеры изображения
-            width = CGImageGetWidth(image)
-            height = CGImageGetHeight(image)
-            bytes_per_row = CGImageGetBytesPerRow(image)
-            bits_per_pixel = CGImageGetBitsPerPixel(image)
-            
-            logger.info(f"Изображение: {width}x{height}, {bits_per_pixel} бит/пиксель, {bytes_per_row} байт/строка")
-            
-            # Получаем данные изображения
-            data_provider = CGImageGetDataProvider(image)
-            if not data_provider:
-                logger.error("Не удалось получить data provider")
-                return None
+            import mss
+            with mss.mss() as sct:
+                # Получаем основной монитор
+                monitor = sct.monitors[1]  # Основной монитор
+                logger.info(f"📱 Захватываю монитор: {monitor}")
                 
-            raw_data = CGDataProviderCopyData(data_provider)
-            if not raw_data:
-                logger.error("Не удалось получить raw data")
-                return None
-            
-            # Конвертируем в numpy array
-            data_length = len(raw_data)
-            logger.info(f"Получено {data_length} байт данных")
-            
-            # Определяем формат данных
-            if bits_per_pixel == 32:
-                # RGBA или BGRA
-                if bytes_per_row == width * 4:
-                    # Стандартный формат
-                    array = np.frombuffer(raw_data, dtype=np.uint8)
-                    array = array.reshape((height, width, 4))
-                    
-                    # Конвертируем BGRA в RGB
-                    rgb_array = array[:, :, [2, 1, 0]]  # BGR -> RGB
-                    
-                else:
-                    # Нестандартный формат, используем оригинальные размеры
-                    array = np.frombuffer(raw_data, dtype=np.uint8)
-                    array = array.reshape((height, bytes_per_row // 4, 4))
-                    rgb_array = array[:, :width, [2, 1, 0]]
-                    
-            elif bits_per_pixel == 24:
-                # RGB
-                array = np.frombuffer(raw_data, dtype=np.uint8)
-                array = array.reshape((height, width, 3))
-                rgb_array = array
+                # Захватываем экран
+                pil_image = sct.grab(monitor)
                 
-            else:
-                logger.error(f"Неподдерживаемый формат: {bits_per_pixel} бит/пиксель")
-                return None
-            
-            # Конвертируем в PIL Image
-            pil_image = Image.fromarray(rgb_array)
-            
-            logger.info(f"Экран захвачен: {width}x{height} пикселей")
-            
-            # Конвертируем в WebP с указанным качеством
-            webp_buffer = io.BytesIO()
+                # Конвертируем в PIL Image
+                pil_image = Image.frombytes('RGB', pil_image.size, pil_image.bgra, 'raw', 'BGRX')
+                
+                logger.info(f"✅ Реальный экран захвачен: {pil_image.size[0]}x{pil_image.size[1]} пикселей")
+                return self._convert_to_base64(pil_image, quality)
+                
+        except Exception as e:
+            error_msg = f"❌ Критическая ошибка захвата экрана через mss: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
+    def _convert_to_base64(self, pil_image: Image.Image, quality: int) -> str:
+        """Конвертирует PIL изображение в Base64 JPEG"""
+        try:
+            # Конвертируем в JPEG с указанным качеством
+            jpeg_buffer = io.BytesIO()
             pil_image.save(
-                webp_buffer,
-                format='WEBP',
+                jpeg_buffer,
+                format='JPEG',
                 quality=quality,
-                method=6,  # Метод сжатия WebP (0-6, где 6 - лучшее качество)
-                lossless=False  # Сжатие с потерями для лучшего размера
+                optimize=True
             )
             
-            webp_data = webp_buffer.getvalue()
-            webp_buffer.close()
+            jpeg_data = jpeg_buffer.getvalue()
+            jpeg_buffer.close()
             
-            logger.info(f"WebP создан: {len(webp_data)} байт")
+            logger.info(f"💾 JPEG создан: {len(jpeg_data)} байт")
             
             # Конвертируем в Base64
-            base64_string = base64.b64encode(webp_data).decode('utf-8')
+            base64_string = base64.b64encode(jpeg_data).decode('utf-8')
             
-            logger.info(f"Base64 создан: {len(base64_string)} символов")
+            logger.info(f"🔤 Base64 создан: {len(base64_string)} символов")
+            logger.info("✅ Реальный экран успешно захвачен и конвертирован в Base64!")
             
             return base64_string
-            
+                
         except Exception as e:
-            logger.error(f"Ошибка захвата экрана: {e}")
-            return None
+            error_msg = f"❌ Ошибка конвертации в Base64: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
     
-    def capture_active_window(self, quality: int = 85) -> str:
+    def capture_active_window(self, quality: int = 85, max_size: int = 1024) -> str:
         """
-        Захватывает активное окно (если возможно)
+        Захватывает активное окно (через mss)
         
         Args:
-            quality (int): Качество WebP (1-100)
+            quality (int): Качество JPEG (1-100)
+            max_size (int): Максимальный размер стороны изображения
             
         Returns:
-            str: Base64 строка WebP изображения
+            str: Base64 строка JPEG изображения
         """
         try:
-            logger.info("Начинаю захват активного окна...")
+            logger.info("🪟 Захватываю активное окно через mss...")
             
-            # Пока что захватываем весь экран
-            # TODO: Добавить логику определения активного окна
-            return self.capture_screen(quality)
-            
+            # Через mss захватываем весь экран (активное окно будет видно)
+            return self.capture_screen(quality, max_size)
+                
         except Exception as e:
-            logger.error(f"Ошибка захвата активного окна: {e}")
-            return None
+            error_msg = f"❌ Ошибка захвата активного окна: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
     
     def get_screen_info(self) -> dict:
         """
-        Возвращает информацию об экране
+        Возвращает реальную информацию об экране через mss
         
         Returns:
             dict: Информация об экране
         """
         try:
-            width = int(self.display_bounds.size.width)
-            height = int(self.display_bounds.size.height)
+            if not self.mss_available:
+                logger.warning("⚠️ mss недоступен, возвращаю базовую информацию")
+                return self._get_default_screen_info()
             
-            return {
-                'width': width,
-                'height': height,
-                'main_display_id': self.main_display_id,
-                'bounds': {
-                    'x': int(self.display_bounds.origin.x),
-                    'y': int(self.display_bounds.origin.y),
-                    'width': width,
-                    'height': height
+            import mss
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]  # Основной монитор
+                logger.info(f"📱 Реальная информация об экране через mss: {monitor}")
+                return {
+                    'width': monitor['width'],
+                    'height': monitor['height'],
+                    'main_display_id': 1,
+                    'bounds': monitor
                 }
-            }
-            
+                
         except Exception as e:
-            logger.error(f"Ошибка получения информации об экране: {e}")
-            return {}
+            logger.error(f"❌ Ошибка получения информации об экране: {e}")
+            return self._get_default_screen_info()
+    
+    def _get_default_screen_info(self) -> dict:
+        """Возвращает базовую информацию об экране по умолчанию"""
+        return {
+            'width': 1920,
+            'height': 1080,
+            'main_display_id': 1,
+            'bounds': {
+                'x': 0,
+                'y': 0,
+                'width': 1920,
+                'height': 1080
+            }
+        }
 
 if __name__ == "__main__":
-    # Тест захвата экрана
-    import logging
+    # Настройка логирования
     logging.basicConfig(level=logging.INFO)
     
+    # Тестируем реальный захват через mss
     capture = ScreenCapture()
     
     # Получаем информацию об экране
     info = capture.get_screen_info()
-    print(f"Информация об экране: {info}")
+    print(f"📱 Информация об экране: {info}")
     
-    # Захватываем экран
-    print("Захватываю экран...")
-    base64_webp = capture.capture_screen(quality=80)
-    
-    if base64_webp:
-        print(f"✅ Захват успешен!")
-        print(f"Base64 длина: {len(base64_webp)} символов")
-        print(f"Первые 100 символов: {base64_webp[:100]}...")
-        
-        # Сохраняем для проверки
-        try:
-            decoded = base64.b64decode(base64_webp)
-            with open("test_screenshot.webp", "wb") as f:
-                f.write(decoded)
-            print("💾 Скриншот сохранен как test_screenshot.webp")
-        except Exception as e:
-            print(f"❌ Ошибка сохранения: {e}")
-    else:
-        print("❌ Захват не удался")
+    # Создаем реальный скриншот
+    print("📸 Захватываю реальный экран через mss...")
+    try:
+        screenshot_data = capture.capture_screen(quality=85, max_size=1024)
+        if screenshot_data:
+            print(f"✅ Реальный скриншот создан!")
+            print(f"Base64 длина: {len(screenshot_data)} символов")
+            print(f"Первые 100 символов: {screenshot_data[:100]}...")
+            
+            # Сохраняем для проверки
+            try:
+                jpeg_data = base64.b64decode(screenshot_data)
+                with open("test_screenshot_mss.jpg", "wb") as f:
+                    f.write(jpeg_data)
+                print(f"💾 Реальный скриншот сохранен как test_screenshot_mss.jpg ({len(jpeg_data)} байт)")
+            except Exception as e:
+                print(f"❌ Ошибка сохранения: {e}")
+        else:
+            print("❌ Создание реального скриншота не удалось")
+    except RuntimeError as e:
+        print(f"❌ Ошибка захвата экрана: {e}")

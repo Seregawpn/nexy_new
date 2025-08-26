@@ -4,7 +4,15 @@ import os
 import re
 from typing import AsyncGenerator, List
 
-# 🚨 ЗАМЕНА: Gemini Live API → LangChain + Google Gemini
+# 🚀 НОВЫЙ: Gemini Live API (основной)
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_LIVE_AVAILABLE = True
+except ImportError as e:
+    GEMINI_LIVE_AVAILABLE = False
+
+# 🔄 FALLBACK: LangChain + Google Gemini
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -17,22 +25,22 @@ except ImportError as e:
 if not os.environ.get("GEMINI_API_KEY"):
     raise ValueError("GEMINI_API_KEY not found. Check config.env")
 
-logger = logging.getLogger(__name__)
+# Проверяем доступность хотя бы одного API
+if not GEMINI_LIVE_AVAILABLE and not LANGCHAIN_AVAILABLE:
+    raise ImportError("Neither Gemini Live API nor LangChain are available. Install required dependencies.")
 
-# Логируем статус импорта LangChain
-if LANGCHAIN_AVAILABLE:
-    logger.info("✅ LangChain + Google Gemini imported successfully")
-else:
-    logger.warning(f"⚠️ LangChain unavailable: {e}")
+logger = logging.getLogger(__name__)
+logger.info(f"🔧 API Status: Live API={GEMINI_LIVE_AVAILABLE}, LangChain={LANGCHAIN_AVAILABLE}")
 
 class TextProcessor:
     """
-    Обрабатывает текстовые запросы с использованием Google Gemini через LangChain,
-    который может использовать инструменты (например, Google Search)
-    и поддерживает стриминг финального ответа.
+    Обрабатывает текстовые запросы с использованием Google Gemini Live API (основной)
+    и LangChain + Google Gemini (fallback).
     
-    🚨 ВАЖНО: System Prompt теперь правильно передается в конфигурации сессии,
-    а не как обычное сообщение. Это обеспечивает корректное поведение ассистента.
+    🚀 ОСНОВНОЙ: Gemini Live API с поддержкой Google Search и инструментов
+    🔄 FALLBACK: LangChain для случаев, когда Live API недоступен
+    
+    🚨 ВАЖНО: System Prompt передается в конфигурации сессии Live API
     """
     
     def __init__(self):
@@ -40,10 +48,10 @@ class TextProcessor:
         self.memory_analyzer = None
         self.db_manager = None
         
-        # ✅ МАКСИМАЛЬНО ПРОСТОЙ System Prompt (только то, что работает)
+        # ✅ System Prompt для обоих API
         self.base_system_instruction = (
             "You are a helpful assistant for blind and visually impaired users. "
-            "Answer on question, exactly what user wants to know or get. Don't mix  answers of conversations or describe screenshot.\n"
+            "Answer on question, exactly what user wants to know or get. Don't mix  answers of conversations or describe screenshot .\n"
    
             
             "🎯 YOUR CAPABILITIES:\n\n"
@@ -63,49 +71,89 @@ class TextProcessor:
             "- Focus on helping the user with their question\n"
             "- If you see any dangerous content, warn about it\n\n"
             
+            "🔍 ONLINE SEARCH - when available:\n"
+            "- Use Google Search for current information\n"
+            "- Provide up-to-date news and facts\n"
+            "- Cite sources when possible\n\n"
+            
             "📋 RESPONSE RULES:\n"
             "- Answer briefly and clearly\n"
             "- Be friendly and helpful\n"
             "- Don't over-explain\n"
             "- Focus on what the user needs\n"
             
-            
-            
-            
-            "REMEMBER: Keep it simple, helpful, Use memory just in case if you need to use, it's really helpful but otherwise don't use it, also Screenshot if user don't ask you to describe or talk about you don't need to talk about this if user ask you about a screenshot then in this case, you need to talk about screenshot and describe it!"
+            "REMEMBER: Keep it simple, helpful and Use memory just in case if you need to use, it's really helpful and user asks something about it but otherwise don't use it, also Screenshot if user don't ask you to describe or talk about you don't need to talk about this if user ask you about a screenshot then in this case, you need to talk about screenshot and describe it!"
         )
         
         logger.info(f"✅ base_system_instruction created: {len(self.base_system_instruction)} characters")
         
         try:
-            # ✅ УПРОЩЕННАЯ ИНИЦИАЛИЗАЦИЯ (как в langchain_test)
+            # 🚀 ИНИЦИАЛИЗАЦИЯ GEMINI LIVE API (основной)
+            if GEMINI_LIVE_AVAILABLE:
+                logger.info("🚀 Initializing Gemini Live API (primary)")
+                
+                # Создаем клиент Live API
+                self.live_client = genai.Client(
+                    http_options={"api_version": "v1beta"},
+                    api_key=os.environ.get("GEMINI_API_KEY"),
+                )
+                
+                # 🔧 КОНФИГУРАЦИЯ Live API с System Prompt и инструментами
+                self.live_config = types.LiveConnectConfig(
+                    response_modalities=["TEXT"],
+                    media_resolution="MEDIA_RESOLUTION_MEDIUM",
+                    context_window_compression=types.ContextWindowCompressionConfig(
+                        trigger_tokens=25600,
+                        sliding_window=types.SlidingWindow(target_tokens=12800),
+                    ),
+                    # 🔧 System Prompt передается ТОЛЬКО в конфигурации
+                    system_instruction=self.base_system_instruction,
+                    # Включаем Google Search
+                    tools=[
+                        types.Tool(
+                            google_search=types.GoogleSearch()
+                        )
+                    ]
+                )
+                
+                # Модель Live API
+                self.live_model = "models/gemini-2.5-flash-live-preview"
+                
+                # Флаг использования Live API
+                self.use_live_api = True
+                
+                logger.info("✅ Gemini Live API initialized successfully")
+                
+            else:
+                logger.warning("⚠️ Gemini Live API not available")
+                self.live_client = None
+                self.live_config = None
+                self.live_model = None
+                self.use_live_api = False
+            
+            # 🔄 ИНИЦИАЛИЗАЦИЯ LANGCHAIN (fallback)
             if LANGCHAIN_AVAILABLE:
-                logger.info("✅ Using LangChain + Google Gemini (simplified version)")
+                logger.info("🔄 Initializing LangChain (fallback)")
                 
-                # ✅ Устанавливаем флаг использования LangChain
-                self.use_langchain = True
-                
-                # ✅ ПРОСТАЯ ИНИЦИАЛИЗАЦИЯ LangChain БЕЗ инструментов в конструкторе
                 self.llm = ChatGoogleGenerativeAI(
                     model="gemini-2.5-flash-lite",
                     google_api_key=os.environ.get("GEMINI_API_KEY"),
                     temperature=0.7,
                     max_output_tokens=2048,
-                    streaming=True,  # 🔧 ВКЛЮЧАЕМ СТРИМИНГ!
+                    streaming=True,
                     cache=False,
-                    # 🔧 ОТКЛЮЧАЕМ КЭШИРОВАНИЕ для получения свежих результатов
                     force_refresh=True
                 )
                 
-                # ✅ МАКСИМАЛЬНО ПРОСТАЯ СИСТЕМА (только то, что работает)
-                logger.info("✅ System simplified - no tools, only basic conversation")
-                
-                logger.info(f"✅ TextProcessor with LangChain initialized successfully")
+                logger.info("✅ LangChain initialized successfully (fallback)")
                 
             else:
-                # ❌ LangChain недоступен - критическая ошибка
-                logger.error("❌ CRITICAL ERROR: LangChain unavailable!")
-                raise ImportError("LangChain unavailable. Install required dependencies.")
+                logger.warning("⚠️ LangChain not available")
+                self.llm = None
+            
+            # Проверяем, что хотя бы один API доступен
+            if not self.use_live_api and not self.llm:
+                raise RuntimeError("No LLM API available. Both Live API and LangChain failed to initialize.")
             
             # Инициализируем MemoryAnalyzer (если доступен)
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -123,7 +171,9 @@ class TextProcessor:
             
         except Exception as e:
             logger.error(f"❌ Error initializing TextProcessor: {e}", exc_info=True)
+            self.live_client = None
             self.llm = None
+            raise
     
 
     
@@ -153,7 +203,7 @@ class TextProcessor:
             # КРИТИЧНО: очищаем все временные переменные
             if hasattr(self, '_current_prompt'):
                 self._current_prompt = None
-                logger.warning("�� Current prompt IMMEDIATELY CLEARED!")
+                logger.warning("🚨 Current prompt IMMEDIATELY CLEARED!")
             
             logger.warning("✅ All LLM processes IMMEDIATELY cancelled!")
             
@@ -178,16 +228,17 @@ class TextProcessor:
     
     async def generate_response_stream(self, prompt: str, hardware_id: str = None, screenshot_base64: str = None, interrupt_checker=None, **kwargs) -> AsyncGenerator[str, None]:
         """
-        🎯 УПРОЩЕННЫЙ МЕТОД: Генерация ответа через LangChain (как в langchain_test)
+        🎯 ОСНОВНОЙ МЕТОД: Все запросы идут через Gemini Live API с fallback на LangChain
         """
         try:
-            logger.info(f"🚀 Starting request processing: '{prompt[:100]}...'")
+            logger.info(f"🚀 Starting hybrid request processing: '{prompt[:100]}...'")
             
-            # КРИТИЧНО: сохраняем функцию проверки прерывания
-            self._interrupt_checker = interrupt_checker
-            self._current_prompt = prompt
+            # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ВХОДНЫХ ДАННЫХ
+            logger.info(f"🖼️ Hybrid: Input screenshot_base64: {screenshot_base64[:100] if screenshot_base64 else 'None'}...")
+            logger.info(f"🖼️ Hybrid: Input screenshot_base64 length: {len(screenshot_base64) if screenshot_base64 else 0}")
+            logger.info(f"🖼️ Hybrid: Input hardware_id: {hardware_id}")
             
-            # Получаем контекст памяти (если доступен)
+            # 🔧 ПОЛУЧАЕМ КОНТЕКСТ ПАМЯТИ (если доступен)
             memory_context = ""
             if hardware_id and self.db_manager:
                 try:
@@ -222,61 +273,104 @@ class TextProcessor:
                 except Exception as e:
                     logger.warning(f"⚠️ Error getting memory: {e}")
             
-            # 🚨 УПРОЩЕННЫЙ ПОДХОД: используем только прямой вызов LLM
-            logger.info("🚀 Using direct LLM call (no chain)")
-                
-            # 🔧 Формируем контент для запроса
+            # 🔧 ФОРМИРУЕМ КОНТЕНТ ДЛЯ ЗАПРОСА с памятью
             user_content = prompt
             if memory_context:
-                user_content = f"{memory_context}\n\n{prompt}"
+                user_content = f"Memory context: {memory_context}\n\n User command: {prompt}"
+                logger.info(f"🧠 User content prepared with memory: {len(user_content)} chars")
+                    else:
+                logger.info(f"📝 User content without memory: {len(user_content)} chars")
             
-            # 🚨 УБРАНО: дублирующая логика языка - теперь используется только base_system_instruction
+            # 🔧 ОПТИМИЗАЦИЯ: скриншот уже Base64 строка
+            screenshot_data = None
+            if screenshot_base64:
+                logger.info("🖼️ Hybrid: Screenshot Base64 received directly")
+                logger.info(f"🖼️ Hybrid: Base64 validation:")
+                logger.info(f"   - Base64 length: {len(screenshot_base64)} chars")
+                logger.info(f"   - Base64 starts with: {screenshot_base64[:50]}...")
+                logger.info(f"   - Base64 ends with: ...{screenshot_base64[-20:]}")
                 
-            # 🔧 ПРЯМОЙ ВЫЗОВ LLM без цепочки
-            try:
-                # 🔧 Убираем служебный текст - сразу обрабатываем запрос
-                async with asyncio.timeout(15.0):  # 15 секунд на простую обработку
+                # Проверяем валидность Base64
+                if len(screenshot_base64) < 100:
+                    logger.warning("⚠️ Hybrid: Base64 string seems too short!")
+                if not screenshot_base64.replace('+', '').replace('/', '').replace('=', '').isalnum():
+                    logger.warning("⚠️ Hybrid: Base64 string may be corrupted!")
+                
+                # Создаем простой формат для LangChain
+                screenshot_data = {
+                    "mime_type": "image/jpeg",  # JPEG от клиента
+                    "data": screenshot_base64,
+                    "raw_bytes": None,  # Не нужны
+                    "width": 0,
+                    "height": 0,
+                    "size_bytes": len(screenshot_base64)
+                }
+                logger.info(f"🖼️ Hybrid: Screenshot data prepared:")
+                logger.info(f"   - MIME type: {screenshot_data['mime_type']}")
+                logger.info(f"   - Base64 data: {len(screenshot_data['data'])} chars")
+            else:
+                logger.info("🖼️ Hybrid: No screenshot_base64 provided")
+            
+            # 🚀 ПРИОРИТЕТ 1: Все запросы идут через Gemini Live API
+            if self.use_live_api and self.live_client:
+                try:
+                    logger.info("🚀 Main: Using Gemini Live API for ALL requests (including screenshots)")
                     
-                    # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ: создаем мультимодальные сообщения
+                    # 🚀 ВЫЗЫВАЕМ LIVE API НАПРЯМУЮ с user_content (который содержит память)
+                    async for chunk in self._call_live_api_directly(
+                        user_content, hardware_id, screenshot_data, interrupt_checker, **kwargs
+                    ):
+                        yield chunk
+                    return  # Успешно завершили с Live API
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Main: Live API failed, falling back to LangChain: {e}")
+                    # Продолжаем к fallback
+            
+
+            
+            # 🔄 FALLBACK: Используем LangChain если Live API недоступен
+            if self.llm:
+                logger.info("🔄 Main: Using LangChain fallback...")
+                try:
+                    # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ В FALLBACK
                     if screenshot_base64:
-                        logger.info("🖼️ Screenshot detected - creating multimodal request")
+                        logger.info("🖼️ Main: LangChain fallback - Screenshot detected")
                         
                         # Создаем мультимодальное сообщение с изображением
-                        # 🔧 System Prompt передается в конфигурации, а не как сообщение
                         messages = [
                             SystemMessage(content=self.base_system_instruction),
                             HumanMessage(content=[
                                 {
                                     "type": "text",
-                                    "text": user_content
+                                    "text": user_content  # 🔧 ИСПРАВЛЕНО: user_content вместо prompt
                                 },
                                 {
                                     "type": "image_url",
                                     "image_url": {
-                                        "url": f"data:image/webp;base64,{screenshot_base64}"
+                                        "url": f"data:image/jpeg;base64,{screenshot_base64}"  # 🔧 JPEG вместо WebP
                                     }
                                 }
                             ])
                         ]
-                        logger.info("✅ Multimodal message created with WebP image")
+                        logger.info("✅ Main: LangChain fallback - Multimodal message created")
                     else:
                         # Только текст
-                        # ✅ System Prompt передается как SystemMessage в списке сообщений
                         messages = [
                             SystemMessage(content=self.base_system_instruction),
-                            HumanMessage(content=user_content)
+                            HumanMessage(content=user_content)  # 🔧 ИСПРАВЛЕНО: user_content вместо prompt
                         ]
-                        logger.info("✅ Text-only message created")
+                        logger.info("✅ Main: LangChain fallback - Text-only message created")
                     
-                    # 🔧 Прямой вызов LLM со стримингом
+                    # Прямой вызов LLM со стримингом
                     buffer = ""  # Буфер для накопления текста
-                    full_response = ""  # 🔧 Полный ответ для анализа памяти
+                    full_response = ""  # Полный ответ для анализа памяти
                     
                     async for chunk in self.llm.astream(messages, config={
                         "cache": False,
                         "force_refresh": True
                     }):
-                        # 🔧 Извлекаем контент из чанка
+                        # Извлекаем контент из чанка
                         if hasattr(chunk, 'content'):
                             content = chunk.content
                         elif hasattr(chunk, 'text'):
@@ -284,12 +378,12 @@ class TextProcessor:
                         else:
                             content = str(chunk)
                         
-                        # 🔧 Накопление в буфере и полном ответе
+                        # Накопление в буфере и полном ответе
                         if content:
                             buffer += content
-                            full_response += content  # 🔧 Собираем полный ответ для памяти
+                            full_response += content
                             
-                            # 🔧 Проверяем, есть ли полные предложения
+                            # Проверяем, есть ли полные предложения
                             sentences = self._split_into_sentences(buffer)
                             
                             # Если есть полные предложения, отправляем их
@@ -302,101 +396,29 @@ class TextProcessor:
                                 # Оставляем последнее предложение в буфере
                                 buffer = sentences[-1]
                     
-                    # 🔧 Отправляем оставшийся текст в буфере
+                    # Отправляем оставшийся текст в буфере
                     if buffer.strip():
                         yield buffer.strip()
-                        full_response += buffer.strip()  # 🔧 Добавляем последний фрагмент
+                        full_response += buffer.strip()
                     
-                    logger.info("✅ Direct LLM streaming completed successfully")
+                    logger.info("✅ Main: LangChain fallback - Streaming completed successfully")
                     
-                    # 🔧 ФОНОВОЕ обновление памяти с РЕАЛЬНЫМ ответом
+                    # ФОНОВОЕ обновление памяти с РЕАЛЬНЫМ ответом
                     if hardware_id and self.db_manager and self.memory_analyzer:
-                        # Создаем задачу в фоне с РЕАЛЬНЫМ ответом
                         asyncio.create_task(
                             self._update_memory_background(hardware_id, prompt, full_response)
                         )
-                        logger.info(f"🔄 Memory update task started in background for {hardware_id} with real response ({len(full_response)} chars)")
-                    elif hardware_id and self.db_manager:
-                        logger.warning(f"⚠️ MemoryAnalyzer unavailable for {hardware_id}, memory will not be updated")
-                    elif hardware_id:
-                        logger.warning(f"⚠️ DatabaseManager unavailable for {hardware_id}, memory will not be updated")
+                        logger.info(f"🔄 Main: Memory update task started in background for {hardware_id} with real response ({len(full_response)} chars)")
                     
-            except asyncio.TimeoutError:
-                logger.warning("⏰ Timeout - using fallback")
-                # Fallback: синхронный вызов со стримингом
+                except Exception as e:
+                    logger.error(f"❌ Main: LangChain fallback also failed: {e}")
+                    yield f"Sorry, both Live API and LangChain failed. Error: {e}"
+            else:
+                logger.error("❌ Main: No LLM API available")
+                yield "Sorry, no AI service is currently available."
                 
-                # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ В FALLBACK
-                if screenshot_base64:
-                    logger.info("🖼️ Screenshot detected in fallback - creating multimodal request")
-                    # ✅ System Prompt передается как SystemMessage в списке сообщений
-                    messages = [
-                        SystemMessage(content=self.base_system_instruction),
-                        HumanMessage(content=[
-                            {
-                                "type": "text",
-                                "text": user_content
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/webp;base64,{screenshot_base64}"
-                                }
-                            }
-                        ])
-                    ]
-                else:
-                    # ✅ System Prompt передается как SystemMessage в списке сообщений
-                    messages = [
-                        SystemMessage(content=self.base_system_instruction),
-                        HumanMessage(content=user_content)
-                    ]
-                
-                # 🔧 Fallback стриминг с разбивкой на предложения
-                buffer = ""  # Буфер для накопления текста
-                
-                for chunk in self.llm.stream(messages, config={
-                    "cache": False,
-                    "force_refresh": True
-                }):
-                    # 🔧 Извлекаем контент из чанка
-                    if hasattr(chunk, 'content'):
-                        content = chunk.content
-                    elif hasattr(chunk, 'text'):
-                        content = chunk.text
-                    else:
-                        content = str(chunk)
-                    
-                    # 🔧 Накопление в буфере
-                    if content:
-                        buffer += content
-                        
-                        # 🔧 Проверяем, есть ли полные предложения
-                        sentences = self._split_into_sentences(buffer)
-                        
-                        # Если есть полные предложения, отправляем их
-                        if len(sentences) > 1:
-                            # Отправляем все предложения кроме последнего (оно может быть неполным)
-                            for sentence in sentences[:-1]:
-                                if sentence.strip():
-                                    yield sentence.strip()
-                            
-                            # Оставляем последнее предложение в буфере
-                            buffer = sentences[-1]
-                
-                # 🔧 Отправляем оставшийся текст в буфере
-                if buffer.strip():
-                    yield buffer.strip()
-                
-                logger.info("✅ Fallback LLM streaming completed successfully")
-                    
-            except Exception as e:
-                logger.error(f"❌ Error in direct LLM call: {e}")
-                yield f"Sorry, an error occurred while processing your request: {e}"
-            
-            # 🔧 ПАМЯТЬ ОБНОВЛЯЕТСЯ В ОСНОВНОМ СТРИМЕ с реальным ответом
-
         except Exception as e:
-            logger.error(f"Error in request processing: {e}", exc_info=True)
+            logger.error(f"❌ Main: Error in main request processing: {e}", exc_info=True)
             yield "Sorry, an internal error occurred while processing your request."
     
     def clean_text(self, text: str) -> str:
@@ -475,6 +497,149 @@ class TextProcessor:
         sentence_endings = ['.', '!', '?', '...', '?!', '!?']
         return any(text.endswith(ending) for ending in sentence_endings)
     
+    async def _call_live_api_directly(self, user_content: str, hardware_id: str = None, screenshot_data: dict = None, interrupt_checker=None, **kwargs) -> AsyncGenerator[str, None]:
+        """
+        🚀 Прямой вызов Gemini Live API с правильной передачей изображений
+        """
+        try:
+            logger.info(f"🚀 Live API Direct: Starting request: '{user_content[:100]}...'")
+            logger.info(f"🔍 Live API Direct: Full user_content: '{user_content}'")
+            logger.info(f"🔍 Live API Direct: Content length: {len(user_content)} characters")
+            
+            # Создаем Live API сессию
+            async with self.live_client.aio.live.connect(model=self.live_model, config=self.live_config) as session:
+                try:
+                    # 🔧 System Prompt уже передан в конфигурации - НЕ отправляем как системное сообщение
+                    logger.info("🚀 Live API Direct: System Prompt already in config - no need to send as system message")
+                    
+                    # 🔧 ПРАВИЛЬНАЯ ПЕРЕДАЧА ИЗОБРАЖЕНИЙ: используем types.Part.from_bytes()
+                    if screenshot_data and screenshot_data.get('data'):
+                        logger.info("🖼️ Live API Direct: Screenshot detected - sending as separate part")
+                        
+                        try:
+                            # 🔧 ДЕКОДИРУЕМ Base64 в bytes для Live API
+                            import base64
+                            image_bytes = base64.b64decode(screenshot_data['data'])
+                            
+                            # 🔧 ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА
+                            logger.info(f"🔍 Live API Direct: Screenshot validation:")
+                            logger.info(f"   - Base64 length: {len(screenshot_data['data'])} chars")
+                            logger.info(f"   - Decoded bytes: {len(image_bytes)} bytes")
+                            logger.info(f"   - MIME type: {screenshot_data['mime_type']}")
+                            logger.info(f"   - Base64 starts with: {screenshot_data['data'][:50]}...")
+                            
+                            # 🔧 ПРОВЕРЯЕМ ВАЛИДНОСТЬ Base64
+                            if len(screenshot_data['data']) < 100:
+                                logger.warning("⚠️ Live API Direct: Base64 string seems too short!")
+                            
+                            if len(image_bytes) < 1000:
+                                logger.warning("⚠️ Live API Direct: Decoded image seems too small!")
+                            
+                            # 🔧 СОЗДАЕМ ПРАВИЛЬНЫЕ ЧАСТИ: текст + изображение отдельно
+                            parts = [
+                                types.Part.from_text(text=user_content),  # 🔧 ИСПРАВЛЕНО: user_content
+                                types.Part.from_bytes(                     # Изображение как bytes
+                                    data=image_bytes,
+                                    mime_type=screenshot_data['mime_type']
+                                )
+                            ]
+                            
+                            # 🔧 ЛОГИРУЕМ что отправляем
+                            logger.info(f"🔍 Live API Direct: Sending user content: '{user_content[:100]}...'")
+                            logger.info(f"🔍 Live API Direct: Sending image: {len(image_bytes)} bytes, MIME: {screenshot_data['mime_type']}")
+                            logger.info(f"🔍 Live API Direct: Total parts: {len(parts)}")
+                            
+                            # 🔧 ОТПРАВЛЯЕМ МУЛЬТИМОДАЛЬНОЕ СООБЩЕНИЕ
+                            await session.send_client_content(
+                                turns=types.Content(
+                                    role='user',
+                                    parts=parts  # Текст + изображение как отдельные части
+                                ),
+                                turn_complete=True
+                            )
+                            
+                            logger.info("✅ Live API Direct: Image sent correctly as separate part!")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Live API Direct: Failed to send image as bytes: {e}")
+                            logger.error(f"❌ Live API Direct: Error details: {type(e).__name__}: {str(e)}")
+                            # Fallback: только текст
+                            await session.send_client_content(
+                                turns=types.Content(
+                                    role='user',
+                                    parts=[types.Part.from_text(text=user_content)]
+                                ),
+                                turn_complete=True
+                            )
+                            logger.info("✅ Live API Direct: Text-only fallback sent")
+                    else:
+                        # Только текст
+                        logger.info(f"📝 Live API Direct: No screenshot - sending text-only request: '{user_content[:100]}...'")
+                        await session.send_client_content(
+                            turns=types.Content(
+                                role='user',
+                                parts=[types.Part.from_text(text=user_content)]
+                            ),
+                            turn_complete=True
+                        )
+                        logger.info("✅ Live API Direct: Text-only message sent")
+                    
+                    # Получаем ответ с поддержкой инструментов
+                    buffer = ""  # Буфер для накопления текста
+                    full_response = ""  # Полный ответ для анализа памяти
+                    
+                    turn = session.receive()
+                    async for response in turn:
+                        # Извлекаем текстовый контент
+                        if hasattr(response, 'text') and response.text:
+                            content = response.text
+                            
+                            # Накопление в буфере и полном ответе
+                            if content:
+                                buffer += content
+                                full_response += content
+                                
+                                # Проверяем, есть ли полные предложения
+                                sentences = self._split_into_sentences(buffer)
+                                
+                                # Если есть полные предложения, отправляем их
+                                if len(sentences) > 1:
+                                    # Отправляем все предложения кроме последнего (оно может быть неполным)
+                                    for sentence in sentences[:-1]:
+                                        if sentence.strip():
+                                            yield sentence.strip()
+                                    
+                                    # Оставляем последнее предложение в буфере
+                                    buffer = sentences[-1]
+                        
+                        # Проверяем, есть ли вызовы инструментов (Google Search)
+                        if hasattr(response, 'tool_calls') and response.tool_calls:
+                            for tool_call in response.tool_calls:
+                                logger.info(f"🔍 Live API Direct: Tool call detected: {tool_call.function.name}")
+                                # Инструменты выполняются автоматически Live API
+                    
+                    # Отправляем оставшийся текст в буфере
+                    if buffer.strip():
+                        yield buffer.strip()
+                        full_response += buffer.strip()
+                    
+                    logger.info("✅ Live API Direct: Streaming completed successfully")
+                    
+                    # ФОНОВОЕ обновление памяти с РЕАЛЬНЫМ ответом
+                    if hardware_id and self.db_manager and self.memory_analyzer:
+                        asyncio.create_task(
+                            self._update_memory_background(hardware_id, user_content, full_response)
+                        )
+                        logger.info(f"🔄 Live API Direct: Memory update task started in background for {hardware_id} with real response ({len(full_response)} chars)")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Live API Direct: Error in session: {e}")
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"❌ Live API Direct: Error in request processing: {e}", exc_info=True)
+            yield f"Sorry, an error occurred while processing your request with Live API: {e}"
+
     async def _update_memory_background(self, hardware_id: str, prompt: str, response: str):
         """
         Фоновое обновление памяти пользователя.
