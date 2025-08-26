@@ -5,6 +5,7 @@ import grpc
 import sys
 import os
 import time
+import yaml
 
 # Добавляем корневую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,14 +21,49 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+def load_config():
+    """Загружает конфигурацию из файла"""
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'config', 'app_config.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Не удалось загрузить конфигурацию: {e}[/yellow]")
+        return None
+
 class GrpcClient:
     """gRPC клиент для стриминга аудио и текста"""
     
-    def __init__(self, server_address: str = "localhost:50051"):
-        self.server_address = server_address
+    def __init__(self, server_address: str = None):
+        # Загружаем конфигурацию
+        config = load_config()
+        
+        if server_address:
+            self.server_address = server_address
+        elif config and 'grpc' in config:
+            # Используем конфигурацию из файла
+            host = config['grpc']['server_host']
+            port = config['grpc']['server_port']
+            use_ssl = config['grpc'].get('use_ssl', False)
+            
+            if use_ssl:
+                self.server_address = f"{host}:{port}"
+                self.use_ssl = True
+            else:
+                self.server_address = f"{host}:{port}"
+                self.use_ssl = False
+        else:
+            # Fallback на localhost
+            self.server_address = "localhost:50051"
+            self.use_ssl = False
+            
         self.audio_player = AudioPlayer(sample_rate=48000)
         self.channel = None
         self.stub = None
+        self.hardware_id = None
+        
+        console.print(f"[blue]🌐 Сервер: {self.server_address} (SSL: {self.use_ssl})[/blue]")
     
     async def connect(self):
         """Подключение к gRPC серверу"""
@@ -39,12 +75,18 @@ class GrpcClient:
                 ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
             ]
             
-            # Создаем неблокирующий канал с увеличенными лимитами
-            self.channel = grpc.aio.insecure_channel(self.server_address, options=options)
+            if self.use_ssl:
+                # Для Azure Container Apps используем SSL
+                self.channel = grpc.aio.secure_channel(self.server_address, grpc.ssl_channel_credentials(), options=options)
+            else:
+                # Для локального тестирования без SSL
+                self.channel = grpc.aio.insecure_channel(self.server_address, options=options)
+                
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
             console.print(f"[bold green]✅ Подключение к gRPC серверу {self.server_address} установлено[/bold green]")
             console.print(f"[blue]📏 Максимальный размер сообщения: 50MB[/blue]")
+            console.print(f"[blue]🔒 SSL: {'Включен' if self.use_ssl else 'Отключен'}[/blue]")
             return True
             
         except Exception as e:

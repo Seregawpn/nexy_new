@@ -34,8 +34,9 @@ screen_capture:
   
 # gRPC client settings
 grpc:
-  server_host: "YOUR_EXTERNAL_SERVER_IP"  # TODO: Replace with actual external server IP
-  server_port: 50051
+  server_host: "nexy.icytree-3e2da3b5.canadaeast.azurecontainerapps.io"  # Azure Container App URL
+  server_port: 443  # HTTPS порт для Azure Container Apps
+  use_ssl: true  # Использовать SSL/TLS
   timeout: 30
   retry_attempts: 3
   retry_delay: 1
