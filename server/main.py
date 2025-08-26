@@ -1,98 +1,63 @@
 import asyncio
-import base64
 import logging
-# from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-# from starlette.websockets import WebSocketState
-import numpy as np
-
-from config import Config
-from text_processor import TextProcessor
-from audio_generator import AudioGenerator
+from aiohttp import web
+from grpc_server import serve
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# app = FastAPI()  # Старый WebSocket API - не используется
+async def health_handler(request):
+    """Health check для Container Apps"""
+    return web.Response(text="OK", status=200)
 
-# @app.on_event("startup")
-# async def startup_event():
-#     """Проверка конфигурации при старте"""
-#     try:
-#         Config.validate()
-#         logger.info("Конфигурация успешно проверена.")
-#     except ValueError as e:
-#         logger.critical(f"Ошибка конфигурации: {e}")
-#         # В реальном приложении здесь можно было бы остановить запуск
-#         # Но для простоты просто выводим критическую ошибку
+async def root_handler(request):
+    """Корневой endpoint"""
+    return web.Response(text="Voice Assistant Server is running!", status=200)
 
-# @app.websocket("/ws")
-# async def websocket_endpoint(websocket: WebSocket):
-#     """WebSocket эндпоинт для стриминга аудио"""
-#     await websocket.accept()
-#     logger.info("Клиент подключен по WebSocket.")
+async def status_handler(request):
+    """Статус сервера"""
+    return web.json_response({
+        "status": "running",
+        "service": "voice-assistant",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "status": "/status",
+            "grpc": "port 50051"
+        }
+    })
 
-#     try:
-#         # Инициализация компонентов для сессии
-#         text_processor = TextProcessor()
-#         audio_generator = AudioGenerator()
-
-#         while True:
-#             # Ожидаем промпт от клиента
-#             data = await websocket.receive_text()
-#             logger.info(f"Получен промпт: {data}")
-
-#             # Запускаем стриминг
-#             text_stream = text_processor.process_text_stream(data)
-
-#             async for sentence in text_stream:
-#                 logger.info(f"Обработка предложения для озвучки: {sentence}")
-#                 if websocket.client_state != WebSocketState.CONNECTED:
-#                     logger.warning("Клиент отключился, прерываю генерацию.")
-#                     break
-                
-#                 # Отправляем текст клиенту
-#                 await websocket.send_json({"type": "text", "data": sentence})
-
-#                 # Генерируем и отправляем аудио
-#                 audio_stream = audio_generator.generate_audio_stream(sentence)
-#                 async for audio_chunk in audio_stream:
-#                     if websocket.client_state != WebSocketState.CONNECTED:
-#                         logger.warning("Клиент отключился, прерываю отправку аудио.")
-#                         break
-                    
-#                     # Кодируем NumPy массив в base64 для передачи по JSON
-#                     encoded_audio = base64.b64encode(audio_chunk.tobytes()).decode('utf-8')
-#                     await websocket.send_json({
-#                         "type": "audio",
-#                         "data": encoded_audio,
-#                         "dtype": str(audio_chunk.dtype),
-#                         "shape": audio_chunk.shape
-#                     })
-            
-#             if websocket.client_state == WebSocketState.CONNECTED:
-#                 await websocket.send_json({"type": "end", "data": "Стриминг завершен"})
-#             logger.info("Стриминг завершен для данного промпта.")
-
-#     except WebSocketDisconnect:
-#         logger.info("Клиент отключился.")
-#     except Exception as e:
-#         logger.error(f"Произошла ошибка в WebSocket: {e}")
-#         if websocket.client_state == WebSocketState.CONNECTED:
-#             await websocket.send_json({
-#                 "type": "error",
-#                 "data": f"Произошла внутренняя ошибка: {e}"
-#             })
-#     finally:
-#         if websocket.client_state == WebSocketState.CONNECTED:
-#             await websocket.close()
-#         logger.info("WebSocket соединение закрыто.")
+async def main():
+    """Запуск HTTP и gRPC серверов одновременно"""
+    logger.info("🚀 Запуск Voice Assistant Server...")
+    
+    # HTTP сервер для health checks (порт 80)
+    app = web.Application()
+    app.router.add_get('/health', health_handler)
+    app.router.add_get('/', root_handler)
+    app.router.add_get('/status', status_handler)
+    
+    # Запускаем HTTP сервер на порту 80
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 80)
+    await site.start()
+    
+    logger.info("✅ HTTP сервер запущен на порту 80")
+    logger.info("   - Health check: http://localhost:80/health")
+    logger.info("   - Status: http://localhost:80/status")
+    logger.info("   - Root: http://localhost:80/")
+    
+    # Запускаем gRPC сервер на порту 50051
+    logger.info("🚀 Запускаю gRPC сервер на порту 50051...")
+    await serve()
 
 if __name__ == "__main__":
-    # import uvicorn  # Старый WebSocket API - не используется
-    logger.info("Запуск сервера...")
-    # uvicorn.run(app, host="0.0.0.0", port=8000)  # Старый WebSocket API - не используется
-    
-    # Вместо этого запускаем gRPC сервер
-    from grpc_server import serve
-    serve()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал остановки, завершаю работу...")
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+        raise

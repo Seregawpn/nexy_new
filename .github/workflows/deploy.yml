@@ -1,0 +1,60 @@
+name: Deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CONTAINER_APP: nexy
+  RESOURCE_GROUP: Nexy
+  CONTAINER_APPS_ENVIRONMENT: managedEnvironment-Nexy-b374
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to Azure Container Apps
+      uses: azure/container-apps-deploy-action@v1
+      with:
+        appSourcePath: ${{ github.workspace }}/server
+        containerAppName: ${{ env.CONTAINER_APP }}
+        resourceGroupName: ${{ env.RESOURCE_GROUP }}
+        containerAppEnvironment: ${{ env.CONTAINER_APPS_ENVIRONMENT }}
+        # Прямое развертывание без Docker
+        
+    - name: Wait for deployment
+      run: |
+        echo "Waiting for deployment to complete..."
+        sleep 60
+        
+    - name: Test health endpoint
+      run: |
+        echo "Testing health endpoint..."
+        # Получаем FQDN и тестируем
+        FQDN=$(az containerapp show \
+          --name ${{ env.CONTAINER_APP }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv)
+        
+        echo "Container App URL: $FQDN"
+        
+        # Ждем пока сервер запустится
+        for i in {1..10}; do
+          if curl -f "https://$FQDN/health" > /dev/null 2>&1; then
+            echo "✅ Health check passed!"
+            break
+          else
+            echo "⏳ Waiting for server to start... ($i/10)"
+            sleep 30
+          fi
+        done
+        
+        # Финальный тест
+        curl -f "https://$FQDN/health" || echo "❌ Health check failed"
+        curl -f "https://$FQDN/status" || echo "❌ Status check failed"
