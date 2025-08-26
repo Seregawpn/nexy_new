@@ -470,15 +470,58 @@ class GrpcClient:
             if hardware_id:
                 console.print(f"[bold blue]🆔 Отправляю Hardware ID: {hardware_id[:16]}...[/bold blue]")
             
+            # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПЕРЕД СОЗДАНИЕМ ЗАПРОСА
+            console.print(f"[cyan]🔍 Создаю StreamRequest с параметрами:[/cyan]")
+            console.print(f"[cyan]🔍 prompt: '{prompt}' (тип: {type(prompt).__name__})[/cyan]")
+            console.print(f"[cyan]🔍 screenshot: {'Да' if screenshot_base64 else 'Нет'} (тип: {type(screenshot_base64).__name__})[/cyan]")
+            if screenshot_base64:
+                console.print(f"[cyan]🔍 screenshot длина: {len(screenshot_base64)} символов[/cyan]")
+            
+            console.print(f"[cyan]🔍 screen_info: {screen_info} (тип: {type(screen_info).__name__})[/cyan]")
+            if screen_info:
+                console.print(f"[cyan]🔍 screen_width: {screen_info.get('width', 'НЕТ')} (тип: {type(screen_info.get('width', 0)).__name__})[/cyan]")
+                console.print(f"[cyan]🔍 screen_height: {screen_info.get('height', 'НЕТ')} (тип: {type(screen_info.get('height', 0)).__name__})[/cyan]")
+            
+            console.print(f"[cyan]🔍 hardware_id: '{hardware_id}' (тип: {type(hardware_id).__name__})[/cyan]")
+            
             self.audio_player.start_playback()
             
-            request = streaming_pb2.StreamRequest(
-                prompt=prompt,
-                screenshot=screenshot_base64 if screenshot_base64 else "",
-                screen_width=screen_info.get('width', 0) if screen_info else 0,
-                screen_height=screen_info.get('height', 0) if screen_info else 0,
-                hardware_id=hardware_id if hardware_id else ""
-            )
+            try:
+                request = streaming_pb2.StreamRequest(
+                    prompt=prompt,
+                    screenshot=screenshot_base64 if screenshot_base64 else "",
+                    screen_width=screen_info.get('width', 0) if screen_info else 0,
+                    screen_height=screen_info.get('height', 0) if screen_info else 0,
+                    hardware_id=hardware_id if hardware_id else ""
+                )
+                console.print(f"[green]✅ StreamRequest создан успешно[/green]")
+            except Exception as request_error:
+                console.print(f"[bold red]❌ ОШИБКА ПРИ СОЗДАНИИ StreamRequest: {request_error}[/bold red]")
+                console.print(f"[bold red]❌ Тип ошибки: {type(request_error).__name__}[/bold red]")
+                console.print(f"[bold red]❌ Детали: {str(request_error)}[/bold red]")
+                
+                # 🔍 ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА
+                import traceback
+                console.print(f"[bold red]❌ Traceback создания запроса:[/bold red]")
+                for line in traceback.format_exc().split('\n'):
+                    if line.strip():
+                        console.print(f"[red]   {line}[/red]")
+                
+                # Пытаемся создать запрос с безопасными значениями
+                console.print(f"[yellow]🔄 Пытаюсь создать запрос с безопасными значениями...[/yellow]")
+                try:
+                    safe_request = streaming_pb2.StreamRequest(
+                        prompt=str(prompt) if prompt else "",
+                        screenshot="",
+                        screen_width=0,
+                        screen_height=0,
+                        hardware_id=str(hardware_id) if hardware_id else ""
+                    )
+                    console.print(f"[green]✅ Безопасный StreamRequest создан[/green]")
+                    request = safe_request
+                except Exception as safe_error:
+                    console.print(f"[bold red]❌ Даже безопасный запрос не создается: {safe_error}[/bold red]")
+                    raise  # Перебрасываем ошибку
             
             call = self.stub.StreamAudio(request)
             
@@ -486,16 +529,74 @@ class GrpcClient:
             yield call
             
             async for response in call:
+                # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ КАЖДОГО ОТВЕТА
+                console.print(f"[cyan]🔍 Получен ответ типа: {type(response).__name__}[/cyan]")
+                console.print(f"[cyan]🔍 Поля ответа: {[field.name for field in response.DESCRIPTOR.fields]}[/cyan]")
+                
                 if response.HasField('text_chunk'):
                     console.print(f"[green]📄 Текст: {response.text_chunk}[/green]")
                 
                 elif response.HasField('audio_chunk'):
-                    audio_chunk = np.frombuffer(
-                        response.audio_chunk.audio_data, 
-                        dtype=response.audio_chunk.dtype
-                    ).reshape(response.audio_chunk.shape)
-                    console.print(f"[blue]🎵 Аудио чанк получен: {len(audio_chunk)} сэмплов[/blue]")
-                    self.audio_player.add_chunk(audio_chunk)
+                    # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ АУДИО ЧАНКА
+                    console.print(f"[cyan]🔍 Обрабатываю аудио чанк...[/cyan]")
+                    
+                    # Логируем информацию об аудио чанке
+                    audio_chunk_obj = response.audio_chunk
+                    console.print(f"[cyan]🔍 Тип audio_chunk: {type(audio_chunk_obj).__name__}[/cyan]")
+                    console.print(f"[cyan]🔍 Поля audio_chunk: {[field.name for field in audio_chunk_obj.DESCRIPTOR.fields]}[/cyan]")
+                    
+                    # Логируем audio_data
+                    audio_data = audio_chunk_obj.audio_data
+                    console.print(f"[cyan]🔍 Тип audio_data: {type(audio_data).__name__}[/cyan]")
+                    console.print(f"[cyan]🔍 Размер audio_data: {len(audio_data)} байт[/cyan]")
+                    console.print(f"[cyan]🔍 Первые 10 байт: {audio_data[:10]}[/cyan]")
+                    
+                    # Логируем dtype
+                    dtype_str = audio_chunk_obj.dtype
+                    console.print(f"[cyan]🔍 dtype строка: '{dtype_str}' (тип: {type(dtype_str).__name__})[/cyan]")
+                    
+                    # Логируем shape
+                    shape = audio_chunk_obj.shape
+                    console.print(f"[cyan]🔍 shape: {shape} (тип: {type(shape).__name__})[/cyan]")
+                    
+                    try:
+                        # 🔧 ИСПРАВЛЕНИЕ: конвертируем строку dtype в numpy dtype
+                        if dtype_str == 'int16':
+                            dtype = np.int16
+                        elif dtype_str == 'float32':
+                            dtype = np.float32
+                        elif dtype_str == 'float64':
+                            dtype = np.float64
+                        else:
+                            # Fallback на int16 если dtype не распознан
+                            dtype = np.int16
+                            console.print(f"[yellow]⚠️ Неизвестный dtype '{dtype_str}', использую int16[/yellow]")
+                        
+                        console.print(f"[cyan]🔍 Выбранный numpy dtype: {dtype}[/cyan]")
+                        
+                        # Создаем numpy массив
+                        console.print(f"[cyan]🔍 Создаю numpy массив...[/cyan]")
+                        audio_chunk = np.frombuffer(audio_data, dtype=dtype)
+                        console.print(f"[cyan]🔍 numpy массив создан: {type(audio_chunk).__name__}, размер: {audio_chunk.shape}[/cyan]")
+                        
+                        # Применяем reshape
+                        console.print(f"[cyan]🔍 Применяю reshape к {shape}...[/cyan]")
+                        audio_chunk = audio_chunk.reshape(shape)
+                        console.print(f"[cyan]🔍 reshape применен: {audio_chunk.shape}[/cyan]")
+                        
+                        console.print(f"[blue]🎵 Аудио чанк получен: {len(audio_chunk)} сэмплов[/blue]")
+                        
+                        # Добавляем в плеер
+                        console.print(f"[cyan]🔍 Добавляю в аудио плеер...[/cyan]")
+                        self.audio_player.add_chunk(audio_chunk)
+                        console.print(f"[green]✅ Аудио добавлено в плеер[/green]")
+                        
+                    except Exception as audio_error:
+                        console.print(f"[bold red]❌ ОШИБКА ПРИ ОБРАБОТКЕ АУДИО: {audio_error}[/bold red]")
+                        console.print(f"[bold red]❌ Тип ошибки: {type(audio_error).__name__}[/bold red]")
+                        console.print(f"[bold red]❌ Детали: {str(audio_error)}[/bold red]")
+                        # Продолжаем обработку других чанков
+                        continue
                 
                 elif response.HasField('end_message'):
                     console.print(f"[bold green]✅ {response.end_message}[/bold green]")
@@ -532,6 +633,15 @@ class GrpcClient:
                 console.print(f"[bold red]❌ gRPC ошибка: {e.details()}[/bold red]")
         except Exception as e:
             console.print(f"[bold red]❌ Произошла непредвиденная ошибка в стриминге: {e}[/bold red]")
+            console.print(f"[bold red]❌ Тип ошибки: {type(e).__name__}[/bold red]")
+            console.print(f"[bold red]❌ Детали: {str(e)}[/bold red]")
+            
+            # 🔍 ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА
+            import traceback
+            console.print(f"[bold red]❌ Traceback:[/bold red]")
+            for line in traceback.format_exc().split('\n'):
+                if line.strip():
+                    console.print(f"[red]   {line}[/red]")
         finally:
             # НЕ останавливаем воспроизведение автоматически - пусть аудио играет до конца
             # if self.audio_player.is_playing:

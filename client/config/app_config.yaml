@@ -1,0 +1,76 @@
+# =====================================================
+# КОНФИГУРАЦИЯ ПРИЛОЖЕНИЯ "ГОЛОСОВОЙ АССИСТЕНТ"
+# =====================================================
+
+# Основные настройки приложения
+app:
+  name: "Голосовой Ассистент"
+  version: "1.0.0"
+  debug: false
+  
+# Настройки аудио
+audio:
+  sample_rate: 48000
+  channels: 1
+  chunk_size: 1024
+  format: "int16"
+  
+# Настройки STT (распознавание речи)
+stt:
+  sample_rate: 16000
+  chunk_size: 1024
+  energy_threshold: 100
+  dynamic_energy_threshold: true
+  pause_threshold: 0.5
+  phrase_threshold: 0.3
+  non_speaking_duration: 0.3
+  
+# Настройки захвата экрана
+screen_capture:
+  quality: 85
+  format: "webp"
+  max_width: 1920
+  max_height: 1080
+  
+# Настройки gRPC клиента
+grpc:
+  server_host: "localhost"
+  server_port: 50051
+  timeout: 30
+  retry_attempts: 3
+  retry_delay: 1
+  
+# Настройки логирования
+logging:
+  level: "INFO"
+  file: "~/Library/Logs/VoiceAssistant/app.log"
+  max_size: "10MB"
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# Настройки доступности
+accessibility:
+  voice_feedback: true
+  sound_notifications: true
+  startup_sound: true
+  error_sound: true
+  success_sound: true
+  
+# Настройки автозапуска
+autostart:
+  enabled: false
+  delay: 5  # Задержка в секундах после входа в систему
+  
+# Настройки производительности
+performance:
+  max_memory: "512MB"
+  cpu_limit: 0.8  # Максимальная загрузка CPU
+  battery_optimization: true
+  
+# Настройки безопасности
+security:
+  require_network_permission: true
+  require_microphone_permission: true
+  require_screen_permission: true
+
+

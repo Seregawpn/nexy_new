@@ -2,6 +2,20 @@
 # ЗАВИСИМОСТИ ДЛЯ СЕРВЕРА
 # =====================================================
 
+# 🚀 Gemini Live API (основной)
+google-genai>=0.3.0
+
+# 🔄 LangChain + Google Gemini (fallback)
+langchain-google-genai>=0.0.5
+langchain-core>=0.1.0
+
+# 📊 База данных и память
+sqlite3
+asyncio
+
+# 🔧 Утилиты
+python-dotenv>=1.0.0
+
 # gRPC и Protocol Buffers
 grpcio
 grpcio-tools

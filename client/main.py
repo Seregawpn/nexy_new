@@ -469,9 +469,14 @@ class StateManager:
                     raise Exception(f"gRPC соединение не восстановлено: {e}")
             
             # Просто создаем gRPC стрим
+            # 🔧 ОПТИМИЗАЦИЯ: скриншот уже Base64 строка
+            screenshot_base64 = self.current_screenshot if self.current_screenshot else ""
+            if screenshot_base64:
+                self.console.print(f"[blue]📸 Отправляю Base64 скриншот: {len(screenshot_base64)} символов[/blue]")
+            
             stream_generator = self.grpc_client.stream_audio(
                 command,
-                self.current_screenshot,
+                screenshot_base64,
                 self.current_screen_info,
                 self.hardware_id
             )
@@ -539,14 +544,29 @@ class StateManager:
                     
                     if hasattr(chunk, 'audio_chunk') and chunk.audio_chunk:
                         audio_data = chunk.audio_chunk.audio_data
-                        audio_samples = len(audio_data)//2
+                        # 🔧 ИСПРАВЛЕНИЕ: правильно вычисляем количество сэмплов
+                        # audio_data - это bytes, поэтому делим на размер одного сэмпла (2 байта для int16)
+                        audio_samples = len(audio_data) // 2
                         logger.info(f"   🎵 Аудио чанк {chunk_count}: {audio_samples} сэмплов")
                         self.console.print(f"[green]🎵 Аудио чанк получен: {audio_samples} сэмплов[/green]")
                         
                         # Добавляем аудио в плеер!
                         try:
                             import numpy as np
-                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                            # 🔧 ИСПРАВЛЕНИЕ: используем правильный dtype из protobuf
+                            dtype_str = chunk.audio_chunk.dtype
+                            if dtype_str == 'int16':
+                                dtype = np.int16
+                            elif dtype_str == 'float32':
+                                dtype = np.float32
+                            elif dtype_str == 'float64':
+                                dtype = np.float64
+                            else:
+                                # Fallback на int16 если dtype не распознан
+                                dtype = np.int16
+                                logger.warning(f"   ⚠️ Неизвестный dtype '{dtype_str}', использую int16")
+                            
+                            audio_array = np.frombuffer(audio_data, dtype=dtype)
                             
                             # Логируем состояние очереди ДО добавления
                             queue_before = self.audio_player.audio_queue.qsize()
@@ -786,11 +806,11 @@ class StateManager:
 
     def _capture_screen(self):
         """Захватывает экран"""
-        self.console.print("[bold blue]📸 Захватываю экран в JPEG...[/bold blue]")
+        self.console.print("[bold blue]📸 Захватываю экран в JPEG Base64...[/bold blue]")
         self.current_screenshot = self.screen_capture.capture_screen(quality=80)
         
         if self.current_screenshot:
-            self.console.print(f"[bold green]✅ JPEG скриншот захвачен: {len(self.current_screenshot)} символов Base64[/bold green]")
+            self.console.print(f"[bold green]✅ Base64 скриншот захвачен: {len(self.current_screenshot)} символов[/bold green]")
         else:
             self.console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
     
