@@ -492,24 +492,50 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             
             logger.info(f"🆔 Обработка Hardware ID в потоке: {hardware_id[:16]}...")
             
+            # 1. Создаем или получаем пользователя
             user = self.db_manager.get_user_by_hardware_id(hardware_id)
             if not user:
+                logger.info(f"🆔 Пользователь не найден, создаю нового...")
                 user_id = self.db_manager.create_user(hardware_id, {"created_via": "gRPC"})
+                if not user_id:
+                    logger.error(f"❌ Не удалось создать пользователя для {hardware_id}")
+                    return
                 logger.info(f"✅ Создан новый пользователь: {user_id}")
             else:
                 user_id = user['id']
                 logger.info(f"✅ Найден существующий пользователь: {user_id}")
 
+            # 2. Создаем сессию
+            if not user_id:
+                logger.error(f"❌ user_id = None! Пропускаю создание сессии")
+                return
+                
+            logger.info(f"🆔 Создаю сессию для пользователя: {user_id}")
             session_id = self.db_manager.create_session(user_id, {"prompt": prompt})
+            if not session_id:
+                logger.error(f"❌ Не удалось создать сессию для пользователя: {user_id}")
+                return
             logger.info(f"✅ Создана сессия: {session_id}")
 
+            # 3. Создаем команду
+            if not session_id:
+                logger.error(f"❌ session_id = None! Пропускаю создание команды")
+                return
+                
+            logger.info(f"🆔 Создаю команду для сессии: {session_id}")
             command_metadata = {"has_screenshot": bool(screenshot_base64)}
             if screen_info:
                 command_metadata['screen_info'] = screen_info
-            self.db_manager.create_command(session_id, prompt, command_metadata)
-            logger.info(f"✅ Команда сохранена")
+                
+            command_id = self.db_manager.create_command(session_id, prompt, command_metadata)
+            if not command_id:
+                logger.error(f"❌ Не удалось создать команду для сессии: {session_id}")
+                return
+            logger.info(f"✅ Команда создана: {command_id}")
 
-            if screenshot_base64:
+            # 4. Создаем скриншот (если есть)
+            if screenshot_base64 and session_id:
+                logger.info(f"🆔 Создаю скриншот для сессии: {session_id}")
                 import json
                 screenshot_metadata = {
                     "base64_length": len(screenshot_base64),
@@ -518,13 +544,16 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 if screen_info:
                     screenshot_metadata["screen_resolution"] = f"{screen_info.get('width', 0)}x{screen_info.get('height', 0)}"
                 
-                # Преобразуем dict в JSON строку перед сохранением
-                self.db_manager.create_screenshot(
+                screenshot_id = self.db_manager.create_screenshot(
                     session_id, 
                     f"/tmp/screenshot_{session_id}.webp", 
-                    json.dumps(screenshot_metadata)
+                    None,  # file_url = None
+                    screenshot_metadata  # metadata как dict
                 )
-                logger.info(f"✅ Скриншот сохранен")
+                if screenshot_id:
+                    logger.info(f"✅ Скриншот создан: {screenshot_id}")
+                else:
+                    logger.error(f"❌ Не удалось создать скриншот для сессии: {session_id}")
 
         except Exception as e:
             logger.error(f"❌ Ошибка в потоке обработки Hardware ID: {e}", exc_info=True)

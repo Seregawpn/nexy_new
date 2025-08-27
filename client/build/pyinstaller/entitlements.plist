@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime - REQUIRED for notarization -->
+    <key>com.apple.security.cs.hardened-runtime</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Network access -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- File system access -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Audio and video -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    
+    <!-- Accessibility -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- Screen recording -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    
+    <!-- TCC and Accessibility permissions -->
+    <key>com.apple.security.tcc.allow</key>
+    <array>
+        <string>kTCCServiceAccessibility</string>
+        <string>kTCCServiceScreenCapture</string>
+        <string>kTCCServiceMicrophone</string>
+        <string>kTCCServiceAppleEvents</string>
+    </array>
+    
+    <!-- App sandbox -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- ARM64 ONLY restrictions -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

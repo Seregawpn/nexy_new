@@ -66,6 +66,9 @@ class DatabaseManager:
         try:
             with self.connection.cursor() as cursor:
                 user_id = str(uuid.uuid4())
+                logger.info(f"🆔 Создаю пользователя с ID: {user_id}")
+                logger.info(f"🆔 Hardware ID hash: {hardware_id_hash}")
+                
                 cursor.execute("""
                     INSERT INTO users (id, hardware_id_hash, metadata)
                     VALUES (%s, %s, %s)
@@ -75,8 +78,12 @@ class DatabaseManager:
                 result = cursor.fetchone()
                 self.connection.commit()
                 
-                logger.info(f"✅ Пользователь создан: {user_id}")
-                return result[0] if result else user_id
+                if result and result[0]:
+                    logger.info(f"✅ Пользователь создан успешно: {result[0]}")
+                    return result[0]
+                else:
+                    logger.error(f"❌ create_user: result = {result}")
+                    return None
                 
         except Exception as e:
             self.connection.rollback()
@@ -105,8 +112,15 @@ class DatabaseManager:
     def create_session(self, user_id: str, metadata: Dict[str, Any] = None) -> Optional[str]:
         """Создание новой сессии"""
         try:
+            if not user_id:
+                logger.error(f"❌ create_session: user_id = {user_id}")
+                return None
+                
             with self.connection.cursor() as cursor:
                 session_id = str(uuid.uuid4())
+                logger.info(f"🆔 Создаю сессию с ID: {session_id}")
+                logger.info(f"🆔 User ID: {user_id}")
+                
                 cursor.execute("""
                     INSERT INTO sessions (id, user_id, metadata)
                     VALUES (%s, %s, %s)
@@ -116,8 +130,12 @@ class DatabaseManager:
                 result = cursor.fetchone()
                 self.connection.commit()
                 
-                logger.info(f"✅ Сессия создана: {session_id}")
-                return result[0] if result else session_id
+                if result and result[0]:
+                    logger.info(f"✅ Сессия создана успешно: {result[0]}")
+                    return result[0]
+                else:
+                    logger.error(f"❌ create_session: result = {result}")
+                    return None
                 
         except Exception as e:
             self.connection.rollback()
@@ -150,8 +168,15 @@ class DatabaseManager:
     def create_command(self, session_id: str, prompt: str, metadata: Dict[str, Any] = None, language: str = 'en') -> Optional[str]:
         """Создание новой команды"""
         try:
+            if not session_id:
+                logger.error(f"❌ create_command: session_id = {session_id}")
+                return None
+                
             with self.connection.cursor() as cursor:
                 command_id = str(uuid.uuid4())
+                logger.info(f"🆔 Создаю команду с ID: {command_id}")
+                logger.info(f"🆔 Session ID: {session_id}")
+                
                 cursor.execute("""
                     INSERT INTO commands (id, session_id, prompt, language, metadata)
                     VALUES (%s, %s, %s, %s, %s)
@@ -161,8 +186,12 @@ class DatabaseManager:
                 result = cursor.fetchone()
                 self.connection.commit()
                 
-                logger.info(f"✅ Команда создана: {command_id}")
-                return result[0] if result else command_id
+                if result and result[0]:
+                    logger.info(f"✅ Команда создана успешно: {result[0]}")
+                    return result[0]
+                else:
+                    logger.error(f"❌ create_command: result = {result}")
+                    return None
                 
         except Exception as e:
             self.connection.rollback()
@@ -206,8 +235,15 @@ class DatabaseManager:
                          metadata: Dict[str, Any] = None) -> Optional[str]:
         """Создание записи о скриншоте"""
         try:
+            if not session_id:
+                logger.error(f"❌ create_screenshot: session_id = {session_id}")
+                return None
+                
             with self.connection.cursor() as cursor:
                 screenshot_id = str(uuid.uuid4())
+                logger.info(f"🆔 Создаю скриншот с ID: {screenshot_id}")
+                logger.info(f"🆔 Session ID: {session_id}")
+                
                 cursor.execute("""
                     INSERT INTO screenshots (id, session_id, file_path, file_url, metadata)
                     VALUES (%s, %s, %s, %s, %s)
@@ -217,8 +253,12 @@ class DatabaseManager:
                 result = cursor.fetchone()
                 self.connection.commit()
                 
-                logger.info(f"✅ Скриншот создан: {screenshot_id}")
-                return result[0] if result else screenshot_id
+                if result and result[0]:
+                    logger.info(f"✅ Скриншот создан успешно: {result[0]}")
+                    return result[0]
+                else:
+                    logger.error(f"❌ create_screenshot: result = {result}")
+                    return None
                 
         except Exception as e:
             self.connection.rollback()
