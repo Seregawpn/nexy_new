@@ -149,6 +149,14 @@ temp_audio/
 *.wav
 *.mp3
 *.ogg
+*.m4a
+
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
 
 # SageMath parsed files
 *.sage.py

@@ -4,8 +4,8 @@
 
 # Main application settings
 app:
-  name: "AI Voice Assistant"
-  version: "1.0.0"
+  name: "Nexy"
+  version: "1.70.0"
   debug: false
   
 # Audio settings
@@ -32,11 +32,11 @@ screen_capture:
   max_width: 1920
   max_height: 1080
   
-# gRPC client settings
+# gRPC client settings - ОБНОВЛЕНО ДЛЯ УДАЛЕННОГО СЕРВЕРА
 grpc:
-  server_host: "nexy.icytree-3e2da3b5.canadaeast.azurecontainerapps.io"  # Azure Container App URL
-  server_port: 443  # HTTPS порт для Azure Container Apps
-  use_ssl: true  # Использовать SSL/TLS
+  server_host: "20.151.51.172"  # IP вашей Azure VM
+  server_port: 50051  # gRPC порт
+  use_ssl: false  # Без SSL для прямого подключения
   timeout: 30
   retry_attempts: 3
   retry_delay: 1

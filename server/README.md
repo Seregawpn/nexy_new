@@ -46,3 +46,4 @@ Nexy Server предоставляет API для:
 ## Лицензия
 
 MIT License
+# Workflow update trigger

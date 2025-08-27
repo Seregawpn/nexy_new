@@ -1,20 +1,17 @@
 # =====================================================
-# ЗАВИСИМОСТИ ДЛЯ СЕРВЕРА
+# ЗАВИСИМОСТИ ДЛЯ СЕРВЕРА AZURE CONTAINER APPS
 # =====================================================
 
-# 🌐 HTTP сервер для health checks
+# 🌐 HTTP сервер для health checks (ОБЯЗАТЕЛЬНО для Azure)
 aiohttp>=3.8.0
 
-# 🚀 Gemini Live API (основной)
+# 🚀 Google Gemini API (основной LLM)
 google-genai
 
-# 🔄 LangChain + Google Gemini (fallback)
+# 🔄 LangChain интеграция
+langchain
 langchain-google-genai
 langchain-core
-
-# 📊 База данных и память
-sqlite3
-asyncio
 
 # 🔧 Утилиты
 python-dotenv
@@ -23,14 +20,6 @@ python-dotenv
 grpcio
 grpcio-tools
 protobuf
-
-# Google Gemini Live API
-google-genai
-
-# 🚨 НОВЫЕ ЗАВИСИМОСТИ: LangChain + Google Gemini
-langchain
-langchain-google-genai
-langchain-core
 
 # Обработка изображений
 Pillow
