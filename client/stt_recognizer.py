@@ -1,4 +1,4 @@
-import pyaudio
+import sounddevice as sd
 import numpy as np
 import speech_recognition as sr
 import threading
@@ -17,9 +17,8 @@ class StreamRecognizer:
         self.sample_rate = sample_rate  # 16kHz - оптимально для распознавания речи
         self.chunk_size = chunk_size
         self.channels = channels
-        self.format = pyaudio.paInt16
+        self.dtype = 'int16'
         
-        self.audio = pyaudio.PyAudio()
         self.stream = None
         self.is_recording = False
         self.audio_chunks = []
@@ -44,23 +43,30 @@ class StreamRecognizer:
             
         self.is_recording = True
         self.audio_chunks = []
-        
-        # Открываем аудиопоток с лучшими параметрами
-        self.stream = self.audio.open(
-            format=self.format,
+
+        # Callback для буферизации аудио чанков
+        def _callback(indata, frames, time_info, status):
+            if status:
+                console.print(f"[yellow]⚠️ Sounddevice status: {status}[/yellow]")
+            if self.is_recording:
+                if self.channels == 1:
+                    chunk = indata.copy().reshape(-1)
+                else:
+                    # Берем первый канал, если многоканально
+                    chunk = indata.copy()[:, 0]
+                self.audio_chunks.append(chunk.astype(np.int16))
+
+        # Открываем аудио поток через sounddevice
+        self.stream = sd.InputStream(
             channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            input_device_index=None  # Используем устройство по умолчанию
+            samplerate=self.sample_rate,
+            dtype=self.dtype,
+            blocksize=self.chunk_size,
+            callback=_callback,
         )
-        
+        self.stream.start()
+
         console.print("[bold green]🎤 Запись началась...[/bold green]")
-        
-        # Запускаем запись в отдельном потоке
-        self.recording_thread = threading.Thread(target=self._record_audio)
-        self.recording_thread.daemon = True
-        self.recording_thread.start()
         
     def stop_recording_and_recognize(self):
         """Останавливает запись и распознает речь"""
@@ -69,22 +75,10 @@ class StreamRecognizer:
             
         self.is_recording = False
         
-        # КРИТИЧНО: принудительно останавливаем поток записи
-        if self.recording_thread and self.recording_thread.is_alive():
-            # Даем время потоку записи завершиться
-            self.recording_thread.join(timeout=0.5)  # Уменьшаем таймаут до 500ms
-            
-            # Если поток не завершился - принудительно прерываем
-            if self.recording_thread.is_alive():
-                console.print("[yellow]⚠️ Поток записи не завершился - принудительно прерываю...[/yellow]")
-                # В Python нет прямого способа убить поток, но можно сбросить флаг
-                self.is_recording = False
-            
-        # КРИТИЧНО: принудительно останавливаем аудиопоток
+        # Останавливаем поток записи
         if self.stream:
             try:
-                if self.stream.is_active():
-                    self.stream.stop_stream()
+                self.stream.stop()
                 self.stream.close()
                 console.print("[blue]🔇 Аудиопоток остановлен и закрыт[/blue]")
             except Exception as e:
@@ -110,11 +104,9 @@ class StreamRecognizer:
                 console.print("[yellow]⚠️ Аудио слишком короткое для распознавания[/yellow]")
                 return None
             
-            # Нормализуем аудио для лучшего качества
-            audio_data = audio_data.astype(np.float32) / 32768.0  # Нормализация к [-1, 1]
-            
-            # Конвертируем в формат для SpeechRecognition
-            audio_bytes = (audio_data * 32767).astype(np.int16).tobytes()
+            # Конвертируем в формат для SpeechRecognition (int16 -> bytes)
+            audio_data = audio_data.astype(np.int16)
+            audio_bytes = audio_data.tobytes()
             
             # ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА АУДИО
             console.print(f"[blue]🔍 Размер аудио данных: {len(audio_data)} сэмплов[/blue]")
@@ -142,14 +134,11 @@ class StreamRecognizer:
                     console.print(f"[red]❌ Ошибка сервиса распознавания на {lang}: {e}[/red]")
                     continue
             
-            # АЛЬТЕРНАТИВНЫЙ МЕТОД - прямой PyAudio
+            # Альтернативный метод (тот же буфер как raw)
             console.print("[blue]🔄 Пробую альтернативный метод распознавания...[/blue]")
             try:
-                # Создаем аудио данные напрямую из PyAudio
-                raw_audio = b''.join([chunk.tobytes() for chunk in self.audio_chunks])
+                raw_audio = b''.join([chunk.astype(np.int16).tobytes() for chunk in self.audio_chunks])
                 alternative_audio = sr.AudioData(raw_audio, self.sample_rate, 2)
-                
-                # Пробуем распознать
                 for lang in languages:
                     try:
                         console.print(f"[blue]🔄 Альтернативный метод, язык: {lang}[/blue]")
@@ -160,7 +149,6 @@ class StreamRecognizer:
                         continue
                     except sr.RequestError:
                         continue
-                        
             except Exception as e:
                 console.print(f"[yellow]⚠️ Альтернативный метод не сработал: {e}[/yellow]")
             
@@ -184,15 +172,10 @@ class StreamRecognizer:
         console.print("[bold red]🚨 ПРИНУДИТЕЛЬНАЯ остановка записи![/bold red]")
         self.is_recording = False
         
-        # КРИТИЧНО: принудительно останавливаем поток записи
-        if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=0.2)  # Быстрый таймаут для прерывания
-            
-        # КРИТИЧНО: принудительно останавливаем аудиопоток
+        # Останавливаем аудио поток
         if self.stream:
             try:
-                if self.stream.is_active():
-                    self.stream.stop_stream()
+                self.stream.stop()
                 self.stream.close()
                 console.print("[bold red]🚨 Аудиопоток ПРИНУДИТЕЛЬНО остановлен![/bold red]")
             except Exception as e:
@@ -205,31 +188,17 @@ class StreamRecognizer:
         console.print("[bold green]✅ Запись ПРИНУДИТЕЛЬНО остановлена![/bold green]")
             
     def _record_audio(self):
-        """Записывает аудио в отдельном потоке"""
-        try:
-            while self.is_recording:
-                if self.stream and self.stream.is_active():
-                    # Читаем чанк аудио
-                    data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                    
-                    # Конвертируем в numpy array
-                    audio_chunk = np.frombuffer(data, dtype=np.int16)
-                    self.audio_chunks.append(audio_chunk)
-                    
-                    # Небольшая задержка для стабильности
-                    time.sleep(0.01)
-                    
-        except Exception as e:
-            console.print(f"[red]❌ Ошибка записи аудио: {e}[/red]")
-            console.print(f"[red]Детали: {type(e).__name__}: {str(e)}[/red]")
+        """Совместимость: больше не используется (поток не требуется с sounddevice)."""
+        pass
             
     def cleanup(self):
         """Очищает ресурсы"""
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        if self.audio:
-            self.audio.terminate()
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:
+                pass
 
 # Оставляем старую функцию для совместимости
 def listen_for_command(lang: str = 'en-US') -> str | None:

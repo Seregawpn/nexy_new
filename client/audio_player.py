@@ -152,16 +152,8 @@ class AudioPlayer:
             self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
             self.playback_thread.start()
             
-            # Создаем звуковой поток
-            self.stream = sd.OutputStream(
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype=self.dtype,
-                callback=self._playback_callback,
-                blocksize=1024
-            )
-            
-            self.stream.start()
+            # Безопасно инициализируем звуковой поток с авто-подбором устройства
+            self.stream = self._safe_init_stream()
             self.is_playing = True
             
             logger.info("✅ Потоковое воспроизведение аудио запущено!")
@@ -261,8 +253,8 @@ class AudioPlayer:
                         dtype=self.dtype,
                         device=settings['device'],
                         callback=self._playback_callback,
-                        blocksize=1024,  # Уменьшаем размер блока для лучшей совместимости
-                        latency='low'     # Низкая задержка
+                        blocksize=2048,  # Увеличиваем размер блока для стабильности
+                        latency='high'   # Более высокая задержка для предотвращения перегрузок
                     )
                     
                     stream.start()
@@ -283,7 +275,7 @@ class AudioPlayer:
                     channels=1,        # Моно
                     dtype='int16',     # Стандартный тип
                     callback=self._playback_callback,
-                    blocksize=512,     # Минимальный размер блока
+                    blocksize=2048,    # Увеличенный размер блока
                     latency='high'     # Высокая задержка для стабильности
                 )
                 stream.start()
@@ -351,6 +343,33 @@ class AudioPlayer:
         else:
             logger.info(f"📊 Аудио еще воспроизводится: очередь={queue_size}, буфер={buffer_size}")
             return False
+
+    def play_beep(self, frequency: float = 1000.0, duration_sec: float = 0.12, volume: float = 0.4):
+        """
+        Проигрывает короткий сигнал (beep) через текущую систему воспроизведения.
+        - frequency: частота тона в Гц
+        - duration_sec: длительность сигнала в секундах
+        - volume: громкость [0.0..1.0]
+        """
+        try:
+            # Гарантируем запуск воспроизведения
+            if not self.is_playing:
+                self.start_playback()
+
+            # Генерируем синусоидальную волну
+            num_samples = int(self.sample_rate * duration_sec)
+            if num_samples <= 0:
+                return
+
+            t = np.linspace(0, duration_sec, num_samples, endpoint=False)
+            waveform = np.sin(2 * np.pi * frequency * t)
+            amplitude = int(32767 * max(0.0, min(volume, 1.0)))
+            samples = (amplitude * waveform).astype(np.int16)
+
+            # Добавляем в очередь для воспроизведения
+            self.add_chunk(samples)
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось воспроизвести сигнал: {e}")
 
     def start_audio_monitoring(self):
         """

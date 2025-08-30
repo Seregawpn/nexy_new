@@ -259,10 +259,10 @@ class HardwareIdentifier:
     def get_hardware_info(self) -> dict:
         """Получение полной информации об оборудовании"""
         return {
-            "hardware_uuid": self.get_hardware_uuid(),
-            "serial_number": self.get_serial_number(),
-            "mac_address": self.get_mac_address(),
-            "hardware_id_hash": self.generate_hardware_id()
+            "hardware_uuid": self.get_hardware_uuid() or "",
+            "serial_number": self.get_serial_number() or "",
+            "mac_address": self.get_mac_address() or "",
+            "hardware_id_hash": self._hardware_id or ""
         }
 
 # Глобальный экземпляр для переиспользования

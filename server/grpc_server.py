@@ -71,6 +71,29 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         logger.info(f"   🆔 Hardware ID: {hardware_id[:20] if hardware_id else 'None'}...")
         logger.info(f"   📸 Скриншот: {'Да' if screenshot_base64 else 'Нет'}")
         
+        # 🔹 Спец-режим: приветствие при запуске (минуем LLM/БД, сразу TTS)
+        if isinstance(prompt, str) and prompt.startswith("__GREETING__:"):
+            greeting_text = prompt.split(":", 1)[1].strip()
+            logger.info(f"🎬 Режим приветствия. Текст: {greeting_text[:100]}...")
+            try:
+                audio_chunk_complete = await self.audio_generator.generate_complete_audio_for_sentence(
+                    greeting_text,
+                    interrupt_checker=lambda: (self.global_interrupt_flag and self.interrupt_hardware_id == hardware_id)
+                )
+                if audio_chunk_complete is not None and len(audio_chunk_complete) > 0:
+                    yield streaming_pb2.StreamResponse(
+                        audio_chunk=streaming_pb2.AudioChunk(
+                            audio_data=audio_chunk_complete.tobytes(),
+                            dtype=str(audio_chunk_complete.dtype),
+                            shape=list(audio_chunk_complete.shape)
+                        )
+                    )
+                yield streaming_pb2.StreamResponse(end_message="greeting_done")
+            except Exception as e:
+                logger.error(f"❌ Ошибка генерации приветствия: {e}")
+                yield streaming_pb2.StreamResponse(error_message=f"Ошибка приветствия: {e}")
+            return
+        
         # КРИТИЧНО: создаем уникальный ID сессии для отслеживания
         session_id = f"session_{self.session_counter}_{hardware_id[:8] if hardware_id else 'unknown'}"
         self.session_counter += 1

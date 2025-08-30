@@ -56,6 +56,19 @@ fi
 
 print_success "PyInstaller найден"
 
+# Генерация gRPC модулей из streaming.proto
+print_info "🧬 Генерирую gRPC модули из streaming.proto..."
+if ! python -c "import grpc_tools.protoc" >/dev/null 2>&1; then
+    print_warning "grpcio-tools не найден. Устанавливаю..."
+    pip install grpcio-tools
+fi
+if [ -f "streaming.proto" ]; then
+    python -m grpc_tools.protoc -I . --python_out . --grpc_python_out . streaming.proto
+    print_success "Сгенерированы: streaming_pb2.py, streaming_pb2_grpc.py"
+else
+    print_warning "Файл streaming.proto не найден в каталоге client/. Пропускаю генерацию."
+fi
+
 # Проверяем наличие spec файла
 SPEC_FILE="build/pyinstaller/app.spec"
 if [ ! -f "$SPEC_FILE" ]; then
@@ -103,7 +116,7 @@ fi
 
 # Проверяем права доступа
 print_info "🔐 Проверяю права доступа..."
-chmod +x "$APP_PATH/Contents/MacOS/VoiceAssistant"
+chmod +x "$APP_PATH/Contents/MacOS/Nexy"
 
 print_success "Права доступа настроены"
 

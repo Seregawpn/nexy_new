@@ -32,14 +32,29 @@ screen_capture:
   max_width: 1920
   max_height: 1080
   
-# gRPC client settings - ОБНОВЛЕНО ДЛЯ УДАЛЕННОГО СЕРВЕРА
+# gRPC client settings - АВТОМАТИЧЕСКОЕ ПЕРЕКЛЮЧЕНИЕ МЕЖДУ СЕРВЕРАМИ
 grpc:
-  server_host: "20.151.51.172"  # IP вашей Azure VM
-  server_port: 50051  # gRPC порт
-  use_ssl: false  # Без SSL для прямого подключения
-  timeout: 30
-  retry_attempts: 3
-  retry_delay: 1
+  # Продакшн сервер (приоритет 1)
+  production:
+    server_host: "20.151.51.172"  # Azure VM
+    server_port: 50051
+    use_ssl: false
+    timeout: 30
+    retry_attempts: 3
+    retry_delay: 1
+  
+  # Локальный сервер (fallback)
+  local:
+    server_host: "127.0.0.1"  # localhost
+    server_port: 50051
+    use_ssl: false
+    timeout: 10
+    retry_attempts: 2
+    retry_delay: 0.5
+  
+  # Общие настройки
+  auto_fallback: true  # Автоматическое переключение при ошибке
+  connection_check_interval: 5  # Проверка соединения каждые 5 секунд
   
 # Logging settings
 logging:

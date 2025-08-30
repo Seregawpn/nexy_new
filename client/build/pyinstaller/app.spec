@@ -7,9 +7,11 @@ PyInstaller spec file for macOS application "AI Voice Assistant"
 import sys
 from pathlib import Path
 
-# File paths
-current_dir = Path.cwd()
+# File paths - Force absolute paths
+current_dir = Path.cwd().resolve()
 icon_path = current_dir / "assets" / "icons" / "app_icon.icns"
+
+print(f"Using absolute path: {current_dir}")
 
 # Check icon existence
 if not icon_path.exists():
@@ -49,6 +51,7 @@ a = Analysis(
         "pydub",
         "pydub.audio_segment",
         "pydub.utils",
+        # removed pyaudio (migrated to sounddevice)
         
         # STT
         "speech_recognition",
@@ -61,14 +64,26 @@ a = Analysis(
         "pynput",
         
         # Screen capture
+        "mss",
         "PIL",
         "PIL.Image",
+        "PIL.ImageDraw",
+        
+        # Tray helper на rumps
+        "rumps",
+        "pyobjc_core",
+        "pyobjc_framework_Cocoa",
         
         # gRPC
         "grpc",
         "grpc.aio",
         "streaming_pb2",
         "streaming_pb2_grpc",
+        # Protobuf runtime used by generated stubs
+        "google",
+        "google.protobuf",
+        "google.protobuf.timestamp_pb2",
+        "google.protobuf.wrappers_pb2",
         
         # macOS specific
         "Quartz",
@@ -78,13 +93,61 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # GUI and dev tooling
         "tkinter",
+        "pytest",
+        "IPython",
+        "jupyter",
+        "notebook",
+
+        # Data/ML stacks not used
         "matplotlib",
         "scipy",
         "pandas",
-        "jupyter",
-        "IPython",
-        "notebook",
+        "numba",
+        "llvmlite",
+        "tokenizers",
+        "tiktoken",
+        "jiter",
+
+        # Networking/json stacks not used
+        "aiohttp",
+        "multidict",
+        "yarl",
+        "websockets",
+        "orjson",
+
+        # Packaging/runtime helpers not needed at runtime
+        "setuptools",
+        "pkg_resources",
+        "grpc_tools",
+        # "google",  # do not exclude; required by protobuf
+        # "google.api_core",  # keep available if indirectly needed
+        "Cython",
+        "psutil",
+        "zstandard",
+        "pydantic_core",
+        
+        # Optional Pillow plugins (keep core PIL only)
+        "PIL.ImageTk",
+        "PIL.SpiderImagePlugin",
+        "PIL.PsdImagePlugin",
+        "PIL.PdfImagePlugin",
+        "PIL.EpsImagePlugin",
+        "PIL.DdsImagePlugin",
+        "PIL.FtexImagePlugin",
+        "PIL.FitsImagePlugin",
+        "PIL.IcnsImagePlugin",
+        "PIL.XbmImagePlugin",
+        "PIL.XpmImagePlugin",
+
+        # Audio stack we do not use
+        # "pyaudio",  # Commented out - needed for speech recognition
+
+        # XML stack not used
+        "lxml",
+
+        # Legacy problematic binary (Intel)
         "speech_recognition.flac-mac",  # Intel x86_64 binary - not compatible with ARM64
     ],
     win_no_prefer_redirects=False,
@@ -105,14 +168,14 @@ exe = EXE(
     name="Nexy",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=True,
+    upx=False,
     console=False,  # Hide console for macOS application
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch="arm64",  # Только Apple Silicon для нотаризации
-    codesign_identity=None,  # Будет настроено позже
-    entitlements_file="build/pyinstaller/entitlements.plist",  # Entitlements для нотаризации
+    codesign_identity="Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)",
+    entitlements_file="build/pyinstaller/entitlements.plist",
 )
 
 # Create .app bundle
@@ -121,8 +184,8 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
-    upx=True,
+    strip=True,
+    upx=False,
     upx_exclude=[],
     name="Nexy",
 )
@@ -146,8 +209,8 @@ app = BUNDLE(
         "LSMinimumSystemVersion": "12.0.0",  # macOS 12.0+ (Monterey) - M1+ support
         "NSHighResolutionCapable": True,
         
-        # Background mode (hide from Dock)
-        "LSUIElement": False,  # Changed to False as in your main.spec
+        # Background mode (show in Dock, but background app)
+        "LSUIElement": False,  # Показать в Dock
         
         # Permissions
         "NSMicrophoneUsageDescription": "Nexy needs access to your microphone to hear your commands.",
@@ -162,8 +225,8 @@ app = BUNDLE(
         # Application category
         "LSApplicationCategoryType": "public.app-category.productivity",
         
-        # Autostart
-        "LSBackgroundOnly": False,
+        # Background mode
+        "LSBackgroundOnly": False,  # Показать в Dock, но фоновое
         
         # Additional settings
         "NSRequiresAquaSystemAppearance": False,

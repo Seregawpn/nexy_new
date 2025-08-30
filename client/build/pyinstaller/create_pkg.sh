@@ -79,6 +79,18 @@ mkdir -p "$TEMP_DIR"
 # Step 1: Create component PKG
 print_header "STEP 1: CREATING COMPONENT PKG"
 
+# Prepare minimal scripts directory (only required scripts)
+SCRIPTS_DIR="build/pyinstaller/pkg_scripts"
+print_info "Preparing minimal scripts directory: $SCRIPTS_DIR"
+rm -rf "$SCRIPTS_DIR"
+mkdir -p "$SCRIPTS_DIR"
+
+# Copy only necessary scripts (postinstall only)
+cp -f "build/pyinstaller/postinstall" "$SCRIPTS_DIR/" 2>/dev/null || true
+
+# Ensure permissions
+chmod 755 "$SCRIPTS_DIR"/* 2>/dev/null || true
+
 COMPONENT_PKG="$TEMP_DIR/Nexy_Component.pkg"
 print_info "Creating component PKG..."
 
@@ -87,6 +99,8 @@ pkgbuild \
     --install-location "/Applications" \
     --identifier "com.nexy.assistant.component" \
     --version "1.71.0" \
+    --scripts "$SCRIPTS_DIR" \
+    --preserve-xattr \
     "$COMPONENT_PKG"
 
 if [ $? -eq 0 ]; then
@@ -167,6 +181,48 @@ else
     print_error "PKG verification failed"
     exit 1
 fi
+
+# Step 6: Verify payload entitlements (must contain microphone entitlement)
+print_header "STEP 6: VERIFY PAYLOAD ENTITLEMENTS"
+
+TMP_PAY=$(mktemp -d /tmp/nexy_pkg_expand.XXXXXX)
+PAY_ROOT=$(mktemp -d /tmp/nexy_pkg_root.XXXXXX)
+
+print_info "Expanding PKG fully to: $TMP_PAY"
+if ! pkgutil --expand-full "$FINAL_PKG" "$TMP_PAY" >/dev/null 2>&1; then
+    print_error "Failed to expand PKG for payload verification"
+    rm -rf "$TMP_PAY" "$PAY_ROOT"
+    exit 1
+fi
+
+PAYLOAD=$(find "$TMP_PAY" -type f -name Payload | head -n1)
+if [ -z "$PAYLOAD" ]; then
+    print_error "Payload not found inside expanded PKG"
+    rm -rf "$TMP_PAY" "$PAY_ROOT"
+    exit 1
+fi
+
+print_info "Extracting Payload to: $PAY_ROOT"
+(cd "$PAY_ROOT" && cat "$PAYLOAD" | gunzip -dc | cpio -idmu >/dev/null 2>&1)
+
+BIN="$PAY_ROOT/Applications/Nexy.app/Contents/MacOS/Nexy"
+if [ ! -f "$BIN" ]; then
+    print_error "Extracted binary not found at expected path: $BIN"
+    rm -rf "$TMP_PAY" "$PAY_ROOT"
+    exit 1
+fi
+
+print_info "Checking entitlements on extracted binary..."
+if codesign -d --entitlements :- "$BIN" 2>/dev/null | grep -q "com.apple.security.device.audio-input"; then
+    print_success "Payload entitlements OK: com.apple.security.device.audio-input present"
+else
+    print_error "Payload entitlements missing: com.apple.security.device.audio-input"
+    rm -rf "$TMP_PAY" "$PAY_ROOT"
+    exit 1
+fi
+
+# Cleanup temporary payload dirs
+rm -rf "$TMP_PAY" "$PAY_ROOT"
 
 print_header "PKG CREATION COMPLETED"
 

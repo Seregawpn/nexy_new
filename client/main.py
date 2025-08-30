@@ -6,6 +6,13 @@ from enum import Enum
 import sys
 from pathlib import Path
 
+import os
+import fcntl
+import atexit
+import subprocess
+import json
+import signal
+
 # Добавляем корневую директорию в путь для импорта
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -15,12 +22,139 @@ from input_handler import InputHandler
 from grpc_client import GrpcClient
 from screen_capture import ScreenCapture
 from utils.hardware_id import get_hardware_id, get_hardware_info
+TrayController = None  # Используем helper-процесс вместо прямого UI в этом процессе
+
+def _get_support_dir() -> Path:
+    return Path.home() / "Library" / "Application Support" / "Nexy"
+
+def _get_status_file_path() -> Path:
+    support_dir = _get_support_dir()
+    support_dir.mkdir(parents=True, exist_ok=True)
+    return support_dir / "tray_status.json"
+
+def _run_tray_helper_if_requested():
+    """Если процесс запущен в режиме helper (`--tray-helper`), поднимаем rumps UI и выходим."""
+    if "--tray-helper" not in sys.argv:
+        return
+    try:
+        import rumps
+    except Exception as e:
+        print(f"Tray helper failed to import rumps: {e}")
+        sys.exit(1)
+
+    # Параметры
+    status_file = None
+    main_pid = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--status-file" and i + 1 < len(sys.argv):
+            status_file = sys.argv[i + 1]
+        if arg == "--pid" and i + 1 < len(sys.argv):
+            try:
+                main_pid = int(sys.argv[i + 1])
+            except Exception:
+                main_pid = None
+    if not status_file:
+        status_file = str(_get_status_file_path())
+
+    STATUS_EMOJI = {"SLEEPING": "⚪️", "LISTENING": "🟢", "IN_PROCESS": "🔵"}
+
+    class _TrayApp(rumps.App):
+        def __init__(self):
+            super().__init__("Nexy")
+            self._current = "SLEEPING"
+            self.title = f"{STATUS_EMOJI.get(self._current, '⚪️')} Nexy"
+            self.menu = [rumps.MenuItem("Quit Nexy", callback=self._on_quit)]
+            self._timer = rumps.Timer(self._tick, 0.5)
+            self._timer.start()
+
+        def _tick(self, _):
+            # 1) если основной процесс завершился — закрываемся
+            if main_pid:
+                try:
+                    os.kill(main_pid, 0)
+                except Exception:
+                    rumps.quit_application()
+                    return
+            # 2) читаем статус из файла
+            try:
+                with open(status_file, "r") as f:
+                    data = json.load(f)
+                st = data.get("state")
+                if st and st != self._current:
+                    self._current = st
+                    self.title = f"{STATUS_EMOJI.get(self._current, '⚪️')} Nexy"
+            except Exception:
+                pass
+
+        def _on_quit(self, _):
+            # Пытаемся корректно завершить основной процесс
+            if main_pid:
+                try:
+                    os.kill(main_pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            rumps.quit_application()
+
+    _TrayApp().run()
+    sys.exit(0)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+SINGLE_INSTANCE_LOCK_FD = None
+LOCK_FILE_PATH = None
+
+def acquire_single_instance_lock():
+    """
+    Гарантирует единственный экземпляр приложения с помощью эксклюзивной блокировки файла.
+    Возвращает True, если блокировка получена, иначе False.
+    """
+    global SINGLE_INSTANCE_LOCK_FD, LOCK_FILE_PATH
+    try:
+        support_dir = Path.home() / "Library" / "Application Support" / "Nexy"
+        support_dir.mkdir(parents=True, exist_ok=True)
+        LOCK_FILE_PATH = support_dir / "instance.lock"
+        lock_file = open(LOCK_FILE_PATH, "w")
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
+            return False
+        # Сохраняем дескриптор, чтобы блокировка жила до завершения процесса
+        SINGLE_INSTANCE_LOCK_FD = lock_file
+        try:
+            SINGLE_INSTANCE_LOCK_FD.truncate(0)
+            SINGLE_INSTANCE_LOCK_FD.write(str(os.getpid()))
+            SINGLE_INSTANCE_LOCK_FD.flush()
+            os.fsync(SINGLE_INSTANCE_LOCK_FD.fileno())
+        except Exception:
+            pass
+        return True
+    except Exception:
+        # При любой ошибке не мешаем запуску, но блокировка может не сработать
+        return True
+
+@atexit.register
+def _release_single_instance_lock():
+    global SINGLE_INSTANCE_LOCK_FD
+    try:
+        if SINGLE_INSTANCE_LOCK_FD:
+            try:
+                fcntl.flock(SINGLE_INSTANCE_LOCK_FD.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                SINGLE_INSTANCE_LOCK_FD.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 class AppState(Enum):
     LISTENING = 1     # Ассистент слушает команды (микрофон активен)
@@ -33,7 +167,7 @@ class StateManager:
     Каждое состояние знает, как реагировать на каждое событие.
     """
     
-    def __init__(self, console, audio_player, stt_recognizer, screen_capture, grpc_client, hardware_id, input_handler=None):
+    def __init__(self, console, audio_player, stt_recognizer, screen_capture, grpc_client, hardware_id, input_handler=None, tray_controller=None):
         self.console = console
         self.audio_player = audio_player
         self.stt_recognizer = stt_recognizer
@@ -41,6 +175,7 @@ class StateManager:
         self.grpc_client = grpc_client
         self.hardware_id = hardware_id
         self.input_handler = input_handler  # Ссылка на InputHandler для синхронизации
+        self.tray_controller = tray_controller
         
         # Состояние приложения
         self.state = AppState.SLEEPING
@@ -54,16 +189,33 @@ class StateManager:
         
         # Простое отслеживание состояния
         pass
+    
+    def _write_tray_status_file(self, state_name: str):
+        try:
+            path = _get_status_file_path()
+            with open(path, "w") as f:
+                json.dump({"state": state_name, "ts": time.time()}, f)
+        except Exception:
+            pass
         
     def get_state(self):
         """Возвращает текущее состояние"""
         return self.state
     
-    def set_state(self, new_state):
-        """Устанавливает новое состояние"""
-        if self.state != new_state:
-            self.state = new_state
-            self.console.print(f"[dim]✅ Состояние: {self.state.name}[/dim]")
+    def set_state(self, new_state: AppState):
+        """Установка состояния приложения с синхронизацией в трей."""
+        old_state = self.state
+        self.state = new_state
+        try:
+            self._write_tray_status_file(new_state.name)
+        except Exception:
+            pass
+        try:
+            if self.tray_controller:
+                self.tray_controller.update_status(new_state.name)
+        except Exception:
+            pass
+        return old_state, new_state
     
     def handle_start_recording(self):
         """ПРОБЕЛ ЗАЖАТ - включаем микрофон"""
@@ -71,7 +223,18 @@ class StateManager:
         if self.state == AppState.SLEEPING:
             # Переходим в LISTENING и включаем микрофон
             self.set_state(AppState.LISTENING)
-            self.stt_recognizer.start_recording()
+            # Сигнал включения микрофона (короткий beep)
+            try:
+                if hasattr(self.audio_player, 'play_beep'):
+                    self.audio_player.play_beep()
+            except Exception:
+                pass
+            # Небольшая задержка, чтобы beep не попал в запись
+            try:
+                import threading
+                threading.Timer(0.12, self.stt_recognizer.start_recording).start()
+            except Exception:
+                self.stt_recognizer.start_recording()
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из состояния SLEEPING")
         
@@ -92,7 +255,16 @@ class StateManager:
             
             # Переходим в LISTENING и включаем микрофон
             self.set_state(AppState.LISTENING)
-            self.stt_recognizer.start_recording()
+            try:
+                if hasattr(self.audio_player, 'play_beep'):
+                    self.audio_player.play_beep()
+            except Exception:
+                pass
+            try:
+                import threading
+                threading.Timer(0.12, self.stt_recognizer.start_recording).start()
+            except Exception:
+                self.stt_recognizer.start_recording()
             self.console.print("[bold green]✅ Переход в LISTENING - микрофон включен![/bold green]")
             logger.info("   🎤 Микрофон активирован после прерывания")
             
@@ -125,8 +297,17 @@ class StateManager:
                 except:
                     pass
                 
-                # Начинаем новую запись
-                self.stt_recognizer.start_recording()
+                # Начинаем новую запись (с сигналом о готовности)
+                try:
+                    if hasattr(self.audio_player, 'play_beep'):
+                        self.audio_player.play_beep()
+                except Exception:
+                    pass
+                try:
+                    import threading
+                    threading.Timer(0.12, self.stt_recognizer.start_recording).start()
+                except Exception:
+                    self.stt_recognizer.start_recording()
                 logger.info("   ✅ Новая запись запущена")
                 self.console.print("[green]🎤 Запись перезапущена - говорите команду[/green]")
                 
@@ -143,7 +324,16 @@ class StateManager:
             # Неизвестное состояние → переходим в LISTENING
             self.console.print(f"[yellow]⚠️ Неизвестное состояние {self.state.name}, перехожу в LISTENING[/yellow]")
             self.set_state(AppState.LISTENING)
-            self.stt_recognizer.start_recording()
+            try:
+                if hasattr(self.audio_player, 'play_beep'):
+                    self.audio_player.play_beep()
+            except Exception:
+                pass
+            try:
+                import threading
+                threading.Timer(0.12, self.stt_recognizer.start_recording).start()
+            except Exception:
+                self.stt_recognizer.start_recording()
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из неизвестного состояния")
     
@@ -162,6 +352,13 @@ class StateManager:
                 self.console.print(f"[bold green]📝 Команда принята: {command}[/bold green]")
                 self.set_state(AppState.IN_PROCESS)
                 self.console.print("[blue]🔄 Переход в IN_PROCESS - обрабатываю команду...[/blue]")
+                
+                # Захватываем актуальный скриншот ПЕРЕД отправкой на сервер
+                try:
+                    self._capture_screen()
+                    logger.info("   ✅ Актуальный скриншот захвачен перед отправкой")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Не удалось захватить скриншот: {e}")
                 self._process_command(command)
             else:
                 # КОМАНДА НЕ ПРИНЯТА → возвращаемся в SLEEPING
@@ -219,6 +416,13 @@ class StateManager:
                 self.set_state(AppState.IN_PROCESS)
                 logger.info("   🔄 Переход в IN_PROCESS для обработки команды")
                 
+                # Захватываем актуальный скриншот ПЕРЕД отправкой на сервер
+                try:
+                    self._capture_screen()
+                    logger.info("   ✅ Актуальный скриншот захвачен перед отправкой")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Не удалось захватить скриншот: {e}")
+                
                 # Обрабатываем команду
                 self._process_command(command)
             else:
@@ -266,40 +470,13 @@ class StateManager:
                 logger.warning("   ⚠️ Универсальная остановка неполная")
                 self.console.print("[yellow]⚠️ Остановка неполная[/yellow]")
             
-            # ПОСЛЕ ПРЕРЫВАНИЯ АВТОМАТИЧЕСКИ АКТИВИРУЕМ МИКРОФОН!
-            logger.info("   🎤 АВТОМАТИЧЕСКАЯ активация микрофона после прерывания...")
-            self.console.print("[blue]🎤 АВТОМАТИЧЕСКИ активирую микрофон после прерывания...[/blue]")
-            
-            # 3️⃣ Активируем микрофон (с защитой от повторной активации)
+                                               # ПОСЛЕ ПРЕРЫВАНИЯ: не активируем микрофон автоматически, ждём удержания пробела
             try:
-                # Захватываем экран
-                self._capture_screen()
-                logger.info("   ✅ Экран захвачен")
-                
-                # 🚨 ЗАЩИТА: проверяем, не активирован ли уже микрофон
-                if self.state != AppState.LISTENING:
-                    # АВТОМАТИЧЕСКИ активируем микрофон после прерывания!
-                    logger.info("   🎤 АВТОМАТИЧЕСКАЯ активация микрофона после прерывания...")
-                    
-                    # Переходим в LISTENING и активируем микрофон
-                    self.set_state(AppState.LISTENING)
-                    self.stt_recognizer.start_recording()
-                    logger.info("   ✅ Микрофон активирован автоматически после прерывания")
-                    
-                    self.console.print("[bold green]✅ Микрофон активирован автоматически![/bold green]")
-                    self.console.print("[bold green]🎤 Слушаю команду...[/bold green]")
-                else:
-                    # Микрофон уже активен - не дублируем активацию
-                    logger.info("   ℹ️ Микрофон уже активен (LISTENING) - дублирование активации предотвращено")
-                    self.console.print("[blue]ℹ️ Микрофон уже активен - дублирование предотвращено[/blue]")
-                
+                # Чистим экран/ресурсы при необходимости
+                pass
             except Exception as e:
                 logger.error(f"   ❌ Ошибка обработки прерывания: {e}")
-                self.console.print(f"[red]❌ Ошибка обработки прерывания: {e}[/red]")
-                
-                # В случае ошибки переходим в SLEEPING
                 self.set_state(AppState.SLEEPING)
-                logger.info("   🔄 Переход в SLEEPING после ошибки")
             
             # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
             if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
@@ -351,50 +528,27 @@ class StateManager:
                 logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler после прерывания записи")
                 
         elif current_state == AppState.SLEEPING:
-            # Ассистент спит → прерываем и автоматически активируем микрофон!
-            logger.info(f"   🌙 Ассистент спит - прерываю и активирую микрофон (состояние: {current_state.name})")
-            self.console.print("[blue]🌙 Ассистент спит - прерываю и активирую микрофон[/blue]")
+            # Ассистент спит → при прерывании ничего не активируем автоматически
+            logger.info(f"   🌙 Ассистент спит - обрабатываю прерывание без автоактивации (состояние: {current_state.name})")
+            self.console.print("[blue]🌙 Ассистент спит - никаких действий, ждём нажатия для записи[/blue]")
             
-            # 🚨 ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНЫЙ МЕТОД ДЛЯ ОЧИСТКИ!
-            success = self.force_stop_everything()
-            
-            if success:
-                logger.info("   ✅ Универсальная очистка успешна")
-                self.console.print("[bold green]✅ ВСЕ ОЧИЩЕНО![/bold green]")
-            else:
-                logger.warning("   ⚠️ Универсальная очистка неполная")
-                self.console.print("[yellow]⚠️ Очистка неполная[/yellow]")
-            
-            # АВТОМАТИЧЕСКИ активируем микрофон
+            # Чистим ресурсы, но микрофон не включаем
             try:
-                # Захватываем экран
-                self._capture_screen()
-                logger.info("   ✅ Экран захвачен")
-                
-                # Активируем микрофон
-                self.stt_recognizer.start_recording()
-                logger.info("   ✅ Микрофон активирован")
-                
-                # Переходим в LISTENING
-                self.set_state(AppState.LISTENING)
-                logger.info("   🔄 Переход в LISTENING после активации микрофона")
-                
-                self.console.print("[bold green]✅ Микрофон активирован автоматически![/bold green]")
-                self.console.print("[bold green]🎤 Слушаю команду...[/bold green]")
-                self.console.print("[yellow]💡 Удерживайте пробел и говорите команду[/yellow]")
-                
+                success = self.force_stop_everything()
+                if success:
+                    self.console.print("[green]✅ Очистка завершена[/green]")
+                else:
+                    self.console.print("[yellow]⚠️ Очистка неполная[/yellow]")
             except Exception as e:
-                logger.error(f"   ❌ Ошибка автоматической активации микрофона: {e}")
-                self.console.print(f"[red]❌ Ошибка активации микрофона: {e}[/red]")
-                
-                # В случае ошибки переходим в SLEEPING
-                self.set_state(AppState.SLEEPING)
-                logger.info("   🔄 Переход в SLEEPING после ошибки активации микрофона")
+                logger.warning(f"   ⚠️ Ошибка очистки при SLEEPING: {e}")
             
-            # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
+            # Остаёмся в SLEEPING
+            self.set_state(AppState.SLEEPING)
+            
+            # Сбрасываем флаг прерывания
             if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
                 self.input_handler.reset_interrupt_flag()
-                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler (состояние SLEEPING)")
+                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler (SLEEPING)")
         
         # Логируем время выполнения
         end_time = time.time()
@@ -455,7 +609,6 @@ class StateManager:
                 
                 try:
                     # Восстанавливаем соединение
-                    import asyncio
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # Создаем задачу для асинхронного восстановления
@@ -699,7 +852,7 @@ class StateManager:
             self.console.print(f"[blue]✅ _consume_stream завершен, переход в SLEEPING[/blue]")
             self.console.print(f"[green]🌙 Ассистент завершил работу, перешел в режим ожидания[/green]")
     
-
+                      
     
     def _force_stop_grpc_stream(self):
         """ПРИНУДИТЕЛЬНО останавливает gRPC стрим на уровне соединения"""
@@ -1069,11 +1222,21 @@ async def main():
     
     # 1. Сначала инициализируем STT (до gRPC)
     console.print("[blue]🎤 Инициализация STT...[/blue]")
-    stt_recognizer = StreamRecognizer()
+    try:
+        stt_recognizer = StreamRecognizer()
+        console.print("[bold green]✅ STT инициализирован[/bold green]")
+    except Exception as e:
+        console.print(f"[bold red]❌ STT недоступен: {e}[/bold red]")
+        stt_recognizer = None
     
     # 2. Инициализируем захват экрана
     console.print("[blue]📸 Инициализация захвата экрана...[/blue]")
-    screen_capture = ScreenCapture()
+    try:
+        screen_capture = ScreenCapture()
+        console.print("[bold green]✅ Захват экрана инициализирован[/bold green]")
+    except Exception as e:
+        console.print(f"[bold yellow]⚠️ Захват экрана недоступен: {e}[/bold yellow]")
+        screen_capture = None
     
     # 3. Инициализируем аудио плеер
     console.print("[blue]🔊 Инициализация аудио плеера...[/blue]")
@@ -1146,8 +1309,12 @@ async def main():
     hardware_info = get_hardware_info()
     
     console.print(f"[bold green]✅ Hardware ID получен: {hardware_id[:16]}...[/bold green]")
-    console.print(f"[blue]📱 UUID: {hardware_info['hardware_uuid'][:16]}...[/blue]")
-    console.print(f"[blue]🔢 Serial: {hardware_info['serial_number']}[/blue]")
+    uuid = hardware_info.get('hardware_uuid')
+    serial = hardware_info.get('serial_number')
+    uuid_preview = f"{uuid[:16]}..." if isinstance(uuid, str) and uuid else "недоступен"
+    serial_text = serial if isinstance(serial, str) and serial else "недоступен"
+    console.print(f"[blue]📱 UUID: {uuid_preview}[/blue]")
+    console.print(f"[blue]🔢 Serial: {serial_text}[/blue]")
     
     # Показываем информацию о кэше
     from utils.hardware_id import get_cache_info
@@ -1179,9 +1346,30 @@ async def main():
     screen_info = screen_capture.get_screen_info()
     console.print(f"[bold blue]📱 Экран: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
     
+    # Создаём и запускаем иконку в меню-баре (helper-процесс)
+    tray = None
+    try:
+        # Запускаем helper через отдельный процесс rumps
+        status_file = str(_get_status_file_path())
+        main_pid = os.getpid()
+        is_frozen = getattr(sys, 'frozen', False)
+        if is_frozen:
+            # Запущено из PyInstaller .app → можно вызвать тот же бинарник с флагом
+            helper_cmd = [sys.executable, "--tray-helper", "--status-file", status_file, "--pid", str(main_pid)]
+        else:
+            # Запуск из исходников → вызываем python main.py --tray-helper ...
+            helper_cmd = [sys.executable, str(Path(__file__).resolve()), "--tray-helper", "--status-file", status_file, "--pid", str(main_pid)]
+        try:
+            subprocess.Popen(helper_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    
     # Создаем StateManager
-    state_manager = StateManager(console, audio_player, stt_recognizer, screen_capture, grpc_client, hardware_id, input_handler)
+    state_manager = StateManager(console, audio_player, stt_recognizer, screen_capture, grpc_client, hardware_id, input_handler, tray_controller=tray)
     state_manager.current_screen_info = screen_info
+    state_manager._write_tray_status_file(state_manager.state.name)
     
     # КРИТИЧНО: передаем hardware_id в grpc_client для прерывания на сервере
     grpc_client.hardware_id = hardware_id
@@ -1195,6 +1383,19 @@ async def main():
         
     console.print("[bold green]✅ Подключено к серверу[/bold green]")
     
+    # 🔹 Автоприветствие при запуске (через общий поток с маркером)
+    try:
+        greeting_text = "Hi! Nexy is here. How can I help you?"
+        greeting_generator = grpc_client.stream_audio(
+            f"__GREETING__:{greeting_text}",
+            "",  # без скриншота
+            state_manager.current_screen_info,
+            hardware_id
+        )
+        asyncio.create_task(state_manager._consume_stream(greeting_generator))
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Не удалось воспроизвести приветствие: {e}[/yellow]")
+    
     # Показываем справку по управлению
     console.print("[bold green]✅ Ассистент готов![/bold green]")
     console.print("[yellow]📋 Управление (3 состояния):[/yellow]")
@@ -1207,9 +1408,28 @@ async def main():
     console.print("[yellow]    - IN_PROCESS: работает (обрабатывает/говорит)[/yellow]")
     console.print("[yellow]  • При активации автоматически захватывается экран[/yellow]")
     console.print("[yellow]  • Hardware ID отправляется с каждой командой[/yellow]")
+    console.print("[blue]🌐 Автопереключение серверов:[/blue]")
+    console.print("[blue]  • Локальный сервер (127.0.0.1:50051) - приоритет 1[/blue]")
+    console.print("[blue]  • Продакшн сервер (20.151.51.172:50051) - fallback[/blue]")
+    console.print("[blue]  • Автоматическое переподключение при ошибках[/blue]")
+    console.print("[blue]  • Мониторинг соединения каждые 30 секунд[/blue]")
 
     # Основной цикл обработки событий
     console.print("🔄 Запуск основного цикла обработки событий...")
+    
+    # Запускаем фоновую задачу для проверки состояния соединения
+    async def connection_monitor():
+        """Мониторинг состояния gRPC соединения"""
+        while True:
+            try:
+                await asyncio.sleep(30)  # Проверяем каждые 30 секунд
+                if hasattr(grpc_client, 'check_connection_health'):
+                    await grpc_client.check_connection_health()
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка в мониторинге соединения: {e}")
+    
+    # Запускаем мониторинг соединения в фоне
+    connection_monitor_task = asyncio.create_task(connection_monitor())
     
     try:
         while True:
@@ -1273,14 +1493,37 @@ async def main():
     except Exception as e:
         console.print(f"[bold red]❌ Критическая ошибка: {e}[/bold red]")
     finally:
+        # Отменяем задачу мониторинга соединения
+        if 'connection_monitor_task' in locals():
+            connection_monitor_task.cancel()
+            try:
+                await connection_monitor_task
+            except asyncio.CancelledError:
+                pass
+        
         state_manager.cleanup()
         if audio_player.is_playing:
             audio_player.stop_playback()
         logger.info("Клиент завершил работу.")
 
 if __name__ == "__main__":
+    # Режим helper-процесса для меню-бара
+    try:
+        _run_tray_helper_if_requested()
+    except Exception:
+        pass
+
+    # Жёсткая блокировка единственного экземпляра
+    if not acquire_single_instance_lock():
+        try:
+            console.print("[bold yellow]ℹ️ Nexy уже запущен — второй экземпляр не будет стартовать[/bold yellow]")
+        except Exception:
+            pass
+        sys.exit(0)
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
 
+                 

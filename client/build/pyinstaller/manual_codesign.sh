@@ -81,7 +81,11 @@ if [ ! -f "$MAIN_EXECUTABLE" ]; then
 fi
 
 print_info "Signing main executable..."
-codesign --force --sign "$DEVELOPER_ID" --entitlements "$ENTITLEMENTS_FILE" "$MAIN_EXECUTABLE"
+codesign --force --sign "$DEVELOPER_ID" \
+    --entitlements "$ENTITLEMENTS_FILE" \
+    --options runtime \
+    --timestamp \
+    "$MAIN_EXECUTABLE"
 
 if [ $? -eq 0 ]; then
     print_success "Main executable signed successfully"
@@ -97,7 +101,11 @@ print_info "Finding all libraries to sign..."
 find "$APP_PATH/Contents" -name "*.dylib" -o -name "*.so" -o -name "*.framework" | while read -r file; do
     if [ -f "$file" ]; then
         print_info "Signing: $(basename "$file")"
-        codesign --force --sign "$DEVELOPER_ID" --entitlements "$ENTITLEMENTS_FILE" "$file" 2>/dev/null || true
+        codesign --force --sign "$DEVELOPER_ID" \
+            --entitlements "$ENTITLEMENTS_FILE" \
+            --options runtime \
+            --timestamp \
+            "$file" 2>/dev/null || true
     fi
 done
 
@@ -107,7 +115,11 @@ print_success "Libraries signing completed"
 print_header "STEP 3: SIGNING APPLICATION BUNDLE"
 
 print_info "Signing entire application bundle..."
-codesign --force --deep --sign "$DEVELOPER_ID" --entitlements "$ENTITLEMENTS_FILE" "$APP_PATH"
+codesign --force --deep --sign "$DEVELOPER_ID" \
+    --entitlements "$ENTITLEMENTS_FILE" \
+    --options runtime \
+    --timestamp \
+    "$APP_PATH"
 
 if [ $? -eq 0 ]; then
     print_success "Application bundle signed successfully"

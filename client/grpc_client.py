@@ -39,34 +39,127 @@ class GrpcClient:
         # Загружаем конфигурацию
         config = load_config()
         
+        # Инициализируем настройки серверов
+        self.servers = {
+            'local': None,
+            'production': None
+        }
+        self.current_server = None
+        self.auto_fallback = True
+        
         if server_address:
+            # Прямой адрес передан
             self.server_address = server_address
+            self.use_ssl = False
+            self.servers['direct'] = {
+                'address': server_address,
+                'use_ssl': False,
+                'timeout': 30,
+                'retry_attempts': 3,
+                'retry_delay': 1
+            }
+            self.current_server = 'direct'
         elif config and 'grpc' in config:
-            # Используем конфигурацию из файла
-            host = config['grpc']['server_host']
-            port = config['grpc']['server_port']
-            use_ssl = config['grpc'].get('use_ssl', False)
+            # Загружаем конфигурацию серверов
+            grpc_config = config['grpc']
             
-            if use_ssl:
-                self.server_address = f"{host}:{port}"
-                self.use_ssl = True
-            else:
-                self.server_address = f"{host}:{port}"
-                self.use_ssl = False
+            # Локальный сервер
+            if 'local' in grpc_config:
+                local_config = grpc_config['local']
+                self.servers['local'] = {
+                    'address': f"{local_config['server_host']}:{local_config['server_port']}",
+                    'use_ssl': local_config.get('use_ssl', False),
+                    'timeout': local_config.get('timeout', 10),
+                    'retry_attempts': local_config.get('retry_attempts', 2),
+                    'retry_delay': local_config.get('retry_delay', 0.5)
+                }
+            
+            # Продакшн сервер
+            if 'production' in grpc_config:
+                prod_config = grpc_config['production']
+                self.servers['production'] = {
+                    'address': f"{prod_config['server_host']}:{prod_config['server_port']}",
+                    'use_ssl': prod_config.get('use_ssl', False),
+                    'timeout': prod_config.get('timeout', 30),
+                    'retry_attempts': prod_config.get('retry_attempts', 3),
+                    'retry_delay': prod_config.get('retry_delay', 1)
+                }
+            
+            # Общие настройки
+            self.auto_fallback = grpc_config.get('auto_fallback', True)
+            
+            # По умолчанию начинаем с ПРОДАКШН сервера (а не локального)
+            if self.servers['production']:
+                self.current_server = 'production'
+                self.server_address = self.servers['production']['address']
+                self.use_ssl = self.servers['production']['use_ssl']
+            elif self.servers['local']:
+                self.current_server = 'local'
+                self.server_address = self.servers['local']['address']
+                self.use_ssl = self.servers['local']['use_ssl']
         else:
             # Fallback на localhost
             self.server_address = "localhost:50051"
             self.use_ssl = False
+            self.servers['fallback'] = {
+                'address': "localhost:50051",
+                'use_ssl': False,
+                'timeout': 10,
+                'retry_attempts': 2,
+                'retry_delay': 0.5
+            }
+            self.current_server = 'fallback'
             
         self.audio_player = AudioPlayer(sample_rate=48000)
         self.channel = None
         self.stub = None
         self.hardware_id = None
         
-        console.print(f"[blue]🌐 Сервер: {self.server_address} (SSL: {self.use_ssl})[/blue]")
+        # Показываем информацию о доступных серверах
+        console.print(f"[blue]🌐 Доступные серверы:[/blue]")
+        for server_name, server_config in self.servers.items():
+            if server_config:
+                status = "✅ Текущий" if server_name == self.current_server else "⏳ Доступен"
+                console.print(f"[blue]  • {server_name}: {server_config['address']} {status}[/blue]")
+        
+        console.print(f"[blue]🔄 Автопереключение: {'Включено' if self.auto_fallback else 'Отключено'}[/blue]")
     
     async def connect(self):
-        """Подключение к gRPC серверу"""
+        """Подключение к gRPC серверу с автоматическим fallback"""
+        return await self._try_connect_with_fallback()
+    
+    async def _try_connect_with_fallback(self):
+        """Пытается подключиться к серверам с автоматическим fallback"""
+        # Сначала пробуем текущий сервер
+        if await self._try_connect_to_server(self.current_server):
+            return True
+        
+        # Если не получилось и включен auto_fallback, пробуем другие серверы
+        if self.auto_fallback:
+            console.print(f"[yellow]🔄 Автопереключение: текущий сервер недоступен, пробую другие...[/yellow]")
+            
+            # Пробуем подключиться к другим доступным серверам
+            for server_name, server_config in self.servers.items():
+                if server_name != self.current_server and server_config:
+                    console.print(f"[blue]🔄 Пробую подключиться к {server_name}: {server_config['address']}[/blue]")
+                    
+                    if await self._try_connect_to_server(server_name):
+                        console.print(f"[bold green]✅ Автопереключение: подключился к {server_name}[/bold green]")
+                        return True
+            
+            console.print(f"[bold red]❌ Не удалось подключиться ни к одному серверу[/bold red]")
+            return False
+        else:
+            console.print(f"[bold red]❌ Подключение не удалось, автопереключение отключено[/bold red]")
+            return False
+    
+    async def _try_connect_to_server(self, server_name):
+        """Пытается подключиться к конкретному серверу"""
+        if server_name not in self.servers or not self.servers[server_name]:
+            return False
+        
+        server_config = self.servers[server_name]
+        
         try:
             # Настройки для больших сообщений (аудио + скриншоты)
             options = [
@@ -75,27 +168,82 @@ class GrpcClient:
                 ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
             ]
             
-            if self.use_ssl:
+            # Закрываем предыдущее соединение если есть
+            if self.channel:
+                try:
+                    await self.channel.close()
+                except:
+                    pass
+            
+            if server_config['use_ssl']:
                 # Для Azure Container Apps используем SSL
-                self.channel = grpc.aio.secure_channel(self.server_address, grpc.ssl_channel_credentials(), options=options)
+                self.channel = grpc.aio.secure_channel(server_config['address'], grpc.ssl_channel_credentials(), options=options)
             else:
                 # Для локального тестирования без SSL
-                self.channel = grpc.aio.insecure_channel(self.server_address, options=options)
+                self.channel = grpc.aio.insecure_channel(server_config['address'], options=options)
                 
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
-            console.print(f"[bold green]✅ Подключение к gRPC серверу {self.server_address} установлено[/bold green]")
+            # Ждем готовности канала с таймаутом; если не готов — считаем, что сервер недоступен
+            import asyncio as _asyncio
+            try:
+                await _asyncio.wait_for(self.channel.channel_ready(), timeout=server_config.get('timeout', 10))
+            except Exception:
+                console.print(f"[yellow]⚠️ Сервер {server_config['address']} не готов в течение таймаута[/yellow]")
+                return False
+
+            # Обновляем текущий сервер
+            self.current_server = server_name
+            self.server_address = server_config['address']
+            self.use_ssl = server_config['use_ssl']
+            
+            console.print(f"[bold green]✅ Подключение к gRPC серверу {server_config['address']} установлено[/bold green]")
             console.print(f"[blue]📏 Максимальный размер сообщения: 50MB[/blue]")
-            console.print(f"[blue]🔒 SSL: {'Включен' if self.use_ssl else 'Отключен'}[/blue]")
+            console.print(f"[blue]🔒 SSL: {'Включен' if server_config['use_ssl'] else 'Отключен'}[/blue]")
+            console.print(f"[blue]🏷️ Сервер: {server_name}[/blue]")
             return True
             
         except Exception as e:
-            console.print(f"[bold red]❌ Ошибка подключения к серверу: {e}[/bold red]")
+            console.print(f"[red]❌ Ошибка подключения к {server_name} ({server_config['address']}): {e}[/red]")
             return False
     
     def connect_sync(self):
         """Синхронное подключение к gRPC серверу (для восстановления соединения)"""
         try:
+            # Пытаемся подключиться к текущему серверу
+            if self._try_connect_sync_to_server(self.current_server):
+                return True
+            
+            # Если не получилось и включен auto_fallback, пробуем другие серверы
+            if self.auto_fallback:
+                console.print(f"[yellow]🔄 Синхронное автопереключение: текущий сервер недоступен, пробую другие...[/yellow]")
+                
+                for server_name, server_config in self.servers.items():
+                    if server_name != self.current_server and server_config:
+                        console.print(f"[blue]🔄 Пробую синхронно подключиться к {server_name}: {server_config['address']}[/blue]")
+                        
+                        if self._try_connect_sync_to_server(server_name):
+                            console.print(f"[bold green]✅ Синхронное автопереключение: подключился к {server_name}[/bold green]")
+                            return True
+                
+                console.print(f"[bold red]❌ Не удалось синхронно подключиться ни к одному серверу[/bold red]")
+                return False
+            else:
+                console.print(f"[bold red]❌ Синхронное подключение не удалось, автопереключение отключено[/bold red]")
+                return False
+                
+        except Exception as e:
+            console.print(f"[bold red]❌ Ошибка синхронного подключения: {e}[/bold red]")
+            return False
+    
+    def _try_connect_sync_to_server(self, server_name):
+        """Синхронно пытается подключиться к конкретному серверу"""
+        if server_name not in self.servers or not self.servers[server_name]:
+            return False
+        
+        server_config = self.servers[server_name]
+        
+        try:
             # Настройки для больших сообщений (аудио + скриншоты)
             options = [
                 ('grpc.max_send_message_length', 50 * 1024 * 1024),  # 50MB
@@ -103,18 +251,124 @@ class GrpcClient:
                 ('grpc.max_metadata_size', 1024 * 1024),  # 1MB для метаданных
             ]
             
+            # Закрываем предыдущее соединение если есть
+            if self.channel:
+                try:
+                    self.channel.close()
+                except:
+                    pass
+            
             # Создаем синхронный канал для восстановления с увеличенными лимитами
             import grpc
-            self.channel = grpc.insecure_channel(self.server_address, options=options)
+            self.channel = grpc.insecure_channel(server_config['address'], options=options)
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
-            console.print(f"[bold green]✅ Синхронное подключение к gRPC серверу {self.server_address} восстановлено[/bold green]")
+            # Обновляем текущий сервер
+            self.current_server = server_name
+            self.server_address = server_config['address']
+            self.use_ssl = server_config['use_ssl']
+            
+            console.print(f"[bold green]✅ Синхронное подключение к gRPC серверу {server_config['address']} восстановлено[/bold green]")
             console.print(f"[blue]📏 Максимальный размер сообщения: 50MB[/blue]")
+            console.print(f"[blue]🏷️ Сервер: {server_name}[/blue]")
             return True
             
         except Exception as e:
-            console.print(f"[bold red]❌ Ошибка синхронного подключения к серверу: {e}[/bold red]")
+            console.print(f"[red]❌ Ошибка синхронного подключения к {server_name} ({server_config['address']}): {e}[/red]")
             return False
+    
+    def switch_to_server(self, server_name):
+        """Принудительно переключается на указанный сервер"""
+        if server_name not in self.servers or not self.servers[server_name]:
+            console.print(f"[red]❌ Сервер {server_name} недоступен[/red]")
+            return False
+        
+        console.print(f"[blue]🔄 Принудительное переключение на сервер {server_name}...[/blue]")
+        
+        # Закрываем текущее соединение
+        if self.channel:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.channel.close())
+                else:
+                    self.channel.close()
+            except:
+                pass
+        
+        # Переключаемся на новый сервер
+        self.current_server = server_name
+        server_config = self.servers[server_name]
+        self.server_address = server_config['address']
+        self.use_ssl = server_config['use_ssl']
+        
+        console.print(f"[bold green]✅ Переключение на сервер {server_name}: {server_config['address']}[/bold green]")
+        return True
+    
+    def get_current_server_info(self):
+        """Возвращает информацию о текущем сервере"""
+        if self.current_server and self.current_server in self.servers:
+            server_config = self.servers[self.current_server]
+            return {
+                'name': self.current_server,
+                'address': server_config['address'],
+                'use_ssl': server_config['use_ssl'],
+                'is_connected': self.channel is not None and self.stub is not None
+            }
+        return None
+    
+    async def check_connection_health(self):
+        """Проверяет состояние соединения и автоматически восстанавливает при необходимости"""
+        if not self.channel or not self.stub:
+            console.print(f"[yellow]⚠️ Соединение разорвано, пытаюсь восстановить...[/yellow]")
+            return await self._try_connect_with_fallback()
+        
+        try:
+            # Простая проверка соединения через ping
+            import asyncio
+            await asyncio.wait_for(self._ping_server(), timeout=2.0)
+            return True
+        except asyncio.TimeoutError:
+            console.print(f"[yellow]⚠️ Таймаут проверки соединения, переподключаюсь...[/yellow]")
+            return await self._try_connect_with_fallback()
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Ошибка проверки соединения: {e}, переподключаюсь...[/yellow]")
+            return await self._try_connect_with_fallback()
+    
+    async def _ping_server(self):
+        """Простая проверка доступности сервера"""
+        try:
+            # Создаем простой запрос для проверки
+            request = streaming_pb2.StreamRequest(
+                prompt="__GREETING__:ping",
+                screenshot="",
+                screen_width=0,
+                screen_height=0,
+                hardware_id=self.hardware_id or "ping_test"
+            )
+            
+            # Пытаемся отправить запрос с коротким таймаутом
+            call = self.stub.StreamAudio(request)
+            await asyncio.wait_for(call.__anext__(), timeout=1.0)
+            call.cancel()
+            return True
+        except Exception:
+            return False
+    
+    def get_servers_status(self):
+        """Возвращает статус всех доступных серверов"""
+        status = {}
+        for server_name, server_config in self.servers.items():
+            if server_config:
+                status[server_name] = {
+                    'address': server_config['address'],
+                    'use_ssl': server_config['use_ssl'],
+                    'is_current': server_name == self.current_server,
+                    'is_connected': (server_name == self.current_server and 
+                                   self.channel is not None and self.stub is not None)
+                }
+        return status
     
     async def disconnect(self):
         """Отключение от сервера"""
@@ -671,8 +925,17 @@ class GrpcClient:
         except grpc.aio.AioRpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
                 console.print("[bold yellow]⚠️ Стриминг отменен клиентом[/bold yellow]")
+            elif e.code() == grpc.StatusCode.UNAVAILABLE:
+                console.print(f"[bold red]❌ Сервер недоступен: {e.details()}[/bold red]")
+                # Пытаемся автоматически переподключиться к другому серверу
+                if self.auto_fallback:
+                    console.print(f"[yellow]🔄 Автоматическое переподключение при ошибке UNAVAILABLE...[/yellow]")
+                    if await self._try_connect_with_fallback():
+                        console.print(f"[bold green]✅ Автопереподключение успешно![/bold green]")
+                    else:
+                        console.print(f"[bold red]❌ Автопереподключение не удалось[/bold red]")
             else:
-                console.print(f"[bold red]❌ gRPC ошибка: {e.details()}[/bold red]")
+                console.print(f"[bold red]❌ gRPC ошибка: {e.details()} (код: {e.code()})[/bold red]")
         except Exception as e:
             console.print(f"[bold red]❌ Произошла непредвиденная ошибка в стриминге: {e}[/bold red]")
             console.print(f"[bold red]❌ Тип ошибки: {type(e).__name__}[/bold red]")

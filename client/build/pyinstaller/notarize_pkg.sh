@@ -97,34 +97,122 @@ print_info "Apple ID: $APPLE_ID"
 print_header "STEP 1: SUBMITTING FOR NOTARIZATION"
 
 print_info "Submitting PKG for notarization..."
-print_warning "This process may take 5-15 minutes..."
+print_warning "This process may take 2-5 minutes..."
 
-SUBMISSION_ID=$(xcrun notarytool submit "$PKG_PATH" \
+print_info "📤 Starting upload to Apple servers..."
+print_info "📊 File size: $(du -sh "$PKG_PATH" | cut -f1)"
+
+# Use JSON output to reliably parse submission id and status
+print_info "🔄 Uploading PKG (this may take several minutes)..."
+SUBMISSION_JSON=$(xcrun notarytool submit "$PKG_PATH" \
     --keychain-profile "nexy-profile" \
     --team-id "5NKLL2CLB9" \
-    --wait)
+    --progress \
+    --output-format json 2>&1)
 
-if [ $? -eq 0 ]; then
-    print_success "Notarization completed successfully!"
-    print_info "Submission ID: $SUBMISSION_ID"
-else
-    print_error "Notarization failed"
+UPLOAD_EXIT_CODE=$?
+
+if [ $UPLOAD_EXIT_CODE -ne 0 ]; then
+    print_error "❌ Notarization submit command failed (exit code: $UPLOAD_EXIT_CODE)"
+    echo "Raw output:"
+    echo "$SUBMISSION_JSON"
     exit 1
 fi
 
-# Step 2: Verify notarization
-print_header "STEP 2: VERIFYING NOTARIZATION"
+print_success "✅ Upload completed successfully!"
 
-print_info "Verifying notarization status..."
+# Extract id and status from JSON using Python (jq might not be available)
+SUBMISSION_ID=$(echo "$SUBMISSION_JSON" | /usr/bin/python3 -c 'import sys,json; print(json.load(sys.stdin).get("id",""))')
 
-xcrun notarytool info "$SUBMISSION_ID" \
-    --keychain-profile "nexy-profile" \
-    --team-id "5NKLL2CLB9"
+print_info "Submission ID: $SUBMISSION_ID"
 
-if [ $? -eq 0 ]; then
-    print_success "Notarization verification passed"
-else
-    print_error "Notarization verification failed"
+if [ -z "$SUBMISSION_ID" ]; then
+    print_error "Failed to parse submission ID"
+    echo "Raw JSON response:"
+    echo "$SUBMISSION_JSON"
+    exit 1
+fi
+
+print_success "✅ PKG submitted successfully!"
+print_info "Submission ID: $SUBMISSION_ID"
+print_info "⏳ Waiting for Apple to start processing..."
+
+# Wait a bit for processing to start
+sleep 10
+
+# Step 2: Check notarization status
+print_header "STEP 2: CHECKING NOTARIZATION STATUS"
+
+print_info "🔍 Checking notarization status..."
+print_info "📋 This will check status every 30 seconds..."
+
+# Check status multiple times with progress
+for i in {1..20}; do
+    print_info "📊 Check attempt $i/20..."
+    print_info "⏰ Time: $(date '+%H:%M:%S')"
+    
+    print_info "🔄 Querying Apple servers for status..."
+    STATUS_JSON=$(xcrun notarytool info "$SUBMISSION_ID" \
+        --keychain-profile "nexy-profile" \
+        --team-id "5NKLL2CLB9" \
+        --output-format json 2>&1)
+    
+    STATUS_EXIT_CODE=$?
+    
+    if [ $STATUS_EXIT_CODE -eq 0 ]; then
+        SUBMISSION_STATUS=$(echo "$STATUS_JSON" | /usr/bin/python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))')
+        
+        print_info "📈 Current status: $SUBMISSION_STATUS"
+        
+        if [ "$SUBMISSION_STATUS" = "Accepted" ]; then
+            print_success "🎉 Notarization completed successfully!"
+            print_info "✅ Status: ACCEPTED"
+            print_info "🎯 Apple has approved your PKG for distribution"
+            break
+        elif [ "$SUBMISSION_STATUS" = "Invalid" ]; then
+            print_error "❌ Notarization failed with status: $SUBMISSION_STATUS"
+            print_info "📋 Fetching detailed error log..."
+            print_info "🔍 This will show exactly what Apple rejected..."
+            
+            xcrun notarytool log "$SUBMISSION_ID" \
+                --keychain-profile "nexy-profile" \
+                --team-id "5NKLL2CLB9"
+            exit 1
+        elif [ "$SUBMISSION_STATUS" = "In Progress" ]; then
+            print_info "⏳ Still processing... waiting 30 seconds"
+            print_info "💡 Apple is scanning your PKG for security issues..."
+            sleep 30
+        elif [ "$SUBMISSION_STATUS" = "Processing" ]; then
+            print_info "⚙️ Processing... waiting 30 seconds"
+            print_info "🔒 Apple is validating signatures and entitlements..."
+            sleep 30
+        else
+            print_info "📊 Status: $SUBMISSION_STATUS - waiting 30 seconds"
+            print_info "⏰ Next check in 30 seconds..."
+            sleep 30
+        fi
+    else
+        print_warning "⚠️ Failed to check status (attempt $i), retrying in 30 seconds..."
+        print_info "🔍 Exit code: $STATUS_EXIT_CODE"
+        print_info "📋 Raw response: $STATUS_JSON"
+        sleep 30
+    fi
+    
+    # Show progress bar
+    PROGRESS=$((i * 5))
+    if [ $PROGRESS -gt 100 ]; then PROGRESS=100; fi
+    print_info "📊 Progress: $PROGRESS% complete"
+done
+
+# Final status check
+if [ "$SUBMISSION_STATUS" != "Accepted" ]; then
+    print_error "❌ Notarization did not complete successfully after 20 attempts"
+    print_info "📊 Final status: $SUBMISSION_STATUS"
+    print_info "⏰ Total time elapsed: ~10 minutes"
+    print_info "💡 You can check manually later with:"
+    echo "   xcrun notarytool info $SUBMISSION_ID --keychain-profile nexy-profile --team-id 5NKLL2CLB9"
+    print_info "📋 Or fetch the detailed log with:"
+    echo "   xcrun notarytool log $SUBMISSION_ID --keychain-profile nexy-profile --team-id 5NKLL2CLB9"
     exit 1
 fi
 

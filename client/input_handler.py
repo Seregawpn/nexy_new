@@ -2,6 +2,7 @@ import asyncio
 import time
 from pynput import keyboard
 from threading import Thread
+from threading import Timer
 from rich.console import Console
 
 console = Console()
@@ -21,6 +22,7 @@ class InputHandler:
         self.last_event_time = 0
         self.event_cooldown = 0.1
         self.recording_started = False
+        self._start_timer = None
         
         # Флаг для отслеживания состояния прерывания
         self.interrupting = False
@@ -50,29 +52,57 @@ class InputHandler:
             self.space_pressed = True
             self.press_time = current_time
             self.last_event_time = current_time
+            self.recording_started = False
+            
+            # На всякий случай отменяем предыдущий таймер, если он ещё активен
+            try:
+                if self._start_timer and self._start_timer.is_alive():
+                    self._start_timer.cancel()
+            except Exception:
+                pass
             
             # 1. УСТАНАВЛИВАЕМ ФЛАГ ПРЕРЫВАНИЯ
             self.interrupting = True
             console.print(f"[bold red]🔇 ПРОБЕЛ НАЖАТ - МГНОВЕННОЕ ПРЕРЫВАНИЕ РЕЧИ! (время: {current_time:.3f})[/bold red]")
             console.print(f"[dim]🔍 Флаг interrupting установлен: {self.interrupting}[/dim]")
             
-            # 2. ОТПРАВЛЯЕМ ТОЛЬКО ПРЕРЫВАНИЕ - микрофон активируется автоматически!
+            # 2. СНАЧАЛА: немедленное прерывание текущей речи/стрима
             self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
             console.print(f"[dim]📤 Событие interrupt_or_cancel отправлено в очередь[/dim]")
-            
-            # 🚨 УБИРАЕМ start_recording - микрофон активируется автоматически в handle_interrupt_or_cancel!
-            console.print(f"[dim]🎤 Микрофон будет активирован АВТОМАТИЧЕСКИ после прерывания![/dim]")
+
+            # 3. ЗАПУСК ЗАПИСИ ТОЛЬКО при удержании дольше порога
+            def start_if_still_pressed():
+                try:
+                    if self.space_pressed and not self.recording_started:
+                        self.recording_started = True
+                        self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
+                        console.print(f"[dim]📤 Порог удержания пройден → start_recording отправлен[/dim]")
+                except Exception:
+                    pass
+
+            try:
+                self._start_timer = Timer(self.short_press_threshold, start_if_still_pressed)
+                self._start_timer.daemon = True
+                self._start_timer.start()
+            except Exception:
+                self._start_timer = None
 
     def on_release(self, key):
         """Обрабатывает отпускание клавиши"""
         if key == keyboard.Key.space and self.space_pressed:
             current_time = time.time()
-            
-            # Проверяем cooldown для предотвращения множественных событий
+
+            # Отменяем таймер старта записи ДО любых других действий
+            try:
+                if self._start_timer and self._start_timer.is_alive():
+                    self._start_timer.cancel()
+            except Exception:
+                pass
+
+            # Не прерываем логику на cooldown — лишь логируем
             if current_time - self.last_event_time < self.event_cooldown:
-                console.print(f"[dim]⏰ Cooldown активен при отпускании: {self.event_cooldown - (current_time - self.last_event_time):.3f}s[/dim]")
-                return
-                
+                console.print(f"[dim]⏰ Cooldown активен при отпускании: {self.event_cooldown - (current_time - self.last_event_time):.3f}s (продолжаю обработку) [/dim]")
+
             # Сбрасываем флаг нажатия
             self.space_pressed = False
             console.print(f"[dim]🔍 Флаг space_pressed сброшен в {current_time:.3f}[/dim]")
@@ -83,19 +113,13 @@ class InputHandler:
             self.last_event_time = current_time
             console.print(f"[dim]📊 Длительность нажатия: {duration:.3f}s[/dim]")
 
-            # 🚨 НОВАЯ ЛОГИКА: при отпускании пробела ВСЕГДА деактивируем микрофон
-            console.print(f"🔇 Пробел отпущен - деактивирую микрофон и возвращаюсь в SLEEPING")
-            
-            # Отправляем событие для деактивации микрофона
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, "deactivate_microphone")
-            console.print(f"[dim]📤 Событие deactivate_microphone отправлено в очередь[/dim]")
-            
-            # Если было длинное нажатие, также отправляем команду на обработку
-            if duration >= self.short_press_threshold:
-                console.print(f"⏹️ Длинное нажатие ({duration:.2f}s) - команда будет обработана")
-                # 🚨 НЕ отправляем stop_recording - команда будет обработана в deactivate_microphone
-                console.print(f"[dim]📤 Команда будет обработана в deactivate_microphone[/dim]")
+            if self.recording_started:
+                # Запись успела стартовать → останавливаем её на отпускании
+                console.print(f"🔇 Пробел отпущен - деактивирую микрофон и возвращаюсь в SLEEPING")
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "deactivate_microphone")
+                console.print(f"[dim]📤 Событие deactivate_microphone отправлено в очередь[/dim]")
             else:
+                # Короткое нажатие → только прерывание, без записи
                 console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - только прерывание")
                 console.print(f"[dim]🔍 Длительность {duration:.3f}s < {self.short_press_threshold}s - короткое нажатие[/dim]")
             
@@ -104,6 +128,10 @@ class InputHandler:
             self.interrupting = False
             console.print(f"[dim]🔍 Флаг interrupting ПОСЛЕ сброса: {self.interrupting}[/dim]")
             console.print("🔄 Готов к новым событиям")
+
+            # Сбрасываем флаги запуска записи
+            self.recording_started = False
+            self._start_timer = None
 
     def reset_interrupt_flag(self):
         """Сбрасывает флаг прерывания - вызывается из StateManager"""
