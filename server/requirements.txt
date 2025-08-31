@@ -27,6 +27,9 @@ Pillow
 # Edge TTS
 edge-tts
 
+# Azure Speech TTS
+azure-cognitiveservices-speech
+
 # База данных
 psycopg2-binary
 

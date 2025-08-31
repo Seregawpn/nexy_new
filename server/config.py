@@ -35,6 +35,12 @@ class Config:
     EDGE_TTS_VOLUME = os.getenv('EDGE_TTS_VOLUME', '+0%')
     
     # =====================================================
+    # AZURE SPEECH TTS
+    # =====================================================
+    SPEECH_KEY = os.getenv('SPEECH_KEY')
+    SPEECH_REGION = os.getenv('SPEECH_REGION')
+    
+    # =====================================================
     # gRPC СЕРВЕР
     # =====================================================
     GRPC_HOST = os.getenv('GRPC_HOST', '0.0.0.0')

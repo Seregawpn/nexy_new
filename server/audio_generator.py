@@ -3,6 +3,10 @@ import os
 import logging
 from typing import Optional, Dict, Any, AsyncGenerator, Union
 import edge_tts
+try:
+    import azure.cognitiveservices.speech as speechsdk  # type: ignore
+except Exception:
+    speechsdk = None
 import numpy as np
 from pydub import AudioSegment
 import io
@@ -25,6 +29,22 @@ class AudioGenerator:
         self.is_generating = False
         self._validate_voice()
         
+        # Флаг и конфигурация Azure Speech (если заданы ключ и регион)
+        self._use_azure = bool(getattr(Config, 'SPEECH_KEY', None) and getattr(Config, 'SPEECH_REGION', None) and speechsdk is not None)
+        if self._use_azure:
+            try:
+                self._azure_speech_config = speechsdk.SpeechConfig(subscription=Config.SPEECH_KEY, region=Config.SPEECH_REGION)
+                # Устанавливаем голос (совместимый с Azure, например en-US-JennyNeural)
+                self._azure_speech_config.speech_synthesis_voice_name = self.voice
+                # Возвращаем PCM 48kHz mono 16-bit для прямой конвертации в numpy
+                self._azure_speech_config.set_speech_synthesis_output_format(
+                    speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm
+                )
+                logger.info("Azure Speech TTS включён")
+            except Exception as azure_init_err:
+                self._use_azure = False
+                logger.error(f"Azure Speech инициализация не удалась, fallback на edge-tts: {azure_init_err}")
+        
     def _validate_voice(self):
         """Проверяет доступность выбранного голоса."""
         logger.info(f"Голос {self.voice} установлен")
@@ -43,6 +63,34 @@ class AudioGenerator:
             self.is_generating = True
             logger.info(f"🎵 Начинаю генерацию аудио для: {text[:50]}...")
             
+            # Вариант 1: Azure Speech (если доступен)
+            if self._use_azure:
+                loop = asyncio.get_running_loop()
+                def _speak_sync() -> bytes:
+                    synthesizer = speechsdk.SpeechSynthesizer(speech_config=self._azure_speech_config, audio_config=None)
+                    result = synthesizer.speak_text_async(text).get()
+                    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                        return result.audio_data or b""
+                    raise RuntimeError(f"Azure Speech синтез не выполнен: {result.reason}")
+                audio_bytes: bytes = await loop.run_in_executor(None, _speak_sync)
+                if not audio_bytes:
+                    logger.error("Azure Speech вернул пустой аудиопоток")
+                    return None
+                samples = np.frombuffer(audio_bytes, dtype=np.int16)
+                # Приводим к целевому sample rate при необходимости
+                if Config.SAMPLE_RATE != 48000:
+                    audio_segment = AudioSegment(
+                        audio_bytes,
+                        frame_rate=48000,
+                        sample_width=2,
+                        channels=1
+                    )
+                    audio_segment = audio_segment.set_frame_rate(Config.SAMPLE_RATE).set_channels(1)
+                    samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
+                logger.info(f"Аудио (Azure) сгенерировано ({len(samples)} сэмплов).")
+                return samples
+
+            # Вариант 2: edge-tts (fallback)
             communicate = edge_tts.Communicate(
                 text, 
                 self.voice,
