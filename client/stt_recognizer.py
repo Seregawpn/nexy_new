@@ -23,6 +23,11 @@ class StreamRecognizer:
         self.is_recording = False
         self.audio_chunks = []
         self.recording_thread = None
+        # Безопасная работа со стримом и слежение за устройством
+        self.stream_lock = threading.Lock()
+        self.current_input_device = None
+        self.device_monitor_thread = None
+        self.stop_device_monitor = threading.Event()
         
         # Инициализируем распознаватель с оптимизированными параметрами
         self.recognizer = sr.Recognizer()
@@ -31,6 +36,22 @@ class StreamRecognizer:
         self.recognizer.pause_threshold = 0.5  # Уменьшаем порог паузы
         self.recognizer.phrase_threshold = 0.3  # Порог фразы
         self.recognizer.non_speaking_duration = 0.3  # Длительность не-речи
+        
+        # Ссылка на аудио плеер (инжектируется извне)
+        self.audio_player = None
+
+    def set_audio_player(self, audio_player):
+        """Устанавливает ссылку на AudioPlayer для координации записи/воспроизведения."""
+        self.audio_player = audio_player
+    
+    def prepare_for_recording(self):
+        """Перед записью: только мягко останавливаем плеер, без ручного переустановления default."""
+        try:
+            ap = getattr(self, 'audio_player', None)
+            if ap and getattr(ap, 'is_playing', False) and hasattr(ap, 'stop_playback'):
+                ap.stop_playback()
+        except Exception:
+            pass
         
     def start_recording(self):
         """Начинает запись аудио при нажатии пробела"""
@@ -43,6 +64,58 @@ class StreamRecognizer:
             
         self.is_recording = True
         self.audio_chunks = []
+        
+        # Диагностика: снимок CoreAudio (default + количество устройств)
+        try:
+            import sounddevice as _sd
+            hostapis = _sd.query_hostapis()
+            core_idx = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+            api = _sd.query_hostapis(core_idx)
+            din = api.get('default_input_device', -1)
+            dout = api.get('default_output_device', -1)
+            devs = _sd.query_devices()
+            devs_count = sum(1 for d in devs if (d.get('max_input_channels',0)>0 or d.get('max_output_channels',0)>0))
+            console.print(f"[dim]🧪 Snapshot @start_recording: din={None if din==-1 else din} dout={None if dout==-1 else dout} devices={devs_count}[/dim]")
+        except Exception:
+            pass
+
+        # Определяем входное устройство: ТОЛЬКО системный default
+        # Учитываем конфигурацию bluetooth_policy и follow_system_default
+        settle_ms = int(getattr(self, 'config', {}).get('settle_ms', 400))
+        retries = int(getattr(self, 'config', {}).get('retries', 3))
+        bt_policy = getattr(self, 'config', {}).get('bluetooth_policy', 'prefer_quality')
+
+        # Если есть listener с кэшем — используем его
+        input_device = None
+        try:
+            ca_listener = getattr(self, 'default_listener', None)
+            if ca_listener is not None and hasattr(ca_listener, 'get_default_input'):
+                input_device = ca_listener.get_default_input()
+        except Exception:
+            input_device = None
+        if input_device is None:
+            input_device = self._resolve_input_device()
+        # Если политика качества и default output = AirPods, форсируем встроенный микрофон
+        if bt_policy == 'prefer_quality':
+            try:
+                default = sd.default.device
+                if isinstance(default, (list, tuple)) and len(default) >= 2:
+                    out_idx = default[1]
+                    if out_idx is not None and out_idx != -1:
+                        info_out = sd.query_devices(out_idx)
+                        name_out = (info_out.get('name') or '').lower()
+                        if 'airpods' in name_out:
+                            # Ищем Built-in Microphone
+                            for idx, dev in enumerate(sd.query_devices()):
+                                if dev.get('max_input_channels', 0) > 0 and 'built-in' in (dev.get('name','').lower()):
+                                    input_device = idx
+                                    break
+            except Exception:
+                pass
+        elif bt_policy == 'strict_default':
+            # Ничего не делаем — всегда берём системный default input (включая AirPods)
+            pass
+        self.current_input_device = input_device
 
         # Callback для буферизации аудио чанков
         def _callback(indata, frames, time_info, status):
@@ -56,17 +129,141 @@ class StreamRecognizer:
                     chunk = indata.copy()[:, 0]
                 self.audio_chunks.append(chunk.astype(np.int16))
 
-        # Открываем аудио поток через sounddevice
-        self.stream = sd.InputStream(
-            channels=self.channels,
-            samplerate=self.sample_rate,
-            dtype=self.dtype,
-            blocksize=self.chunk_size,
-            callback=_callback,
-        )
-        self.stream.start()
+        # Открываем аудио поток через sounddevice с ретраями (на случай BT-переключений)
+        # Предочистка, чтобы CoreAudio корректно применил новый default
+        try:
+            if bool(getattr(self, 'config', {}).get('preflush_on_switch', True)):
+                if self.stream:
+                    try:
+                        self.stream.stop()
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
+                sd.stop()
+                time.sleep(max(0.05, settle_ms/1000.0))
+        except Exception:
+            pass
 
+        # Во время записи запрещаем переключение выходного устройства и останавливаем воспроизведение,
+        # если аудиоплеер доступен у main/state_manager (лениво через import и getattr)
+        try:
+            ap = getattr(self, 'audio_player', None)
+            # СНАЧАЛА только мягко останавливаем воспроизведение (без принудительных переключений устройств)
+            if ap and hasattr(ap, 'is_playing') and ap.is_playing and hasattr(ap, 'stop_playback'):
+                ap.stop_playback()
+        except Exception:
+            pass
+
+        last_err = None
+        # Попробуем сначала с device info и его дефолтной частотой
+        def_sr = None
+        try:
+            if input_device is not None:
+                def_sr = int(round(sd.query_devices(input_device).get('default_samplerate')))
+        except Exception:
+            def_sr = None
+
+        # Формируем список частот с учётом HFP у входного устройства (AirPods и т.п.)
+        sample_rates = []
+        hfp_in = False
+        try:
+            if input_device is not None:
+                in_info = sd.query_devices(input_device)
+                name_l = (in_info.get('name') or '').lower()
+                max_in_ch = int(in_info.get('max_input_channels') or 0)
+                def_sr_in = int(round(in_info.get('default_samplerate') or 0))
+                if any(t in name_l for t in ['airpods', 'hands-free', 'handsfree', 'hfp', 'hsp']) or max_in_ch <= 1 or def_sr_in <= 16000:
+                    hfp_in = True
+        except Exception:
+            pass
+
+        # При HFP сначала пробуем 16000/8000
+        if hfp_in:
+            for sr in [16000, 8000]:
+                if sr not in sample_rates:
+                    sample_rates.append(sr)
+
+        if def_sr and def_sr not in sample_rates:
+            sample_rates.append(def_sr)
+        for sr in [self.sample_rate, 48000, 44100, 32000, 22050, 16000, 12000, 11025, 8000]:
+            if sr not in sample_rates:
+                sample_rates.append(sr)
+
+        # Ещё раз пересчитываем CoreAudio default input прямо перед открытием
+        try:
+            hostapis = sd.query_hostapis()
+            core_idx = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+            api = sd.query_hostapis(core_idx)
+            din = api.get('default_input_device', -1)
+            dout = api.get('default_output_device', -1)
+            if din is not None and din != -1:
+                input_device = din
+            # Диагностика: выбор input
+            try:
+                info_in = sd.query_devices(input_device) if input_device not in (None, -1) else None
+                console.print(f"[blue]🎙️ start_recording: input={info_in['name'] if info_in else 'System Default'} (index={input_device})[/blue]")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        for attempt in range(max(1, retries)):
+            # 1) Пытаемся с указанием девайса
+            for sr in sample_rates:
+                try:
+                    with self.stream_lock:
+                        self.stream = sd.InputStream(
+                            channels=self.channels,
+                            samplerate=sr,
+                            dtype=self.dtype,
+                            blocksize=self.chunk_size,
+                            device=input_device,
+                            callback=_callback,
+                        )
+                        self.stream.start()
+                    last_err = None
+                    self.sample_rate = sr
+                    break
+                except Exception as e:
+                    last_err = e
+            if last_err is None:
+                break
+            # 2) Пробуем без указания устройства (пусть CoreAudio выберет default)
+            for sr in sample_rates:
+                try:
+                    with self.stream_lock:
+                        self.stream = sd.InputStream(
+            channels=self.channels,
+                            samplerate=sr,
+                            dtype=self.dtype,
+                            blocksize=self.chunk_size,
+                            device=None,
+                            callback=_callback,
+                        )
+                        self.stream.start()
+                    last_err = None
+                    self.sample_rate = sr
+                    break
+                except Exception as e:
+                    last_err = e
+            if last_err is None:
+                break
+
+            time.sleep(max(0.1, settle_ms/1000.0))
+            # Переопределяем default input между попытками
+            input_device = self._resolve_input_device()
+
+        if last_err is not None:
+            # Строгий режим: не делаем fallback. Сообщаем об ошибке и завершаем запись
+            self.is_recording = False
+            console.print(f"[red]❌ Не удалось открыть InputStream на системном default: {last_err}[/red]")
+            return
+        
         console.print("[bold green]🎤 Запись началась...[/bold green]")
+        
+        # Больше НЕ мониторим смену входного устройства во время записи
+        # Выбираем default один раз при старте записи
         
     def stop_recording_and_recognize(self):
         """Останавливает запись и распознает речь"""
@@ -75,18 +272,23 @@ class StreamRecognizer:
             
         self.is_recording = False
         
+        # Мониторинг входного устройства не запускаем — ничего останавливать не нужно
+        
         # Останавливаем поток записи
         if self.stream:
             try:
-                self.stream.stop()
-                self.stream.close()
+                with self.stream_lock:
+                    if self.stream:
+                        self.stream.stop()
+                        self.stream.close()
+                        self.stream = None
                 console.print("[blue]🔇 Аудиопоток остановлен и закрыт[/blue]")
             except Exception as e:
                 console.print(f"[yellow]⚠️ Ошибка при остановке аудиопотока: {e}[/yellow]")
-            finally:
-                self.stream = None
             
         console.print("[bold blue]🔍 Распознавание речи...[/bold blue]")
+
+        # После записи ничего не переключаем вручную — выводом управляет событийный listener
         
         if not self.audio_chunks:
             console.print("[yellow]⚠️ Не записано аудио[/yellow]")
@@ -190,6 +392,129 @@ class StreamRecognizer:
     def _record_audio(self):
         """Совместимость: больше не используется (поток не требуется с sounddevice)."""
         pass
+
+    def _resolve_input_device(self):
+        """Возвращает актуальный input: системный default или ближайший резерв (встроенный/любой доступный)."""
+        try:
+            # 1) sd.default.device[0]
+            default = sd.default.device  # (input, output)
+            if isinstance(default, (list, tuple)) and len(default) >= 1:
+                default_in = default[0]
+                if default_in is not None and default_in != -1:
+                    try:
+                        info = sd.query_devices(default_in)
+                        if info.get('max_input_channels', 0) > 0:
+                            console.print(f"[dim]🎙️ Default input (sd.default): {info.get('name')}[/dim]")
+                            return default_in
+                    except Exception:
+                        pass
+
+            # 2) CoreAudio hostapi default input
+            try:
+                hostapis = sd.query_hostapis()
+                core_audio_idx = None
+                for i, api in enumerate(hostapis):
+                    if 'core' in (api.get('name','').lower()):
+                        core_audio_idx = i
+                        break
+                if core_audio_idx is None:
+                    core_audio_idx = 0
+                api = sd.query_hostapis(core_audio_idx)
+                d = api.get('default_input_device', -1)
+                if d is not None and d != -1:
+                    info = sd.query_devices(d)
+                    if info.get('max_input_channels', 0) > 0:
+                        console.print(f"[dim]🎙️ Default input (CoreAudio): {info.get('name')}[/dim]")
+                        return d
+            except Exception:
+                pass
+
+            # 3) Резерв: ищем встроенный микрофон/подходящее устройство
+            try:
+                devices = sd.query_devices()
+                keywords_preferred = ['built-in', 'macbook', 'internal', 'встро', 'микрофон', 'microphone']
+                # Сначала предпочитаем встроенные
+                for idx, dev in enumerate(devices):
+                    try:
+                        if dev.get('max_input_channels', 0) > 0:
+                            name_l = (dev.get('name','') or '').lower()
+                            if any(k in name_l for k in keywords_preferred):
+                                console.print(f"[yellow]⚠️ Default input недоступен — резерв: {dev.get('name')}[/yellow]")
+                                return idx
+                    except Exception:
+                        continue
+                # Затем любое доступное input-устройство
+                for idx, dev in enumerate(devices):
+                    try:
+                        if dev.get('max_input_channels', 0) > 0:
+                            console.print(f"[yellow]⚠️ Использую ближайший доступный input: {dev.get('name')}[/yellow]")
+                            return idx
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            console.print("[yellow]⚠️ Default input не определён — используем системное по умолчанию[/yellow]")
+            return None
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Не удалось определить input: {e} — используем None[/yellow]")
+            return None
+
+    def _monitor_input_device_changes(self):
+        """Следит за изменениями входного устройства и безопасно переключает поток при смене."""
+        try:
+            while self.is_recording and not self.stop_device_monitor.is_set():
+                try:
+                    new_device = self._resolve_input_device()
+                    if new_device != self.current_input_device:
+                        old_device = self.current_input_device
+                        if self._restart_input_stream(new_device):
+                            self.current_input_device = new_device
+                            console.print(f"[blue]🔄 Переключил входное устройство: {old_device} → {new_device}[/blue]")
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+    def _restart_input_stream(self, new_device) -> bool:
+        """Останавливает текущий InputStream и запускает новый с указанным устройством."""
+        try:
+            with self.stream_lock:
+                # Закрываем старый поток, если есть
+                if self.stream:
+                    try:
+                        self.stream.stop()
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
+
+                # Создаем новый поток
+                self.stream = sd.InputStream(
+                    channels=self.channels,
+                    samplerate=self.sample_rate,
+                    dtype=self.dtype,
+                    blocksize=self.chunk_size,
+                    device=new_device,
+                    callback=lambda indata, frames, time_info, status: self._input_callback_proxy(indata, frames, status),
+                )
+                self.stream.start()
+            return True
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Не удалось переключить входное устройство: {e}[/yellow]")
+            return False
+
+    def _input_callback_proxy(self, indata, frames, status):
+        """Callback при перезапуске потока — добавляет чанки аналогично основному callback."""
+        if status:
+            console.print(f"[yellow]⚠️ Sounddevice status: {status}[/yellow]")
+        if self.is_recording:
+            if self.channels == 1:
+                chunk = indata.copy().reshape(-1)
+            else:
+                chunk = indata.copy()[:, 0]
+            self.audio_chunks.append(chunk.astype(np.int16))
             
     def cleanup(self):
         """Очищает ресурсы"""

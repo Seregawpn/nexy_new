@@ -36,5 +36,7 @@ rich
 pynput
 PyYAML            # ← Для чтения конфигурации
 pystray
-pyobjc
+pyobjc-core
+pyobjc-framework-CoreAudio
+pyobjc-framework-CoreFoundation
 rumps

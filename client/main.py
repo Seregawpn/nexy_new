@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import os
+import yaml
 import fcntl
 import atexit
 import subprocess
@@ -21,6 +22,7 @@ from stt_recognizer import StreamRecognizer
 from input_handler import InputHandler
 from grpc_client import GrpcClient
 from screen_capture import ScreenCapture
+from permissions import ensure_permissions
 from utils.hardware_id import get_hardware_id, get_hardware_info
 TrayController = None  # Используем helper-процесс вместо прямого UI в этом процессе
 
@@ -63,6 +65,7 @@ def _run_tray_helper_if_requested():
             super().__init__("Nexy")
             self._current = "SLEEPING"
             self.title = f"{STATUS_EMOJI.get(self._current, '⚪️')} Nexy"
+            self.quit_button = None
             self.menu = [rumps.MenuItem("Quit Nexy", callback=self._on_quit)]
             self._timer = rumps.Timer(self._tick, 0.5)
             self._timer.start()
@@ -223,6 +226,18 @@ class StateManager:
         if self.state == AppState.SLEEPING:
             # Переходим в LISTENING и включаем микрофон
             self.set_state(AppState.LISTENING)
+            # Подготовка устройств: выставляем системные дефолты и переключаем вывод ДО бипа
+            try:
+                if hasattr(self.stt_recognizer, 'prepare_for_recording'):
+                    self.stt_recognizer.prepare_for_recording()
+            except Exception:
+                pass
+            # Подготовка устройств: выставляем системные дефолты и переключаем вывод ДО бипа
+            try:
+                if hasattr(self.stt_recognizer, 'prepare_for_recording'):
+                    self.stt_recognizer.prepare_for_recording()
+            except Exception:
+                pass
             # Сигнал включения микрофона (короткий beep)
             try:
                 if hasattr(self.audio_player, 'play_beep'):
@@ -970,12 +985,19 @@ class StateManager:
     def _capture_screen(self):
         """Захватывает экран"""
         self.console.print("[bold blue]📸 Захватываю экран в JPEG Base64...[/bold blue]")
-        self.current_screenshot = self.screen_capture.capture_screen(quality=80)
-        
-        if self.current_screenshot:
-            self.console.print(f"[bold green]✅ Base64 скриншот захвачен: {len(self.current_screenshot)} символов[/bold green]")
-        else:
-            self.console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
+        try:
+            if not getattr(self, 'screen_capture', None):
+                self.console.print("[bold yellow]⚠️ Захват экрана недоступен[/bold yellow]")
+                self.current_screenshot = None
+                return
+            self.current_screenshot = self.screen_capture.capture_screen(quality=80)
+            if self.current_screenshot:
+                self.console.print(f"[bold green]✅ Base64 скриншот захвачен: {len(self.current_screenshot)} символов[/bold green]")
+            else:
+                self.console.print("[bold yellow]⚠️ Не удалось захватить скриншот[/bold yellow]")
+        except Exception as e:
+            logger.warning(f"   ⚠️ Ошибка захвата экрана: {e}")
+            self.current_screenshot = None
     
     def force_stop_everything(self):
         """🚨 УНИВЕРСАЛЬНЫЙ МЕТОД: мгновенно останавливает ВСЕ при нажатии пробела!"""
@@ -1043,37 +1065,15 @@ class StateManager:
         
         try:
             if hasattr(self, 'audio_player') and self.audio_player:
-                # 1️⃣ Принудительно останавливаем фоновый поток воспроизведения
+                # 1️⃣ Принудительно останавливаем воспроизведение
                 if hasattr(self.audio_player, 'force_stop_playback'):
                     self.audio_player.force_stop_playback()
-                    logger.info("   ✅ Фоновый поток воспроизведения принудительно остановлен")
                 elif hasattr(self.audio_player, 'force_stop'):
                     self.audio_player.force_stop()
-                    logger.info("   ✅ Аудио принудительно остановлено")
                 
-                # 2️⃣ Принудительно очищаем все аудио буферы
+                # 2️⃣ Принудительно очищаем все аудио буферы (включая очереди и потоки)
                 if hasattr(self.audio_player, 'clear_all_audio_data'):
                     self.audio_player.clear_all_audio_data()
-                    logger.info("   ✅ Все аудио буферы очищены")
-                
-                # 3️⃣ Принудительно очищаем очередь аудио
-                if hasattr(self.audio_player, 'audio_queue'):
-                    queue_size = self.audio_player.audio_queue.qsize()
-                    logger.info(f"   📊 Очищаю очередь аудио: {queue_size} элементов")
-                    
-                    # Принудительно очищаем очередь
-                    while not self.audio_player.audio_queue.empty():
-                        try:
-                            self.audio_player.audio_queue.get_nowait()
-                        except:
-                            break
-                    
-                    logger.info("   ✅ Очередь аудио принудительно очищена")
-                
-                # 4️⃣ Принудительно останавливаем все потоки аудио
-                if hasattr(self.audio_player, 'stop_all_audio_threads'):
-                    self.audio_player.stop_all_audio_threads()
-                    logger.info("   ✅ Все потоки аудио принудительно остановлены")
                 
                 logger.info("   ✅ _force_stop_audio_playback завершен")
                 
@@ -1220,10 +1220,42 @@ async def main():
     # Инициализируем компоненты в правильном порядке
     console.print("[bold blue]🔧 Инициализация компонентов...[/bold blue]")
     
+    # 0. Сначала инициируем запросы системных разрешений (Screen, Mic, Accessibility, Apple Events)
+    try:
+        ensure_permissions()
+    except Exception:
+        pass
+    
+    # Загружаем конфиг
+    config_path = Path(__file__).parent / 'config' / 'app_config.yaml'
+    config = {}
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Не удалось загрузить конфиг: {e}[/yellow]")
+
+    audio_cfg = (config.get('audio') or {})
+    audio_follow_default = bool(audio_cfg.get('follow_system_default', True))
+    bt_policy = (audio_cfg.get('bluetooth_policy') or 'prefer_quality')
+    settle_ms = int(audio_cfg.get('settle_ms', 400))
+    retries = int(audio_cfg.get('retries', 3))
+    preflush = bool(audio_cfg.get('preflush_on_switch', True))
+    use_coreaudio_listeners = bool(audio_cfg.get('use_coreaudio_listeners', True))
+                                                                      
     # 1. Сначала инициализируем STT (до gRPC)
     console.print("[blue]🎤 Инициализация STT...[/blue]")
     try:
         stt_recognizer = StreamRecognizer()
+        # Применяем настройки записи
+        if hasattr(stt_recognizer, 'config'):
+            stt_recognizer.config = {
+                'follow_system_default': audio_follow_default,
+                'bluetooth_policy': bt_policy,
+                'settle_ms': settle_ms,
+                'retries': retries,
+                'preflush_on_switch': preflush,
+            }
         console.print("[bold green]✅ STT инициализирован[/bold green]")
     except Exception as e:
         console.print(f"[bold red]❌ STT недоступен: {e}[/bold red]")
@@ -1242,19 +1274,91 @@ async def main():
     console.print("[blue]🔊 Инициализация аудио плеера...[/blue]")
     try:
         audio_player = AudioPlayer(sample_rate=48000)
+        # Применяем настройки воспроизведения
+        if hasattr(audio_player, '__dict__'):
+            audio_player.follow_system_default = audio_follow_default
+            audio_player.bluetooth_policy = bt_policy
+            audio_player.settle_ms = settle_ms
+            audio_player.retries = retries
+            audio_player.preflush_on_switch = preflush
         console.print("[bold green]✅ Аудио плеер инициализирован[/bold green]")
-    except Exception as e:
-        console.print(f"[bold red]❌ Ошибка инициализации аудио плеера: {e}[/bold red]")
-        console.print("[yellow]⚠️ Ассистент будет работать без звука[/yellow]")
-        # Создаем заглушку для аудио плеера
-        class AudioPlayerStub:
-            def __init__(self):
-                self.is_playing = False
-                self.audio_error = True
-                self.audio_error_message = str(e)
-            
-            def start_playback(self):
-                console.print("[yellow]🔇 Аудио недоступно[/yellow]")
+        # Инициализация CoreAudio listener (MVP-1: кэш дефолтов + коллбеки)
+        ca_listener = None
+        if use_coreaudio_listeners:
+            try:
+                from coreaudio_default_listener import CoreAudioDefaultListener
+                ca_listener = CoreAudioDefaultListener()
+                # Установим начальные значения из CoreAudio
+                import sounddevice as sd
+                hostapis = sd.query_hostapis()
+                core_idx = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+                api = sd.query_hostapis(core_idx)
+                din = api.get('default_input_device', -1)
+                dout = api.get('default_output_device', -1)
+                ca_listener.set_defaults(din if din != -1 else None, dout if dout != -1 else None)
+                # Привязываем output-change к плееру
+                def _on_output_changed(new_idx):
+                    try:
+                        if getattr(audio_player, 'is_playing', False) and new_idx is not None:
+                            # Строгий режим: сразу перезапускаем на текущем системном default (device=None)
+                            try:
+                                audio_player._attempt_restart_on_current_default(retries=2)
+                            except Exception:
+                                audio_player._restart_output_stream(new_idx)
+                    except Exception:
+                        pass
+                ca_listener.on_output_changed(_on_output_changed)
+                # Реакция на смену input: если сейчас идёт запись — мягко перестроить поток на новый default
+                def _on_input_changed(new_idx):
+                    try:
+                        # Перезапуск записи на новом устройстве, если запись активна
+                        if stt_recognizer and getattr(stt_recognizer, 'is_recording', False):
+                            target = new_idx
+                            try:
+                                if target in (None, -1) and hasattr(stt_recognizer, '_resolve_input_device'):
+                                    target = stt_recognizer._resolve_input_device()
+                                if hasattr(stt_recognizer, '_restart_input_stream'):
+                                    stt_recognizer._restart_input_stream(target)
+                                    logger.info(f"🎙️ Перезапустил InputStream на новом устройстве (index={target})")
+                            except Exception as e:
+                                logger.warning(f"⚠️ Не удалось перезапустить InputStream: {e}")
+
+                        # Диагностика: логируем имя устройства
+                        import sounddevice as sd
+                        name = None
+                        if new_idx not in (None, -1):
+                            try:
+                                name = sd.query_devices(new_idx).get('name')
+                            except Exception:
+                                name = str(new_idx)
+                        logger.info(f"🎙️ Default input device changed → {name} (index={new_idx})")
+                    except Exception:
+                        pass
+                if hasattr(ca_listener, 'on_input_changed'):
+                    ca_listener.on_input_changed(_on_input_changed)
+                # Прокинем провайдер активности, чтобы монитор работал только при активности аудио
+                try:
+                    ca_listener.set_activity_provider(lambda: bool(getattr(audio_player, 'is_playing', False)))
+                except Exception:
+                    pass
+                # Инжектируем listener в плеер и STT
+                try:
+                    setattr(audio_player, 'default_listener', ca_listener)
+                except Exception:
+                    pass
+                try:
+                    setattr(stt_recognizer, 'default_listener', ca_listener)
+                except Exception:
+                    pass
+                ca_listener.start()
+            except Exception as e:
+                logger.warning(f"⚠️ CoreAudio listener недоступен: {e}")
+        # Инжектируем плеер в STT для корректной координации переключений
+        try:
+            if hasattr(stt_recognizer, 'set_audio_player'):
+                stt_recognizer.set_audio_player(audio_player)
+        except Exception:
+            pass
     except Exception as e:
         console.print(f"[bold red]❌ Ошибка инициализации аудио плеера: {e}[/bold red]")
         console.print("[yellow]⚠️ Ассистент будет работать без звука[/yellow]")
@@ -1278,7 +1382,7 @@ async def main():
                 console.print(f"[dim]🔇 Аудио чанк получен (звук отключен): {len(audio_chunk)} сэмплов[/dim]")
             
             def wait_for_queue_empty(self):
-                pass
+                return True
             
             def cleanup(self):
                 pass
@@ -1342,8 +1446,15 @@ async def main():
     await asyncio.sleep(0.5)  # Даем время на инициализацию
     console.print("[blue]✅ InputHandler инициализирован[/blue]")
     
-    # Получаем информацию об экране
-    screen_info = screen_capture.get_screen_info()
+    # Получаем информацию об экране (с учетом возможного отсутствия screen_capture)
+    try:
+        if screen_capture:
+            screen_info = screen_capture.get_screen_info()
+        else:
+            screen_info = {'width': 0, 'height': 0}
+    except Exception as e:
+        console.print(f"[bold yellow]⚠️ Не удалось получить информацию об экране: {e}[/bold yellow]")
+        screen_info = {'width': 0, 'height': 0}
     console.print(f"[bold blue]📱 Экран: {screen_info.get('width', 0)}x{screen_info.get('height', 0)} пикселей[/bold blue]")
     
     # Создаём и запускаем иконку в меню-баре (helper-процесс)

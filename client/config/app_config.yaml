@@ -14,6 +14,12 @@ audio:
   channels: 1
   chunk_size: 1024
   format: "int16"
+  follow_system_default: true
+  bluetooth_policy: "strict_default"  # prefer_quality | strict_default
+  settle_ms: 400
+  retries: 3
+  preflush_on_switch: true
+  use_coreaudio_listeners: true
   
 # STT settings (Speech Recognition)
 stt:

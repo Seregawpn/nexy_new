@@ -9,8 +9,7 @@ MemoryAnalyzer - AI-анализ разговоров для извлечени�
 import asyncio
 import logging
 from typing import Dict, Optional, Tuple
-import google.generativeai as genai
-from google.generativeai.types import GenerateContentResponse
+from google import genai
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class MemoryAnalyzer:
     какую информацию следует сохранить в памяти пользователя.
     """
     
-    def __init__(self, gemini_api_key: str, model_name: str = "gemini-2.5-flash-lite"):
+    def __init__(self, gemini_api_key: str, model_name: str = "models/gemini-2.5-flash"):
         """
         Инициализация анализатора памяти.
         
@@ -33,16 +32,18 @@ class MemoryAnalyzer:
         """
         self.gemini_api_key = gemini_api_key
         self.model_name = model_name
-        self.model = None
+        self.client = None
         
-        # Инициализируем Gemini
+        # Инициализируем Gemini (новый SDK google-genai)
         try:
-            genai.configure(api_key=gemini_api_key)
-            self.model = genai.GenerativeModel(model_name)
+            self.client = genai.Client(
+                http_options={"api_version": "v1beta"},
+                api_key=gemini_api_key,
+            )
             logger.info(f"✅ MemoryAnalyzer initialized with model {model_name}")
         except Exception as e:
             logger.error(f"❌ MemoryAnalyzer initialization error: {e}")
-            self.model = None
+            self.client = None
     
     async def analyze_conversation(
         self, 
@@ -61,7 +62,7 @@ class MemoryAnalyzer:
         Returns:
             Tuple[str, str]: (краткосрочная_память, долгосрочная_память)
         """
-        if not self.model:
+        if not self.client:
             logger.warning("⚠️ Gemini model is not available, returning empty memory")
             return "", ""
         
@@ -190,17 +191,19 @@ LONG MEMORY: User's name is Sergei, they are a developer from Moscow
             # Устанавливаем таймаут 10 секунд
             async with asyncio.timeout(10.0):
                 response = await asyncio.to_thread(
-                    self.model.generate_content,
-                    analysis_prompt
+                    self.client.models.generate_content,
+                    model=self.model_name,
+                    contents=analysis_prompt,
                 )
-                
-                if response and response.text:
-                    logger.info(f"🧠 Received response from Gemini: {response.text[:200]}...")
-                    return self._extract_memory_from_response(response.text)
+
+                text = getattr(response, "text", None)
+                if text:
+                    logger.info(f"🧠 Received response from Gemini: {text[:200]}...")
+                    return self._extract_memory_from_response(text)
                 else:
                     logger.warning("⚠️ Gemini returned empty response")
                     return "", ""
-                    
+
         except asyncio.TimeoutError:
             logger.warning("⏰ Memory analysis timeout (10 sec)")
             return "", ""
@@ -274,17 +277,18 @@ LONG MEMORY: User's name is Sergei, they are a developer from Moscow
         Returns:
             bool: True если анализатор доступен
         """
-        if not self.model:
+        if not self.client:
             return False
         
         try:
             # Простой тест доступности
             async with asyncio.timeout(5.0):
                 test_response = await asyncio.to_thread(
-                    self.model.generate_content,
-                    "Test availability"
+                    self.client.models.generate_content,
+                    model=self.model_name,
+                    contents="Test availability",
                 )
-                return test_response is not None
+                return getattr(test_response, "text", None) is not None
         except Exception:
             return False
     
@@ -296,7 +300,7 @@ LONG MEMORY: User's name is Sergei, they are a developer from Moscow
             Dict: Статус анализатора
         """
         return {
-            "available": self.model is not None,
+            "available": self.client is not None,
             "model_name": self.model_name,
             "gemini_configured": bool(self.gemini_api_key)
         }
