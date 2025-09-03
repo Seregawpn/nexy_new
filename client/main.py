@@ -1,3 +1,4 @@
+ 
 import asyncio
 import logging
 import time
@@ -18,10 +19,11 @@ import signal
 sys.path.append(str(Path(__file__).parent.parent))
 
 from audio_player import AudioPlayer
+from unified_audio_system import get_global_unified_audio_system
 from stt_recognizer import StreamRecognizer
 from input_handler import InputHandler
 from grpc_client import GrpcClient
-from screen_capture import ScreenCapture
+from screen_capture import ScreenCapture                                                                              
 from permissions import ensure_permissions
 from utils.hardware_id import get_hardware_id, get_hardware_info
 TrayController = None  # Используем helper-процесс вместо прямого UI в этом процессе
@@ -1241,14 +1243,23 @@ async def main():
     settle_ms = int(audio_cfg.get('settle_ms', 400))
     retries = int(audio_cfg.get('retries', 3))
     preflush = bool(audio_cfg.get('preflush_on_switch', True))
-    use_coreaudio_listeners = bool(audio_cfg.get('use_coreaudio_listeners', True))
+    use_coreaudio_listeners = bool(audio_cfg.get('use_coreaudio_listeners', False))
+    
+    # Новая конфигурация AudioManagerDaemon
+    device_manager_cfg = audio_cfg.get('device_manager', {})
+    device_manager_enabled = bool(device_manager_cfg.get('enabled', True))
+    device_manager_config = {
+        'monitoring_interval': float(device_manager_cfg.get('monitoring_interval', 3.0)),
+        'switch_cooldown': float(device_manager_cfg.get('switch_cooldown', 2.0)),
+        'cache_timeout': float(device_manager_cfg.get('cache_timeout', 5.0))
+    }
                                                                       
     # 1. Сначала инициализируем STT (до gRPC)
     console.print("[blue]🎤 Инициализация STT...[/blue]")
     try:
         stt_recognizer = StreamRecognizer()
         # Применяем настройки записи
-        if hasattr(stt_recognizer, 'config'):
+        if hasattr(stt_recognizer, 'config'):             
             stt_recognizer.config = {
                 'follow_system_default': audio_follow_default,
                 'bluetooth_policy': bt_policy,
@@ -1281,10 +1292,62 @@ async def main():
             audio_player.settle_ms = settle_ms
             audio_player.retries = retries
             audio_player.preflush_on_switch = preflush
+            # Переводим в режим централизованного управления: без авто-рестартов внутри плеера
+            try:
+                audio_player.external_controlled = True
+            except Exception:
+                pass
+            
+            # Передаем конфигурацию AudioManagerDaemon
+            if device_manager_enabled and hasattr(audio_player, 'audio_manager') and audio_player.audio_manager:
+                try:
+                    # Конфигурация уже применена при инициализации AudioManagerDaemon
+                    # audio_player.audio_manager._apply_config(device_manager_config)
+                    console.print("[bold green]✅ Конфигурация AudioManagerDaemon применена[/bold green]")
+                except Exception as e:
+                    console.print(f"[yellow]⚠️ Не удалось применить конфигурацию AudioManagerDaemon: {e}[/yellow]")
+        
         console.print("[bold green]✅ Аудио плеер инициализирован[/bold green]")
-        # Инициализация CoreAudio listener (MVP-1: кэш дефолтов + коллбеки)
+        
+        # Проверяем, что новая система событий активна
+        if hasattr(audio_player, 'device_events') and audio_player.device_events:
+            console.print("[bold green]🎧 Система автоматического переключения наушников активна[/bold green]")
+            console.print("[green]   ⚡ Реакция на изменения: 0.5 секунды[/green]")
+            console.print("[green]   🔄 Автоматическое переключение: включено[/green]")
+            console.print("[green]   ⏸️ Пауза при отключении: включена[/green]")
+            console.print("[green]   ▶️ Возобновление при подключении: включено[/green]")
+        
+        # Проверяем AudioManagerDaemon
+        if hasattr(audio_player, 'audio_manager') and audio_player.audio_manager:
+            console.print("[bold green]🎛️ AudioManagerDaemon активен[/bold green]")
+            console.print("[green]   🔄 Мониторинг устройств: включен[/green]")
+            console.print("[green]   🎯 Автоматическое переключение: включено[/green]")
+            console.print("[green]   ⚡ SwitchAudioSource: интегрирован[/green]")
+            
+            # Показываем статус AudioManagerDaemon
+            try:
+                manager_status = audio_player.get_audio_manager_status()
+                if manager_status.get('available', False):
+                    console.print(f"[green]   📱 Устройств обнаружено: {manager_status.get('total_devices', 0)}[/green]")
+                    console.print(f"[green]   🎧 Текущее устройство: {manager_status.get('current_device', 'Unknown')}[/green]")
+                else:
+                    console.print(f"[yellow]   ⚠️ AudioManagerDaemon недоступен: {manager_status.get('error', 'Unknown error')}[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Не удалось получить статус AudioManagerDaemon: {e}[/yellow]")
+            
+            # Показываем текущее аудио устройство
+            try:
+                current_device = audio_player.get_current_device_info()
+                if current_device:
+                    device_type = "🎧 НАУШНИКИ" if current_device.get('is_headphones', False) else "🔊 ДИНАМИКИ"
+                    console.print(f"[blue]📱 Текущее аудио устройство: {current_device['name']} - {device_type}[/blue]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Не удалось получить информацию об устройстве: {e}[/yellow]")
+        
+        # Автоматический режим: отключаем старый CoreAudio мониторинг
+        # Теперь используем новую систему событий в AudioPlayer
         ca_listener = None
-        if use_coreaudio_listeners:
+        if False:  # Отключаем старую систему CoreAudio мониторинга
             try:
                 from coreaudio_default_listener import CoreAudioDefaultListener
                 ca_listener = CoreAudioDefaultListener()
@@ -1296,49 +1359,148 @@ async def main():
                 din = api.get('default_input_device', -1)
                 dout = api.get('default_output_device', -1)
                 ca_listener.set_defaults(din if din != -1 else None, dout if dout != -1 else None)
-                # Привязываем output-change к плееру
+                # Привязываем output-change к плееру (индекс из события игнорируем, используем HostAPI + имя)
                 def _on_output_changed(new_idx):
                     try:
-                        if getattr(audio_player, 'is_playing', False) and new_idx is not None:
-                            # Строгий режим: сразу перезапускаем на текущем системном default (device=None)
+                        if getattr(audio_player, '_is_shutting_down', False):
+                            return
+                        import time as _t
+                        import sounddevice as _sd
+                        # Короткий settle на случай задержки CoreAudio
+                        _t.sleep(max(0.05, settle_ms/1000.0))
+                        # Повторно считываем hostapi defaults (и имена)
+                        try:
+                            hostapis = _sd.query_hostapis()
+                            core_idx2 = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+                            api2 = _sd.query_hostapis(core_idx2)
+                            din2 = api2.get('default_input_device', -1)
+                            dout2 = api2.get('default_output_device', -1)
+                        except Exception:
+                            din2 = None
+                            dout2 = None
+
+                        # Резолвим актуальный индекс вывода по имени системного дефолта (если доступен)
+                        resolved_out = None
+                        try:
+                            if dout2 not in (None, -1):
+                                target_name = _sd.query_devices(dout2).get('name')
+                                try:
+                                    devs = _sd.query_devices()
+                                    for i, d in enumerate(devs):
+                                        try:
+                                            if d.get('name') == target_name and int(d.get('max_output_channels') or 0) > 0:
+                                                resolved_out = i
+                                                break
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                        # Если не смогли резолвить по имени — используем hostapi индекс
+                        if resolved_out in (None, -1):
+                            resolved_out = dout2 if dout2 not in (None, -1) else None
+
+                        # Синхронизируем sd.default.device
+                        try:
+                            curr = _sd.default.device
+                            if isinstance(curr, (list, tuple)) and len(curr) >= 2:
+                                _sd.default.device = (curr[0] if curr[0] not in (None, -1) else din2, resolved_out)
+                            else:
+                                _sd.default.device = (din2, resolved_out)
+                        except Exception:
+                            pass
+                        # Если идёт воспроизведение — мягко перестроимся на целевой индекс
+                        if getattr(audio_player, 'is_playing', False):
                             try:
-                                audio_player._attempt_restart_on_current_default(retries=2)
+                                if resolved_out not in (None, -1):
+                                    audio_player._restart_output_stream(resolved_out)
                             except Exception:
-                                audio_player._restart_output_stream(new_idx)
+                                # Fallback на текущий системный default
+                                try:
+                                    audio_player._attempt_restart_on_current_default(retries=2)
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
                 ca_listener.on_output_changed(_on_output_changed)
-                # Реакция на смену input: если сейчас идёт запись — мягко перестроить поток на новый default
+                # Реакция на смену input: с settle и синхронизацией sd.default.device
                 def _on_input_changed(new_idx):
                     try:
+                        import time as _t
+                        import sounddevice as _sd
+                        # Короткий settle
+                        _t.sleep(max(0.05, settle_ms/1000.0))
+                        # Повторная проверка hostapi
+                        try:
+                            hostapis = _sd.query_hostapis()
+                            core_idx2 = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+                            api2 = _sd.query_hostapis(core_idx2)
+                            din2 = api2.get('default_input_device', -1)
+                            dout2 = api2.get('default_output_device', -1)
+                        except Exception:
+                            din2 = new_idx
+                            dout2 = None
+
+                        # Резолвим актуальный индекс входа по имени системного дефолта (если доступен)
+                        resolved_in = None
+                        try:
+                            if din2 not in (None, -1):
+                                target_name = _sd.query_devices(din2).get('name')
+                                try:
+                                    devs = _sd.query_devices()
+                                    for i, d in enumerate(devs):
+                                        try:
+                                            if d.get('name') == target_name and int(d.get('max_input_channels') or 0) > 0:
+                                                resolved_in = i
+                                                break
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                        if resolved_in in (None, -1):
+                            resolved_in = new_idx if new_idx not in (None, -1) else din2
+                        # Синхронизация sd.default.device
+                        try:
+                            curr = _sd.default.device
+                            in_idx = (resolved_in if resolved_in not in (None, -1) else din2)
+                            if isinstance(curr, (list, tuple)) and len(curr) >= 2:
+                                _sd.default.device = (in_idx, curr[1] if curr[1] not in (None, -1) else dout2)
+                            else:
+                                _sd.default.device = (in_idx, dout2)
+                        except Exception:
+                            pass
                         # Перезапуск записи на новом устройстве, если запись активна
                         if stt_recognizer and getattr(stt_recognizer, 'is_recording', False):
-                            target = new_idx
+                            target = in_idx
                             try:
-                                if target in (None, -1) and hasattr(stt_recognizer, '_resolve_input_device'):
-                                    target = stt_recognizer._resolve_input_device()
                                 if hasattr(stt_recognizer, '_restart_input_stream'):
                                     stt_recognizer._restart_input_stream(target)
                                     logger.info(f"🎙️ Перезапустил InputStream на новом устройстве (index={target})")
                             except Exception as e:
                                 logger.warning(f"⚠️ Не удалось перезапустить InputStream: {e}")
 
-                        # Диагностика: логируем имя устройства
-                        import sounddevice as sd
-                        name = None
-                        if new_idx not in (None, -1):
-                            try:
-                                name = sd.query_devices(new_idx).get('name')
-                            except Exception:
-                                name = str(new_idx)
-                        logger.info(f"🎙️ Default input device changed → {name} (index={new_idx})")
+                        # Диагностика
+                        try:
+                            name = None
+                            if new_idx not in (None, -1):
+                                name = _sd.query_devices(new_idx).get('name')
+                            logger.info(f"🎙️ Default input device changed → {name} (index={new_idx})")
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 if hasattr(ca_listener, 'on_input_changed'):
                     ca_listener.on_input_changed(_on_input_changed)
                 # Прокинем провайдер активности, чтобы монитор работал только при активности аудио
                 try:
-                    ca_listener.set_activity_provider(lambda: bool(getattr(audio_player, 'is_playing', False)))
+                    ca_listener.set_activity_provider(
+                        lambda: bool(getattr(audio_player, 'is_playing', False) or (stt_recognizer and getattr(stt_recognizer, 'is_recording', False)))
+                    )
                 except Exception:
                     pass
                 # Инжектируем listener в плеер и STT
@@ -1353,6 +1515,8 @@ async def main():
                 ca_listener.start()
             except Exception as e:
                 logger.warning(f"⚠️ CoreAudio listener недоступен: {e}")
+        else:
+            logger.info("🤖 Автоматический режим: macOS сам управляет аудио устройствами")
         # Инжектируем плеер в STT для корректной координации переключений
         try:
             if hasattr(stt_recognizer, 'set_audio_player'):
@@ -1539,8 +1703,32 @@ async def main():
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка в мониторинге соединения: {e}")
     
+    # Автоматический режим: периодически обновляем список устройств
+    async def device_refresh_monitor():
+        """Периодически обновляет список аудио устройств для предотвращения кеширования"""
+        while True:
+            try:
+                await asyncio.sleep(10)  # Каждые 10 секунд
+                try:
+                    import sounddevice as sd
+                    # Принудительно обновляем список устройств
+                    devices = sd.query_devices()
+                    hostapis = sd.query_hostapis()
+                    core_idx = next((i for i, a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+                    api = sd.query_hostapis(core_idx)
+                    current_default_out = api.get('default_output_device', -1)
+                    current_default_in = api.get('default_input_device', -1)
+                    
+                    logger.debug(f"🔄 Периодическое обновление устройств: {len(devices)} устройств, out={current_default_out}, in={current_default_in}")
+                except Exception as e:
+                    logger.debug(f"⚠️ Не удалось обновить список устройств: {e}")
+            except Exception:
+                pass
+
     # Запускаем мониторинг соединения в фоне
     connection_monitor_task = asyncio.create_task(connection_monitor())
+    # Запускаем обновление списка устройств в фоне
+    device_refresh_task = asyncio.create_task(device_refresh_monitor())
     
     try:
         while True:
@@ -1609,6 +1797,13 @@ async def main():
             connection_monitor_task.cancel()
             try:
                 await connection_monitor_task
+            except asyncio.CancelledError:
+                pass
+        # Отменяем задачу обновления устройств
+        if 'device_refresh_task' in locals():
+            device_refresh_task.cancel()
+            try:
+                await device_refresh_task
             except asyncio.CancelledError:
                 pass
         

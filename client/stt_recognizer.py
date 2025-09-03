@@ -85,6 +85,41 @@ class StreamRecognizer:
         retries = int(getattr(self, 'config', {}).get('retries', 3))
         bt_policy = getattr(self, 'config', {}).get('bluetooth_policy', 'prefer_quality')
 
+        # ПРИНУДИТЕЛЬНО обновляем список устройств перед определением input
+        console.print("[dim]🔄 Принудительно обновляю список аудио устройств для микрофона...[/dim]")
+        try:
+            # Останавливаем все потоки для "чистого" состояния
+            sd.stop()
+            time.sleep(0.1)
+            
+            # Принудительно обновляем список устройств
+            devices = sd.query_devices()
+            hostapis = sd.query_hostapis()
+            core_idx = next((i for i, a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
+            api = sd.query_hostapis(core_idx)
+            current_default_in = api.get('default_input_device', -1)
+            
+            console.print(f"[dim]📱 Обновленный список устройств: {len(devices)} устройств[/dim]")
+            console.print(f"[dim]🎙️ Текущий default input: {current_default_in}[/dim]")
+            
+            # Показываем ВСЕ устройства (не только input)
+            for i, dev in enumerate(devices):
+                name = dev.get('name', 'Unknown')
+                in_ch = dev.get('max_input_channels', 0)
+                out_ch = dev.get('max_output_channels', 0)
+                if in_ch > 0 or out_ch > 0:
+                    console.print(f"[dim]  📱 {i}: {name} (in:{in_ch} out:{out_ch})[/dim]")
+            
+            # Проверяем, что дефолты корректны
+            if current_default_in != -1 and current_default_in < len(devices):
+                default_in_name = devices[current_default_in].get('name', 'Unknown')
+                console.print(f"[dim]🎙️ Default input: {current_default_in} — {default_in_name}[/dim]")
+            else:
+                console.print(f"[yellow]⚠️ Некорректный default input: {current_default_in}[/yellow]")
+                
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Не удалось обновить список устройств: {e}[/yellow]")
+
         # Если есть listener с кэшем — используем его
         input_device = None
         try:

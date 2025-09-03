@@ -5,6 +5,8 @@ import logging
 import queue
 import threading
 import time
+from typing import List
+from unified_audio_system import UnifiedAudioSystem, DeviceInfo, get_global_unified_audio_system
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +14,7 @@ class AudioPlayer:
     """
     Воспроизводит аудиопоток в реальном времени с использованием sounddevice.
     Принимает аудиофрагменты (chunks) в виде NumPy массивов и воспроизводит их бесшовно.
+    Автоматически отслеживает изменения аудио устройств и переключается между ними.
     """
     def __init__(self, sample_rate=48000, channels=1, dtype='int16'):
         self.sample_rate = sample_rate
@@ -28,143 +31,720 @@ class AudioPlayer:
         self.internal_buffer = np.array([], dtype=np.int16)
         self.buffer_lock = threading.Lock()
         self.stream_lock = threading.Lock()
-        self.current_output_device = None
-        self.output_device_monitor_thread = None
-        self.stop_output_monitor = threading.Event()
-        # Дебаунс смены устройства вывода
-        self._pending_output_device = None
-        self._pending_output_count = 0
-        # Конфиг по умолчанию (может быть переопределён из main.py)
-        self.follow_system_default = True
-        self.bluetooth_policy = 'prefer_quality'
-        self.settle_ms = 400
-        self.retries = 3
-        # Строго следуем системному default: без резервов на другие устройства
-        self.strict_follow_default = True
-        # Дебаунс рестартов на текущем default
-        self._last_restart_ts = 0.0
-        self._restart_min_interval_sec = 0.2
         
-        # Флаг для отслеживания ошибок аудио
-        self.audio_error = False
-        self.audio_error_message = ""
+        # Новая система управления аудио устройствами
+        self.audio_manager = None
+        self.current_device_info = None
+        self.device_switch_threshold = 1.0  # Минимальное время между переключениями
+        self._last_device_switch = 0
         
-        # ПРОСТАЯ блокировка буфера после прерывания
-        self.buffer_blocked_until = 0  # Время до которого буфер заблокирован
-        self.buffer_block_duration = 0.5  # Длительность блокировки в секундах
+        # Система приоритетов устройств для автоматического переключения на наушники
+        self.device_priorities = {
+            'airpods': 100,           # AirPods - высший приоритет
+            'beats': 95,              # Beats наушники
+            'bluetooth_headphones': 90, # Bluetooth наушники
+            'usb_headphones': 85,     # USB наушники
+            'bluetooth_speakers': 70, # Bluetooth колонки
+            'usb_audio': 60,          # USB аудио
+            'system_speakers': 40,    # Системные динамики
+            'other': 20               # Остальные устройства
+        }
+        
+        # Настройки автоматического переключения на наушники
+        self.auto_switch_to_headphones = True
+        self.pause_on_disconnect = True
+        self.resume_on_reconnect = True
+        self._was_paused_for_disconnect = False
         
         # Проверяем доступность аудио устройств
         self._check_audio_devices()
         
-        # Флаг для временной приостановки переключения output-устройств (например, во время записи)
-        self.suspend_output_switching = False
+        # Глобальный guard завершения/остановки, предотвращает гонки остановки/рестартов
+        self._is_shutting_down = False
+        self._shutdown_mutex = threading.Lock()
 
-    def set_output_switching_suspended(self, suspended: bool):
-        """Управляет приостановкой мониторинга и переключения выходных устройств."""
-        try:
-            self.suspend_output_switching = bool(suspended)
-            logger.info(f"🔧 suspend_output_switching={'on' if self.suspend_output_switching else 'off'}")
-        except Exception:
-            self.suspend_output_switching = suspended
+        # Инициализируем новую систему управления аудио устройствами
+        self._init_audio_manager()
+        
+        # Запускаем мониторинг устройств через события
+        self.start_device_monitoring()
 
-    def switch_to_system_default_output(self) -> bool:
-        """Принудительно переключает поток вывода на текущее системное default-устройство CoreAudio."""
+    def _init_audio_manager(self):
+        """Инициализирует единую систему управления аудио устройствами"""
         try:
-            new_device = self._resolve_output_device()
-            # Диагностика: что именно выбрали
-            try:
-                info, name = self._get_device_info(new_device)
-                logger.info(f"🎧 switch_to_system_default_output: target={name} (index={new_device})")
-            except Exception:
-                pass
-            if new_device is None:
-                logger.warning("⚠️ System default output не определён — пропускаю переключение")
-                return False
-            if new_device != self.current_output_device:
-                if self._restart_output_stream(new_device):
-                    self.current_output_device = new_device
-                    logger.info(f"🔄 Принудительно переключил выход на системный default: {name} (index={new_device})")
-                    return True
-                return False
-            # Уже на системном default
-            return True
+            logger.info("🔄 Инициализация UnifiedAudioSystem...")
+            
+            # Конфигурация для UnifiedAudioSystem
+            config = {
+                'switch_audio_path': '/opt/homebrew/bin/SwitchAudioSource',
+                'device_priorities': {
+                    'airpods': 95,
+                    'beats': 90,
+                    'bluetooth_headphones': 85,
+                    'usb_headphones': 80,
+                    'speakers': 70,
+                    'microphone': 60,
+                    'virtual': 1
+                },
+                'virtual_device_keywords': ['blackhole', 'loopback', 'virtual'],
+                'exclude_virtual_devices': True
+            }
+            
+            # Используем глобальный экземпляр UnifiedAudioSystem
+            self.audio_manager = get_global_unified_audio_system(config)
+            
+            # Добавляем callback для уведомлений об изменениях устройств
+            self.audio_manager.add_callback(self._on_device_change_callback)
+            
+            logger.info("✅ UnifiedAudioSystem инициализирован")
+            
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось переключить на системный default output: {e}")
-            return False
+            logger.error(f"❌ Ошибка инициализации UnifiedAudioSystem: {e}")
+            self.audio_manager = None
+    
+    def _get_audio_manager_devices(self):
+        """Получает актуальный список устройств из UnifiedAudioSystem"""
+        if not self.audio_manager:
+            return None, None, None
 
-    def _get_device_info(self, device_index):
-        """Безопасно возвращает info и name для устройства."""
         try:
-            if device_index is None or device_index == -1:
-                return None, 'System Default'
-            info = sd.query_devices(device_index)
-            return info, (info.get('name') or str(device_index))
-        except Exception:
-            return None, str(device_index)
+            # ИСПРАВЛЕНИЕ: Добавляем задержку для синхронизации с UnifiedAudioSystem
+            time.sleep(0.3)  # 300ms для синхронизации
 
-    def _is_bt_hfp_active(self) -> bool:
-        """
-        Эвристика: активен ли BT HFP (телефонный) профиль на default input.
-        Если да — вывод через те же AirPods часто невозможен (ошибки -10851/-9986),
-        поэтому следует избегать выбор AirPods как output.
-        """
+            # Получаем актуальный список устройств из UnifiedAudioSystem
+            all_devices = self.audio_manager.get_available_devices()
+            current_device = self.audio_manager.get_current_device()
+
+            # Получаем информацию о текущем устройстве
+            current_device_info = self.audio_manager.get_current_device_info()
+
+            logger.info(f"🔄 Получен актуальный список из UnifiedAudioSystem: {len(all_devices)} устройств")
+            logger.info(f"🎧 Текущее устройство: {current_device}")
+
+            return all_devices, current_device, current_device_info
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения устройств из UnifiedAudioSystem: {e}")
+            return None, None, None
+
+    def _on_device_change_callback(self, event_type: str, device_info: dict):
+        """Callback для обработки изменений устройств от UnifiedAudioSystem"""
         try:
-            # 1) Получаем CoreAudio default input device
-            hostapis = sd.query_hostapis()
-            core_idx = None
-            for i, api in enumerate(hostapis):
-                if 'core' in (api.get('name', '').lower()):
-                    core_idx = i
+            logger.info(f"🔔 Получено событие от UnifiedAudioSystem: {event_type}")
+            logger.info(f"   Устройство: {device_info.get('name', 'Unknown')}")
+            logger.info(f"   Тип: {device_info.get('type', 'Unknown')}")
+            logger.info(f"   Приоритет: {device_info.get('priority', 0)}")
+            
+            # ИСПРАВЛЕНИЕ: Принудительно обновляем список устройств при любом изменении
+            logger.info("🔄 Принудительное обновление списка устройств после события...")
+            self.force_device_refresh()
+            
+            if event_type == 'device_added':
+                # Если добавили высокоприоритетные наушники - переключаемся
+                if device_info.get('priority', 0) >= 85:
+                    logger.info("🎧 Обнаружены высокоприоритетные наушники - переключаемся автоматически")
+                    # AudioManagerDaemon уже переключился, просто обновляем информацию
+                    self._update_current_device_info()
+            
+            elif event_type == 'device_removed':
+                # Если удалили текущее устройство - обновляем информацию
+                current_device = self.audio_manager.get_current_device() if self.audio_manager else None
+                if not current_device:
+                    logger.info("🔄 Текущее устройство удалено - обновляем информацию")
+                    self._update_current_device_info()
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в callback AudioManagerDaemon: {e}")
+
+    def _update_current_device_info(self):
+        """Обновляет информацию о текущем устройстве"""
+        try:
+            if self.audio_manager:
+                current_device = self.audio_manager.get_current_device()
+                if current_device:
+                    device_info = self.audio_manager.get_device_info(current_device)
+                    self.current_device_info = {
+                        'name': device_info.name,
+                        'type': device_info.device_type.value,
+                        'priority': device_info.priority,
+                        'is_headphones': device_info.device_type.value in ['airpods', 'beats', 'bluetooth_headphones', 'usb_headphones'],
+                        'timestamp': time.time()
+                    }
+                    logger.info(f"📱 Обновлена информация об устройстве: {current_device}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления информации об устройстве: {e}")
+
+    def start_device_monitoring(self):
+        """Запускает улучшенный мониторинг изменений аудио устройств."""
+        if self.audio_manager and self.audio_manager.running:
+            logger.info("🔄 Мониторинг устройств уже запущен через AudioManagerDaemon")
+            return
+        
+        logger.info("🔄 Запускаю улучшенный мониторинг аудио устройств...")
+        
+        # Мониторинг теперь управляется через AudioManagerDaemon
+        if self.audio_manager:
+            logger.info("✅ Мониторинг аудио устройств через AudioManagerDaemon активен")
+        else:
+            logger.warning("⚠️ AudioManagerDaemon недоступен, используем базовый мониторинг")
+
+    def stop_device_monitoring(self):
+        """Останавливает мониторинг аудио устройств."""
+        if self.audio_manager and self.audio_manager.running:
+            logger.info("🔄 Остановка мониторинга через AudioManagerDaemon...")
+            self.audio_manager.stop()
+        else:
+            logger.info("🔄 Мониторинг устройств не активен")
+        
+        logger.info("✅ Мониторинг аудио устройств остановлен")
+
+    def _on_device_change_enhanced(self, old_device, new_device, source):
+        """Улучшенный callback для обработки изменений аудио устройств."""
+        try:
+            logger.info(f"🔔 Получено событие изменения аудио устройства (источник: {source})!")
+            logger.info(f"   Старое устройство: {old_device}")
+            logger.info(f"   Новое устройство: {new_device}")
+            
+            # Определяем, является ли новое устройство наушниками
+            if new_device and self._is_headphones(new_device['name']):
+                logger.info(f"🎧 Обнаружены наушники: {new_device['name']}")
+                self._handle_headphones_connection_enhanced(new_device)
+            elif old_device and self._is_headphones(old_device['name']):
+                logger.info(f"🎧 Наушники отключены: {old_device['name']}")
+                self._handle_headphones_disconnection_enhanced()
+            else:
+                # Обычное переключение устройства
+                self._handle_device_change_enhanced(new_device)
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка в улучшенном callback изменения устройств: {e}")
+
+    def _on_device_change(self, added_devices, removed_devices):
+        """Callback для обработки изменений аудио устройств (старая версия)."""
+        try:
+            logger.info("🔔 Получено событие изменения аудио устройств!")
+            logger.info(f"   Добавлены: {added_devices}")
+            logger.info(f"   Удалены: {removed_devices}")
+            
+            # Обрабатываем добавленные устройства
+            for device_name in added_devices:
+                if self._is_headphones(device_name):
+                    logger.info(f"🎧 Обнаружены наушники: {device_name}")
+                    self._handle_headphones_connection_by_name(device_name)
+                    return  # Выходим, так как уже обработали
+            
+            # Обрабатываем удаленные устройства
+            for device_name in removed_devices:
+                if self._is_headphones(device_name):
+                    logger.info(f"🎧 Наушники отключены: {device_name}")
+                    self._handle_headphones_disconnection()
+                    return  # Выходим, так как уже обработали
+            
+            # Дополнительная проверка отключения наушников
+            if self._was_headphones_disconnected():
+                logger.info("🎧 Обнаружено отключение наушников через дополнительную проверку")
+                self._handle_headphones_disconnection()
+                return  # Выходим, так как уже обработали
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в callback изменения устройств: {e}")
+
+    def _handle_headphones_connection_enhanced(self, device_info):
+        """Улучшенная обработка подключения наушников."""
+        try:
+            logger.info(f"🎧 НАУШНИКИ ПОДКЛЮЧЕНЫ: {device_info['name']}")
+            
+            # Находим индекс устройства
+            devices = self.list_available_devices()
+            device_index = None
+            for device in devices:
+                if device['name'] == device_info['name']:
+                    device_index = device['index']
                     break
-            if core_idx is None:
-                core_idx = 0
-            api = sd.query_hostapis(core_idx)
-            d_in = api.get('default_input_device', -1)
-            if d_in is None or d_in == -1:
-                return False
-            info_in = sd.query_devices(d_in)
-            name_l = (info_in.get('name') or '').lower()
-            max_in_ch = int(info_in.get('max_input_channels') or 0)
-            def_sr_in = int(round(info_in.get('default_samplerate') or 0))
-            # HFP признаки: airpods/hfp/hsp в имени, 1 канал и/или низкая частота 8k/16k
-            if any(t in name_l for t in ['airpods', 'hands-free', 'handsfree', 'hfp', 'hsp']):
-                return True
-            if max_in_ch <= 1 and def_sr_in and def_sr_in <= 16000:
-                return True
-            return False
-        except Exception:
-            return False
+            
+            if device_index is not None:
+                # Принудительно переключаем системный default на наушники
+                try:
+                    import sounddevice as sd
+                    current_default = sd.default.device
+                    if hasattr(current_default, '__getitem__'):  # list, tuple, or _InputOutputPair
+                        new_default = (current_default[0], device_index)
+                    else:
+                        new_default = device_index
+                    
+                    sd.default.device = new_default
+                    logger.info(f"🔄 Системный default переключен на наушники: {device_info['name']} (индекс: {device_index})")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось переключить системный default: {e}")
+                
+                # Переключаемся на наушники
+                self.switch_to_device(device_index=device_index)
+                
+                # Восстанавливаем воспроизведение если было приостановлено
+                if self.resume_on_reconnect and self._was_paused_for_disconnect:
+                    self.resume_playback()
+                    self._was_paused_for_disconnect = False
+                    logger.info("▶️ Воспроизведение возобновлено")
+            else:
+                logger.warning(f"⚠️ Не удалось найти индекс устройства: {device_info['name']}")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки подключения наушников: {e}")
 
-    def _find_backup_output_device(self):
-        """Возвращает индекс ближайшего доступного устройства вывода, избегая AirPods/HFP."""
+    def _handle_headphones_disconnection_enhanced(self):
+        """Улучшенная обработка отключения наушников."""
         try:
+            logger.info("🎧 НАУШНИКИ ОТКЛЮЧЕНЫ")
+            
+            # Пауза воспроизведения
+            if self.pause_on_disconnect and self.is_playing:
+                self.pause_playback()
+                self._was_paused_for_disconnect = True
+                logger.info("⏸️ Воспроизведение приостановлено")
+            
+            # ИСПРАВЛЕНИЕ: Не переключаемся вручную - доверяем AudioManagerDaemon
+            if self.audio_manager:
+                logger.info("🔄 AudioManagerDaemon автоматически переключит устройство")
+                # AudioManagerDaemon сам переключится на лучшее доступное устройство
+            else:
+                # Fallback только если AudioManagerDaemon недоступен
+                logger.warning("⚠️ AudioManagerDaemon недоступен, используем fallback")
+                self.switch_to_system_device()
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки отключения наушников: {e}")
+
+    def _handle_device_change_enhanced(self, new_device_info):
+        """Улучшенная обработка изменения устройства."""
+        try:
+            logger.info("🔄 Обрабатываю изменение аудио устройства...")
+            
+            # Проверяем, не слишком ли часто переключаемся
+            current_time = time.time()
+            if hasattr(self, '_last_device_switch') and current_time - self._last_device_switch < self.device_switch_threshold:
+                logger.info("⏱️ Слишком частое переключение, пропускаю")
+                return
+            
+            self._last_device_switch = current_time
+            
+            # Если воспроизведение активно, перезапускаем поток
+            if self.is_playing and self.stream and self.stream.active:
+                logger.info("🔄 Перезапускаю аудио поток для нового устройства...")
+                
+                # Сохраняем текущее состояние
+                was_playing = self.is_playing
+                current_queue_size = self.audio_queue.qsize()
+                
+                # Останавливаем текущий поток
+                self._safe_stop_stream()
+                
+                # Небольшая пауза для стабилизации
+                time.sleep(0.2)
+                
+                # Перезапускаем с новыми параметрами
+                self._restart_stream_with_new_device()
+                
+                logger.info(f"✅ Поток перезапущен для устройства: {new_device_info['name'] if new_device_info else 'Unknown'}")
+                
+                # Восстанавливаем воспроизведение если было активно
+                if was_playing and current_queue_size > 0:
+                    logger.info("🔄 Восстанавливаю воспроизведение...")
+                    self.is_playing = True
+            else:
+                logger.info("📱 Устройство изменилось, но воспроизведение не активно")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке изменения устройства: {e}")
+
+    def _handle_headphones_connection_by_name(self, device_name):
+        """Обрабатывает подключение наушников по имени устройства."""
+        try:
+            # Находим устройство по имени
+            devices = self.list_available_devices()
+            device_info = None
+            
+            for device in devices:
+                if device['name'] == device_name and device['is_headphones']:
+                    device_info = device
+                    break
+            
+            if device_info:
+                self._handle_headphones_connection(device_info)
+            else:
+                logger.warning(f"⚠️ Не удалось найти информацию об устройстве: {device_name}")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки подключения наушников: {e}")
+
+
+
+
+
+    def _handle_device_change(self):
+        """Обрабатывает изменение аудио устройства."""
+        try:
+            logger.info("🔄 Обрабатываю изменение аудио устройства...")
+            
+            # Проверяем, не слишком ли часто переключаемся
+            current_time = time.time()
+            if hasattr(self, '_last_device_switch') and current_time - self._last_device_switch < self.device_switch_threshold:
+                logger.info("⏱️ Слишком частое переключение, пропускаю")
+                return
+            
+            self._last_device_switch = current_time
+            
+            # Получаем информацию о новом устройстве
+            new_device_info = self.get_current_device_info()
+            
+            # Проверяем, нужно ли автоматически переключиться на наушники
+            if self.auto_switch_to_headphones:
+                if self._should_auto_switch_to_headphones(new_device_info):
+                    self._handle_headphones_connection(new_device_info)
+                    return  # Выходим, так как уже обработали
+                elif self._was_headphones_disconnected():
+                    self._handle_headphones_disconnection()
+                    return  # Выходим, так как уже обработали
+            
+            # Обычная обработка изменения устройства
+            if self.is_playing and self.stream and self.stream.active:
+                logger.info("🔄 Перезапускаю аудио поток для нового устройства...")
+                
+                # Сохраняем текущее состояние
+                was_playing = self.is_playing
+                current_queue_size = self.audio_queue.qsize()
+                
+                # Останавливаем текущий поток
+                self._safe_stop_stream()
+                
+                # Небольшая пауза для стабилизации
+                time.sleep(0.2)
+                
+                # Перезапускаем с новыми параметрами
+                self._restart_stream_with_new_device()
+                
+                logger.info(f"✅ Поток перезапущен для устройства: {self.current_device_info['name']}")
+                
+                # Восстанавливаем воспроизведение если было активно
+                if was_playing and current_queue_size > 0:
+                    logger.info("🔄 Восстанавливаю воспроизведение...")
+                    self.is_playing = True
+                
+            else:
+                logger.info("📱 Устройство изменилось, но воспроизведение не активно")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке изменения устройства: {e}")
+
+    def _safe_stop_stream(self):
+        """Безопасно останавливает аудио поток."""
+        try:
+            if self.stream and hasattr(self.stream, 'active') and self.stream.active:
+                self.stream.stop()
+                logger.info("✅ Аудио поток остановлен")
+            
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+                logger.info("✅ Аудио поток закрыт")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при остановке потока: {e}")
+
+    def _restart_stream_with_new_device(self):
+        """Перезапускает аудио поток с параметрами нового устройства."""
+        try:
+            logger.info("🔄 Перезапуск потока с новыми параметрами...")
+            
+            # Получаем адаптивные параметры для нового устройства
             devices = sd.query_devices()
-        except Exception:
+            
+            # Безопасно получаем текущее устройство вывода
+            try:
+                default_device = sd.default.device
+                if isinstance(default_device, (list, tuple)):
+                    current_output = default_device[1]  # output device
+                else:
+                    current_output = default_device
+                
+                # Проверяем корректность индекса
+                if not isinstance(current_output, int) or current_output == -1 or current_output >= len(devices):
+                    logger.warning("⚠️ Не удалось определить текущее устройство")
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка получения устройства по умолчанию: {e}")
+                return
+            
+            device_info = devices[current_output]
+            configs = self._get_adaptive_configs(devices, current_output)
+            
+            logger.info(f"🎯 Адаптивные параметры для нового устройства: {len(configs)} конфигураций")
+            
+            # Пробуем инициализировать с новыми параметрами
+            for i, config in enumerate(configs):
+                try:
+                    logger.info(f"🔄 Попытка {i+1}: ch={config['channels']}, sr={config['samplerate']}")
+                    
+                    with self.stream_lock:
+                        stream = sd.OutputStream(
+                            device=None,  # Автоматический выбор
+                            callback=self._playback_callback,
+                            **config
+                        )
+                        stream.start()
+                    
+                    # Обновляем параметры
+                    self.channels = config['channels']
+                    self.sample_rate = config['samplerate']
+                    self.dtype = config['dtype']
+                    self.stream = stream
+                    
+                    logger.info(f"✅ Поток перезапущен: ch={config['channels']}, sr={config['samplerate']}")
+                    return
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Попытка {i+1} не удалась: {e}")
+                    if i < len(configs) - 1:
+                        time.sleep(0.1)
+            
+            logger.error("❌ Не удалось перезапустить поток с новыми параметрами")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при перезапуске потока: {e}")
+
+    def get_current_device_info(self):
+        """Возвращает информацию о текущем аудио устройстве."""
+        try:
+            # Сначала пробуем получить информацию от AudioManagerDaemon
+            if self.audio_manager:
+                current_device = self.audio_manager.get_current_device()
+                if current_device:
+                    device_info = self.audio_manager.get_device_info(current_device)
+                    return {
+                        'name': device_info.name,
+                        'type': device_info.device_type.value,
+                        'priority': device_info.priority,
+                        'is_headphones': device_info.device_type.value in ['airpods', 'beats', 'bluetooth_headphones', 'usb_headphones'],
+                        'is_default': device_info.is_default,
+                        'timestamp': time.time()
+                    }
+            
+            # Fallback на старый метод
+            devices = sd.query_devices()
+            
+            # Безопасно получаем текущее устройство вывода
+            try:
+                default_device = sd.default.device
+                if isinstance(default_device, (list, tuple)):
+                    current_output = default_device[1]  # output device
+                else:
+                    current_output = default_device
+                
+                # Проверяем корректность индекса
+                if not isinstance(current_output, int) or current_output == -1 or current_output >= len(devices):
+                    return None
+                    
+            except Exception as e:
+                logger.debug(f"📱 Ошибка получения устройства по умолчанию: {e}")
+                return None
+            
+            device = devices[current_output]
+            return {
+                'index': current_output,
+                'name': device.get('name', 'Unknown'),
+                'max_channels': device.get('max_output_channels', 0),
+                'default_samplerate': device.get('default_samplerate', 0),
+                'max_samplerate': device.get('max_samplerate', 0)
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка получения информации об устройстве: {e}")
             return None
 
-        preferred_indices = []
-        fallback_indices = []
+    def force_device_refresh(self):
+        """Принудительно обновляет информацию об устройствах и перезапускает поток."""
+        logger.info("🔄 Принудительное обновление аудио устройств...")
+        
+        try:
+            # Информация об устройствах обновляется через систему событий
+            
+            # Если воспроизведение активно, перезапускаем
+            if self.is_playing and self.stream and self.stream.active:
+                self._handle_device_change()
+            
+            logger.info("✅ Обновление аудио устройств завершено")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обновлении устройств: {e}")
 
-        for idx, dev in enumerate(devices):
+    def switch_to_device(self, device_name=None, device_index=None):
+        """
+        Принудительно переключается на указанное устройство.
+        
+        Args:
+            device_name: Имя устройства (например, 'MacBook Air Speakers')
+            device_index: Индекс устройства в системе
+        """
+        try:
+            logger.info(f"🔄 Принудительное переключение на устройство: {device_name or device_index}")
+            
+            devices = sd.query_devices()
+            
+            # Находим устройство
+            target_device = None
+            if device_name:
+                for i, dev in enumerate(devices):
+                    if device_name.lower() in dev.get('name', '').lower():
+                        target_device = i
+                        break
+            elif device_index is not None:
+                if 0 <= device_index < len(devices):
+                    target_device = device_index
+            
+            if target_device is None:
+                logger.warning(f"⚠️ Устройство не найдено: {device_name or device_index}")
+                return False
+            
+            device_info = devices[target_device]
+            logger.info(f"📱 Переключаюсь на: {device_info.get('name', 'Unknown')} (индекс: {target_device})")
+            
+            # Если воспроизведение активно, перезапускаем поток
+            if self.is_playing and self.stream and self.stream.active:
+                # Сохраняем текущее состояние
+                was_playing = self.is_playing
+                current_queue_size = self.audio_queue.qsize()
+                
+                # Останавливаем текущий поток
+                self._safe_stop_stream()
+                
+                # Небольшая пауза для стабилизации
+                time.sleep(0.2)
+                
+                # Перезапускаем с новым устройством
+                self._restart_stream_with_specific_device(target_device)
+                
+                # Восстанавливаем воспроизведение если было активно
+                if was_playing and current_queue_size > 0:
+                    logger.info("🔄 Восстанавливаю воспроизведение...")
+                    self.is_playing = True
+                
+                logger.info(f"✅ Переключение на {device_info.get('name', 'Unknown')} завершено")
+                return True
+            else:
+                logger.info("📱 Воспроизведение не активно, обновляю информацию об устройстве")
+                self.current_device_info = {
+                    'index': target_device,
+                    'name': device_info.get('name', 'Unknown'),
+                    'max_channels': device_info.get('max_output_channels', 0),
+                    'default_samplerate': device_info.get('default_samplerate', 0),
+                    'max_samplerate': device_info.get('max_samplerate', 0),
+                    'timestamp': time.time()
+                }
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при переключении устройства: {e}")
+            return False
+
+    def _restart_stream_with_specific_device(self, device_index):
+        """Перезапускает аудио поток с указанным устройством."""
+        try:
+            logger.info(f"🔄 Перезапуск потока с устройством {device_index}...")
+            
+            devices = sd.query_devices()
+            if device_index >= len(devices):
+                logger.warning("⚠️ Некорректный индекс устройства")
+                return
+            
+            device_info = devices[device_index]
+            configs = self._get_adaptive_configs(devices, device_index)
+            
+            logger.info(f"🎯 Адаптивные параметры для устройства {device_index}: {len(configs)} конфигураций")
+            
+            # Пробуем инициализировать с новыми параметрами
+            for i, config in enumerate(configs):
+                try:
+                    logger.info(f"🔄 Попытка {i+1}: device={device_index}, ch={config['channels']}, sr={config['samplerate']}")
+                    
+                    with self.stream_lock:
+                        stream = sd.OutputStream(
+                            device=device_index,  # Конкретное устройство
+                            callback=self._playback_callback,
+                            **config
+                        )
+                        stream.start()
+                    
+                    # Обновляем параметры
+                    self.channels = config['channels']
+                    self.sample_rate = config['samplerate']
+                    self.dtype = config['dtype']
+                    self.stream = stream
+                    
+                    # Обновляем информацию об устройстве
+                    self.current_device_info = {
+                        'index': device_index,
+                        'name': device_info.get('name', 'Unknown'),
+                        'max_channels': config['channels'],
+                        'default_samplerate': config['samplerate'],
+                        'max_samplerate': device_info.get('max_samplerate', 0),
+                        'timestamp': time.time()
+                    }
+                    
+                    logger.info(f"✅ Поток перезапущен: {device_info.get('name', 'Unknown')} (ch={config['channels']}, sr={config['samplerate']})")
+                    return
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Попытка {i+1} не удалась: {e}")
+                    if i < len(configs) - 1:
+                        time.sleep(0.1)
+            
+            logger.error("❌ Не удалось перезапустить поток с указанным устройством")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при перезапуске потока: {e}")
+
+    def list_available_devices(self):
+        """Возвращает список доступных аудио устройств."""
+        try:
+            devices = sd.query_devices()
+            available_devices = []
+            
+            # Безопасно получаем текущее устройство по умолчанию
             try:
-                if dev.get('max_output_channels', 0) <= 0:
-                    continue
-                name = (dev.get('name') or '').lower()
-                if any(tag in name for tag in ['airpods', 'hands-free', 'handsfree', 'hfp', 'hsp']):
-                    continue
-                # Предпочтем встроенные динамики/внутренние устройства
-                if any(tag in name for tag in ['built-in', 'macbook', 'internal', 'встро', 'system']):
-                    preferred_indices.append(idx)
+                default_device = sd.default.device
+                if isinstance(default_device, (list, tuple)):
+                    current_default = default_device[1]  # output device
                 else:
-                    fallback_indices.append(idx)
+                    current_default = default_device
             except Exception:
-                continue
+                current_default = -1
+            
+            for i, dev in enumerate(devices):
+                if dev.get('max_output_channels', 0) > 0:  # Только устройства вывода
+                    device_info = {
+                        'index': i,
+                        'name': dev.get('name', 'Unknown'),
+                        'max_channels': dev.get('max_output_channels', 0),
+                        'default_samplerate': dev.get('default_samplerate', 0),
+                        'max_samplerate': dev.get('max_samplerate', 0),
+                        'is_default': i == current_default,
+                        'is_headphones': self._is_headphones(dev.get('name', '')),
+                        'priority': self._get_device_priority(dev)
+                    }
+                    available_devices.append(device_info)
+            
+            return available_devices
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка получения списка устройств: {e}")
+            return []
 
-        if preferred_indices:
-            return preferred_indices[0]
-        if fallback_indices:
-            return fallback_indices[0]
-        return None
+
+
+
+
+
+
+
 
     def _playback_callback(self, outdata, frames, time, status):
         """Callback-функция для sounddevice, вызывается для заполнения буфера вывода."""
@@ -299,9 +879,38 @@ class AudioPlayer:
 
     def add_chunk(self, audio_chunk: np.ndarray):
         """Добавляет аудио чанк в очередь воспроизведения."""
+        if getattr(self, '_is_shutting_down', False):
+            logger.debug("🔒 Shutdown в процессе — add_chunk пропущен")
+            return
         if audio_chunk is None or len(audio_chunk) == 0:
             logger.warning("⚠️ Попытка добавить пустой аудио чанк!")
             return
+        
+        # Нормализуем вход к формату int16 mono
+        try:
+            if isinstance(audio_chunk, np.ndarray):
+                # Если стерео/многоканально → моно
+                if audio_chunk.ndim == 2 and audio_chunk.shape[1] > 1:
+                    try:
+                        audio_chunk = np.mean(audio_chunk, axis=1)
+                    except Exception:
+                        audio_chunk = audio_chunk[:, 0]
+                elif audio_chunk.ndim > 1:
+                    audio_chunk = audio_chunk.reshape(-1)
+
+                # Приводим к int16
+                if audio_chunk.dtype.kind == 'f':
+                    # Ожидаем диапазон [-1.0, 1.0]
+                    audio_chunk = np.clip(audio_chunk, -1.0, 1.0)
+                    audio_chunk = (audio_chunk * 32767.0).astype(np.int16)
+                elif audio_chunk.dtype != np.int16:
+                    # Консервативно приводим к int16 без масштабирования
+                    try:
+                        audio_chunk = np.clip(audio_chunk, -32768, 32767).astype(np.int16)
+                    except Exception:
+                        audio_chunk = audio_chunk.astype(np.int16, copy=False)
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось нормализовать аудио чанк, продолжаю как есть: {e}")
         
         # Автостарт воспроизведения при первом чанке
         try:
@@ -314,10 +923,7 @@ class AudioPlayer:
         chunk_size = len(audio_chunk)
         logger.debug(f"🎵 Добавляю аудио чанк размером {chunk_size} сэмплов")
         
-        # Проверяем временную блокировку буфера
-        if self.is_buffer_locked():
-            logger.warning(f"🚨 БУФЕР ВРЕМЕННО ЗАБЛОКИРОВАН - пропускаю добавление аудио чанка размером {chunk_size}!")
-            return
+
         
         try:
             # Добавляем чанк в очередь
@@ -337,6 +943,9 @@ class AudioPlayer:
 
     def start_playback(self):
         """Запускает потоковое воспроизведение аудио."""
+        if getattr(self, '_is_shutting_down', False):
+            logger.info("🔒 Shutdown в процессе — start_playback пропущен")
+            return
         if self.is_playing:
             logger.warning("⚠️ Воспроизведение уже запущено!")
             return
@@ -362,40 +971,14 @@ class AudioPlayer:
             self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
             self.playback_thread.start()
             
-            # Безусловно читаем ТЕКУЩИЙ системный default напрямую (игнорируем возможный устаревший кэш listener)
-            direct_device = self._resolve_output_device()
-            # Снимок состояния устройств для диагностики
-            try:
-                import sounddevice as _sd
-                devices = _sd.query_devices()
-                hostapis = _sd.query_hostapis()
-                core_idx = next((i for i,a in enumerate(hostapis) if 'core' in (a.get('name','').lower())), 0)
-                api = _sd.query_hostapis(core_idx)
-                din = api.get('default_input_device', -1)
-                dout = api.get('default_output_device', -1)
-                devs_count = sum(1 for d in devices if (d.get('max_input_channels',0)>0 or d.get('max_output_channels',0)>0))
-                logger.info(f"🧪 Snapshot @start_playback: din={None if din==-1 else din} dout={None if dout==-1 else dout} devices={devs_count}")
-            except Exception:
-                pass
-            # Диагностика: сравним с кэшем listener (если есть)
-            try:
-                ca_listener = getattr(self, 'default_listener', None)
-                cached = ca_listener.get_default_output() if (ca_listener and hasattr(ca_listener, 'get_default_output')) else None
-            except Exception:
-                cached = None
-            try:
-                _, direct_name = self._get_device_info(direct_device)
-                _, cached_name = self._get_device_info(cached)
-                logger.info(f"🔊 Старт воспроизведения: system default now = {direct_name} (index={direct_device}); listener_cache = {cached_name} (index={cached})")
-            except Exception:
-                pass
-            self.current_output_device = direct_device
-            self.stream = self._safe_init_stream(preferred_device=direct_device)
+            # Простая инициализация: пусть система сама выбирает устройство
+            logger.info("🔊 Запуск в автоматическом режиме: macOS управляет устройствами")
+            self.stream = self._safe_init_stream()
             self.is_playing = True
             
             logger.info("✅ Потоковое воспроизведение аудио запущено!")
             
-            # Мониторинг смены выходного устройства теперь в CoreAudio listener
+            # В автоматическом режиме мониторинг не нужен
             
         except Exception as e:
             logger.error(f"❌ Ошибка при запуске воспроизведения: {e}")
@@ -405,8 +988,17 @@ class AudioPlayer:
 
     def stop_playback(self):
         """Останавливает потоковое воспроизведение аудио."""
+        if getattr(self, '_is_shutting_down', False):
+            logger.info("🔒 Shutdown уже идёт — stop_playback пропущен")
+            return
+        with self._shutdown_mutex:
+            if self._is_shutting_down:
+                logger.info("🔒 Shutdown уже идёт — stop_playback пропущен")
+                return
+            self._is_shutting_down = True
         if not self.is_playing:
             logger.warning("⚠️ Воспроизведение уже остановлено!")
+            self._is_shutting_down = False
             return
         
         logger.info("Остановка потокового воспроизведения аудио...")
@@ -414,14 +1006,6 @@ class AudioPlayer:
         try:
             # Устанавливаем флаг остановки
             self.stop_event.set()
-            
-            # Останавливаем мониторинг смены устройства
-            try:
-                self.stop_output_monitor.set()
-                if self.output_device_monitor_thread and self.output_device_monitor_thread.is_alive():
-                    self.output_device_monitor_thread.join(timeout=0.5)
-            except Exception:
-                pass
 
             # Останавливаем звуковой поток
             if self.stream:
@@ -457,8 +1041,51 @@ class AudioPlayer:
             self.is_playing = False
             self.playback_thread = None
             self.stream = None
+        finally:
+            self._is_shutting_down = False
 
+    def pause_playback(self):
+        """Приостанавливает воспроизведение аудио."""
+        try:
+            logger.info("⏸️ Приостановка воспроизведения...")
+            
+            # Останавливаем поток воспроизведения
+            self.stop_event.set()
+            
+            # Ждем завершения потока
+            if self.playback_thread and self.playback_thread.is_alive():
+                self.playback_thread.join(timeout=1.0)
+            
+            # Останавливаем поток
+            self._safe_stop_stream()
+            
+            self.is_playing = False
+            logger.info("✅ Воспроизведение приостановлено")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при приостановке воспроизведения: {e}")
 
+    def resume_playback(self):
+        """Возобновляет воспроизведение аудио."""
+        try:
+            logger.info("▶️ Возобновление воспроизведения...")
+            
+            # Сбрасываем флаг остановки
+            self.stop_event.clear()
+            
+            # Сбрасываем флаг завершения
+            with self._shutdown_mutex:
+                self._is_shutting_down = False
+            
+            # Запускаем поток воспроизведения
+            self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+            self.playback_thread.start()
+            
+            self.is_playing = True
+            logger.info("✅ Воспроизведение возобновлено")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при возобновлении воспроизведения: {e}")
 
     def _playback_loop(self):
         """Фоновый поток для воспроизведения аудио"""
@@ -467,9 +1094,8 @@ class AudioPlayer:
         try:
             while not self.stop_event.is_set():
                 try:
-                    # Если поток неожиданно стал неактивным — пробуем мягкий рестарт на текущем системном default
-                    if self.is_playing and (self.stream is None or not getattr(self.stream, 'active', False)):
-                        self._attempt_restart_on_current_default()
+                    # В автоматическом режиме система сама управляет — никаких рестартов
+                    pass
                 except Exception:
                     pass
                 # Проверяем, есть ли данные для воспроизведения
@@ -485,343 +1111,738 @@ class AudioPlayer:
         finally:
             logger.info("🔄 Фоновый поток воспроизведения завершен")
 
-    def _attempt_restart_on_current_default(self, retries: int = 2) -> bool:
-        """Пробует перезапустить вывод на ТЕКУЩЕМ системном default (строгий режим).
-        Не выбирает другие устройства. Возвращает True при успехе.
-        """
-        import time as _t
-        now = _t.time()
-        if (now - self._last_restart_ts) < self._restart_min_interval_sec:
-            return False
-        self._last_restart_ts = now
 
-        for attempt in range(max(1, retries)):
-            try:
-                # Получаем предпочтительное устройство из listener (если есть), иначе None → CoreAudio default
-                preferred_device = None
-                try:
-                    ca_listener = getattr(self, 'default_listener', None)
-                    if ca_listener is not None and hasattr(ca_listener, 'get_default_output'):
-                        preferred_device = ca_listener.get_default_output()
-                except Exception:
-                    preferred_device = None
-
-                # Закрываем текущий поток (если есть)
-                with self.stream_lock:
-                    if self.stream:
-                        try:
-                            if hasattr(self.stream, 'active') and self.stream.active:
-                                self.stream.stop()
-                            self.stream.close()
-                        except Exception:
-                            pass
-                        self.stream = None
-
-                # Пытаемся запустить новый поток на текущем системном default
-                self.stream = self._safe_init_stream(preferred_device=preferred_device)
-                self.is_playing = True
-                logger.info("✅ OutputStream перезапущен на текущем системном default")
-                return True
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось перезапустить OutputStream на текущем default (попытка {attempt+1}): {e}")
-                _t.sleep(0.15)
-        return False
 
     def _safe_init_stream(self, preferred_device=None):
         """
-        Безопасная инициализация аудио потока с обработкой ошибок PortAudio.
-        Учитывает режимы BT HFP/A2DP и свойства default-устройства.
+        Простая инициализация аудио потока: пусть macOS сам управляет устройствами.
+        Включает проверку доступности устройств и автоматический сброс при зависших устройствах.
         """
         try:
-            # Текущий default output
-            device_idx = preferred_device
-            info = None
+            # ПРИНУДИТЕЛЬНО обновляем список устройств перед инициализацией
+            logger.info("🔄 Принудительно обновляю список аудио устройств...")
             try:
-                info = sd.query_devices(device_idx) if device_idx is not None else None
-                name = (info.get('name') if info else 'System Default')
-            except Exception:
-                name = str(device_idx)
-
-            # Режим: строго следуем системному default, но если он в телефонном профиле (HFP) —
-            # пробуем совместимые параметры (1 канал, 16k/8k) НА ЭТОМ ЖЕ устройстве.
-            # Это не смена устройства, только параметры вывода.
-            hfp_mode = False
-            try:
-                # Эвристика по текущему default input (если активен HFP на BT-микрофоне)
-                if self._is_bt_hfp_active():
-                    hfp_mode = True
-                else:
-                    # По самому output-устройству: ограниченные каналы/частота или имя
-                    dev_name_l = (name or '').lower()
-                    max_ch = (info.get('max_output_channels') if info else 2) or 2
-                    def_sr = int(round((info.get('default_samplerate') if info else self.sample_rate)))
-                    if any(t in dev_name_l for t in ['airpods', 'hands-free', 'handsfree', 'hfp', 'hsp']) or max_ch <= 1 or def_sr <= 16000:
-                        hfp_mode = True
-            except Exception:
-                hfp_mode = False
-
-            # Формируем набор параметров: сначала идеальные, затем совместимые
-            samplerates = []
-            channels_options = []
-
-            try:
-                if info and info.get('default_samplerate'):
-                    samplerates.append(int(round(info.get('default_samplerate'))))
-            except Exception:
-                pass
-            # Базовые популярные частоты
-            for sr in [self.sample_rate, 48000, 44100, 32000, 22050, 16000, 12000, 11025, 8000]:
-                if sr and sr not in samplerates:
-                    samplerates.append(sr)
-
-            try:
-                max_out_ch = int(info.get('max_output_channels')) if info else 2
-            except Exception:
-                max_out_ch = 2
-
-            if hfp_mode or max_out_ch <= 1:
-                channels_options = [1, 2] if max_out_ch >= 2 else [1]
-                # В HFP в приоритете 16000/8000
-                for sr in [16000, 8000]:
-                    if sr not in samplerates:
-                        samplerates.insert(0, sr)
-            else:
-                # Всегда пробуем и стерео, и моно (на случай, если профиль меняется во время открытия)
-                channels_options = [2, 1] if max_out_ch >= 2 else [1]
-
-            # Несколько попыток с короткой задержкой — на случай переключения профиля BT
-            attempts = max(1, getattr(self, 'retries', 3))
-            for attempt in range(attempts):
-                for ch in channels_options:
-                    for sr in samplerates:
-                        # Перебираем варианты dtype/blocksize/latency от мягких к строгим
-                        for dtype in [self.dtype, 'float32', 'int16']:
-                            for bs in [None, 1024, 2048]:
-                                for lat in [None, 'high']:
-                                    try:
-                                        logger.info(f"🔄 Пробую default-вывод: device={name}, ch={ch}, sr={sr}, dtype={dtype}, bs={bs}, lat={lat}, attempt={attempt+1}")
-                                        kwargs = dict(samplerate=sr, channels=ch, dtype=dtype, device=device_idx, callback=self._playback_callback)
-                                        if bs is not None:
-                                            kwargs['blocksize'] = bs
-                                        if lat is not None:
-                                            kwargs['latency'] = lat
-                                        with self.stream_lock:
-                                            stream = sd.OutputStream(**kwargs)
-                                            stream.start()
-                                        logger.info(f"✅ Поток инициализирован: device={name}, ch={ch}, sr={sr}, dtype={dtype}, bs={bs}, lat={lat}")
-                                        self.channels = ch
-                                        self.sample_rate = sr
-                                        self.dtype = dtype
-                                        # Фиксируем фактическое устройство вывода
-                                        try:
-                                            actual_idx = device_idx if device_idx is not None else self._resolve_output_device()
-                                            self.current_output_device = actual_idx
-                                        except Exception:
-                                            pass
-                                        return stream
-                                    except Exception as e:
-                                        logger.warning(f"⚠️ Не удалось: device={name}, ch={ch}, sr={sr}, dtype={dtype}, bs={bs}, lat={lat}: {e}")
-
-                    # Попытка без явного девайса (пусть CoreAudio сам выберет default)
+                # Останавливаем все потоки для "чистого" состояния
+                sd.stop()
+                time.sleep(0.1)
+                
+                # ПРИНУДИТЕЛЬНЫЙ СБРОС CoreAudio при ошибках
+                logger.info("🔧 ПРИНУДИТЕЛЬНЫЙ СБРОС CoreAudio для устранения ошибок...")
+                try:
+                    # Останавливаем все потоки
+                    sd.stop()
+                    time.sleep(0.3)
+                    
+                    # Переинициализация CoreAudio
                     try:
-                        logger.info(f"🔄 Пробую вывод с device=None, channels={ch}, samplerate={samplerates[0]}, attempt={attempt+1}")
+                        # Безопасная переинициализация через sounddevice
+                        if hasattr(sd, '_coreaudio'):
+                            sd._coreaudio.reinitialize()
+                            logger.info("✅ CoreAudio переинициализирован через API")
+                        else:
+                            logger.info("🔄 API недоступен, использую базовый сброс")
+                            sd.stop()
+                            time.sleep(0.5)
+                    except Exception as ca_e:
+                        logger.warning(f"⚠️ Ошибка переинициализации CoreAudio: {ca_e}")
+                        logger.info("🔄 Использую базовый сброс")
+                        sd.stop()
+                        time.sleep(0.5)
+                    
+                    # Дополнительная очистка
+                    logger.info("🔧 Дополнительная очистка аудио системы...")
+                    sd.stop()
+                    time.sleep(0.2)
+                    
+                    logger.info("✅ CoreAudio сброшен и очищен")
+                    
+                except Exception as reset_e:
+                    logger.warning(f"⚠️ Ошибка сброса CoreAudio: {reset_e}")
+                    logger.info("🔄 Продолжаю с базовым обновлением")
+                
+                # ИНТЕГРАЦИЯ: Используем актуальный список из UnifiedAudioSystem
+                all_devices, current_device, current_device_info = self._get_audio_manager_devices()
+                
+                if all_devices is not None:
+                    # Используем данные из UnifiedAudioSystem
+                    logger.info(f"📱 Обновленный список устройств: {len(all_devices)} устройств")
+                    logger.info(f"🎧 Текущее устройство: {current_device}")
+                    
+                    # Показываем все устройства из UnifiedAudioSystem
+                    for device_info in all_devices:
+                        logger.info(f"  📱 {device_info.name} (тип: {device_info.device_type.value}, приоритет: {device_info.priority})")
+                    
+                    # ИСПРАВЛЕНИЕ: Принудительно обновляем PortAudio перед получением устройств
+                    logger.info("🔄 Принудительное обновление PortAudio...")
+                    try:
+                        sd._terminate()
+                        time.sleep(0.2)
+                        sd._initialize()
+                        logger.info("✅ PortAudio обновлен")
+                    except Exception as pa_e:
+                        logger.warning(f"⚠️ Не удалось обновить PortAudio: {pa_e}")
+                    
+                    # Получаем РЕАЛЬНЫЕ PortAudio default устройства
+                    devices = sd.query_devices()
+                    current_default_out = sd.default.device[1]  # Реальный default output
+                    current_default_in = sd.default.device[0]   # Реальный default input
+                    
+                    logger.info(f"🔊 Текущий default output: {current_default_out}")
+                    logger.info(f"🎙️ Текущий default input: {current_default_in}")
+                    
+                    if current_default_out != -1:
+                        default_out_name = devices[current_default_out].get('name', 'Unknown')
+                        logger.info(f"🔊 Default output: {current_default_out} — {default_out_name}")
+                        
+                        # Определяем профиль AirPods
+                        if 'airpods' in default_out_name.lower():
+                            out_info = devices[current_default_out]
+                else:
+                    # Fallback к старому методу
+                    logger.warning("⚠️ AudioManagerDaemon недоступен, использую fallback")
+                    devices = sd.query_devices()
+                    current_default_out = sd.default.device[1]  # Реальный default output
+                    current_default_in = sd.default.device[0]   # Реальный default input
+                    
+                    logger.info(f"📱 Обновленный список устройств: {len(devices)} устройств")
+                    logger.info(f"🔊 Текущий default output: {current_default_out}")
+                    logger.info(f"🎙️ Текущий default input: {current_default_in}")
+                    
+                    # Показываем ВСЕ устройства (не только output)
+                    for i, dev in enumerate(devices):
+                        name = dev.get('name', 'Unknown')
+                        in_ch = dev.get('max_input_channels', 0)
+                        out_ch = dev.get('max_output_channels', 0)
+                        if in_ch > 0 or out_ch > 0:
+                            logger.info(f"  📱 {i}: {name} (in:{in_ch} out:{out_ch})")
+                    
+                    # Проверяем, что дефолты корректны
+                    if current_default_out != -1 and current_default_out < len(devices):
+                        default_out_name = devices[current_default_out].get('name', 'Unknown')
+                        logger.info(f"🔊 Default output: {current_default_out} — {default_out_name}")
+                        
+                        # Определяем профиль AirPods
+                        if 'airpods' in default_out_name.lower():
+                            out_info = devices[current_default_out]
+                            max_channels = out_info.get('max_output_channels', 0)
+                            default_sr = out_info.get('default_samplerate', 0)
+                            
+                            if max_channels <= 1 or default_sr <= 16000:
+                                logger.info(f"🎧 AirPods в HFP режиме (гарнитура): ch={max_channels}, sr={default_sr}")
+                            else:
+                                logger.info(f"🎧 AirPods в A2DP режиме (качество): ch={max_channels}, sr={default_sr}")
+                    else:
+                        logger.warning(f"⚠️ Некорректный default output: {current_default_out}")
+                
+                if current_default_in != -1 and current_default_in < len(devices):
+                    default_in_name = devices[current_default_in].get('name', 'Unknown')
+                    logger.info(f"🎙️ Default input: {current_default_in} — {default_in_name}")
+                else:
+                    logger.warning(f"⚠️ Некорректный default input: {current_default_in}")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось обновить список устройств: {e}")
+            
+            # Универсальная адаптивная система параметров
+            configs = self._get_adaptive_configs(devices, current_default_out)
+            
+            logger.info(f"🎯 Адаптивные параметры для устройства {current_default_out}: {len(configs)} конфигураций")
+            
+            # УМНАЯ ИНИЦИАЛИЗАЦИЯ с проверкой совместимости
+            for i, config in enumerate(configs):
+                try:
+                    logger.info(f"🔄 Попытка {i+1}: device=None (автоматический), ch={config['channels']}, sr={config['samplerate']}")
+                    
+                    # ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА СОВМЕСТИМОСТИ
+                    if current_default_out != -1 and current_default_out < len(devices):
+                        device_info = devices[current_default_out]
+                        device_name = device_info.get('name', '').lower()
+                        
+                        # Проверяем Bluetooth устройства
+                        if any(tag in device_name for tag in ['airpods', 'bluetooth', 'wireless']):
+                            logger.info(f"🔍 Проверяю совместимость с {device_info.get('name', 'Unknown')}")
+                            
+                            # Тестируем совместимость
+                            if self._test_device_compatibility(current_default_out, config):
+                                logger.info(f"✅ Совместимость подтверждена для {config['channels']}ch/{config['samplerate']}Hz")
+                            else:
+                                logger.warning(f"⚠️ Несовместимость для {config['channels']}ch/{config['samplerate']}Hz")
+                                # Пропускаем несовместимые параметры
+                                continue
+                    
+                    # Инициализация потока
                         with self.stream_lock:
                             stream = sd.OutputStream(
-                                samplerate=samplerates[0],
-                                channels=ch,
-                                dtype=self.dtype,
-                                device=None,
+                            device=None,  # Пусть macOS сам выбирает
                                 callback=self._playback_callback,
-                                blocksize=2048,
-                                latency='high'
+                            **config
                             )
                             stream.start()
-                        logger.info("✅ Аудио поток инициализирован через CoreAudio default (device=None)")
-                        self.channels = ch
-                        self.sample_rate = samplerates[0]
-                        # Фиксируем фактическое устройство вывода по текущему системному default
-                        try:
-                            self.current_output_device = self._resolve_output_device()
-                        except Exception:
-                            pass
-                        return stream
-                    except Exception as e:
-                        logger.warning(f"⚠️ device=None тоже не сработал: {e}")
-
-                # В строгом режиме НЕ выполняем резерв на другие устройства — следуем system default
-                if not getattr(self, 'strict_follow_default', False):
-                    try:
-                        dev_lower = (name or '').lower()
-                        if any(tag in dev_lower for tag in ['airpods', 'hands-free', 'handsfree', 'hfp', 'hsp']) or self._is_bt_hfp_active():
-                            backup = self._find_backup_output_device()
-                            if backup is not None and backup != device_idx:
+                    
+                    logger.info(f"✅ Поток инициализирован: автоматический режим, ch={config['channels']}, sr={config['samplerate']}")
+                    self.channels = config['channels']
+                    self.sample_rate = config['samplerate']
+                    self.dtype = config['dtype']
+                    
+                    # Сохраняем информацию об устройстве для мониторинга
+                    self._last_device_info = {
+                        'index': current_default_out,
+                        'name': devices[current_default_out].get('name', 'Unknown') if current_default_out < len(devices) else 'Unknown',
+                        'channels': config['channels'],
+                        'samplerate': config['samplerate'],
+                        'timestamp': time.time()
+                    }
+                    
+                    logger.info(f"📱 Устройство: {self._last_device_info['name']} (индекс: {current_default_out})")
+                    return stream
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.warning(f"⚠️ Попытка {i+1} не удалась: {error_msg}")
+                    
+                    # Если это ошибка -10851/-9986, возможно зависшие устройства
+                    if any(code in error_msg for code in ['-10851', '-9986', 'Invalid Property Value']):
+                        if i == 0:  # Только при первой ошибке
+                            logger.warning("🔧 Обнаружены зависшие устройства, пробую сброс CoreAudio...")
+                            try:
+                                # Останавливаем все аудио потоки
+                                sd.stop()
+                                time.sleep(0.5)
+                                
+                                # ПРИНУДИТЕЛЬНЫЙ СБРОС CoreAudio
+                                logger.info("🔧 ПРИНУДИТЕЛЬНЫЙ СБРОС CoreAudio...")
                                 try:
-                                    info_b = sd.query_devices(backup)
-                                    name_b = info_b.get('name')
-                                except Exception:
-                                    name_b = str(backup)
-                                logger.info(f"🔄 Пробую резервный output: {name_b} (index={backup})")
-                                device_idx = backup
-                                # Пересчитаем info/name для последующих попыток
+                                    # Безопасная переинициализация через sounddevice
+                                    if hasattr(sd, '_coreaudio'):
+                                        sd._coreaudio.reinitialize()
+                                        logger.info("✅ CoreAudio переинициализирован")
+                                    else:
+                                        logger.info("🔄 API недоступен, базовый сброс")
+                                        sd.stop()
+                                        time.sleep(0.8)
+                                except Exception as ca_e:
+                                    logger.warning(f"⚠️ Ошибка переинициализации: {ca_e}")
+                                    sd.stop()
+                                    time.sleep(0.8)
+                                
+                                # Получаем обновленный список устройств
+                                devices = sd.query_devices()
+                                logger.info(f"📱 После сброса: {len(devices)} устройств")
+                                
+                                # Пробуем снова с теми же параметрами
+                                logger.info("🔄 Пробую снова после сброса...")
                                 try:
-                                    info = sd.query_devices(device_idx)
-                                    name = info.get('name')
-                                except Exception:
-                                    name = str(device_idx)
-                                # переходим к следующему циклу попыток (с новым device_idx)
-                                continue
-                    except Exception:
-                        pass
+                                    with self.stream_lock:
+                                        stream = sd.OutputStream(
+                                            device=None,  # Автоматический выбор
+                                            callback=self._playback_callback,
+                                            **config
+                                            )
+                                        stream.start()
+                                    
+                                    logger.info(f"✅ Успех после сброса: ch={config['channels']}, sr={config['samplerate']}")
+                                    self.channels = config['channels'],
+                                    self.sample_rate = config['samplerate'],
+                                    self.dtype = config['dtype'],
+                                    
+                                    # Сохраняем информацию об устройстве для мониторинга
+                                    self._last_device_info = {
+                                        'index': current_default_out,
+                                        'name': devices[current_default_out].get('name', 'Unknown') if current_default_out < len(devices) else 'Unknown',
+                                        'channels': config['channels'],
+                                        'samplerate': config['samplerate'],
+                                        'timestamp': time.time()
+                                    }
+                                    
+                                    logger.info(f"📱 Устройство после сброса: {self._last_device_info['name']} (индекс: {current_default_out})")
+                                    return stream
+                                    
+                                except Exception as retry_e:
+                                    logger.warning(f"⚠️ Повторная попытка не удалась: {retry_e}")
+                                    
+                                    # Fallback на встроенные устройства
+                                    builtin_devices = self._find_builtin_devices()
+                                    if builtin_devices:
+                                        out_idx = builtin_devices.get('output')
+                                        if out_idx is not None:
+                                            logger.info(f"🔄 Принудительный fallback на встроенные: output={out_idx}")
+                                            stream = sd.OutputStream(
+                                                device=out_idx,
+                                                channels=2,
+                                                samplerate=48000,
+                                                dtype='int16',
+                                                callback=self._playback_callback
+                                            )
+                                            stream.start()
+                                            logger.info("✅ Fallback на встроенные устройства успешен")
+                                            
+                                            # Сохраняем информацию об устройстве для мониторинга
+                                            self._last_device_info = {
+                                                'index': out_idx,
+                                                'name': f'Built-in Device {out_idx} (fallback)',
+                                                'channels': 2,
+                                                'samplerate': 48000,
+                                                'timestamp': time.time()
+                                            }
+                                            
+                                            self.channels = 2
+                                            self.sample_rate = 48000
+                                            self.dtype = 'int16'
+                                            
+                                            logger.info(f"📱 Fallback устройство: {self._last_device_info['name']} (индекс: {out_idx})")
+                                            return stream
+                            except Exception as fallback_e:
+                                logger.warning(f"⚠️ Fallback тоже не удался: {fallback_e}")
+                    
+                    if i < len(configs) - 1:
+                        time.sleep(0.1)  # Короткая пауза между попытками
 
-                # Пауза и переопределение default
-                try:
-                    time.sleep(max(0.1, getattr(self, 'settle_ms', 400)/1000.0))
-                    device_idx = preferred_device if preferred_device is not None else self._resolve_output_device()
-                    try:
-                        info = sd.query_devices(device_idx) if device_idx is not None else None
-                        name = (info.get('name') if info else 'System Default')
-                    except Exception:
-                        name = str(device_idx)
-                except Exception:
-                    pass
-
-            # Альтернативные консервативные настройки
-            logger.info("🔄 Пробую альтернативные настройки для macOS...")
-            try:
-                stream = sd.OutputStream(
-                    samplerate=44100,
-                    channels=1,
-                    dtype='int16',
-                    callback=self._playback_callback,
-                    blocksize=2048,
-                    latency='high'
-                )
-                stream.start()
-                logger.info("✅ Аудио поток инициализирован с альтернативными настройками")
-                return stream
-            except Exception as e:
-                logger.warning(f"⚠️ Альтернативные настройки не помогли: {e}")
-
-            # Если устройство вероятно в HFP и все попытки не удались — сообщаем мягко
-            if hfp_mode:
-                raise Exception("Выходное устройство в телефонном режиме (HFP). Воспроизведение недоступно во время записи через тот же BT девайс. Попробуйте остановить запись или дождаться переключения профиля.")
-
-            raise Exception("Не удалось инициализировать аудио поток ни с одним из доступных устройств")
+            raise Exception("Не удалось инициализировать аудио поток в автоматическом режиме")
 
         except Exception as e:
-            self.audio_error = True
-            self.audio_error_message = str(e)
+
             logger.error(f"❌ Критическая ошибка инициализации аудио: {e}")
             raise
 
-    def _resolve_output_device(self):
-        """Возвращает индекс системного default output устройства CoreAudio или None.
-        Предпочитаем CoreAudio host API (фактический системный выбор), затем пробуем sd.default.
+    def _is_headphones(self, device_name: str) -> bool:
+        """Определяет, является ли устройство наушниками."""
+        try:
+            device_lower = device_name.lower()
+            
+            # Ключевые слова для наушников
+            headphones_keywords = [
+                'airpods', 'beats', 'sony', 'bose', 'sennheiser',
+                'headphones', 'earbuds', 'earphones', 'headset'
+            ]
+            
+            # Проверяем наличие ключевых слов
+            for keyword in headphones_keywords:
+                if keyword in device_lower:
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка определения типа устройства: {e}")
+            return False
+    
+    def _get_device_priority(self, device_info: dict) -> int:
+        """Вычисляет приоритет устройства."""
+        try:
+            device_name = device_info.get('name', '').lower()
+            
+            # AirPods - высший приоритет
+            if 'airpods' in device_name:
+                return self.device_priorities['airpods']
+                
+            # Beats наушники
+            elif 'beats' in device_name:
+                return self.device_priorities['beats']
+                
+            # Bluetooth наушники
+            elif 'bluetooth' in device_name and self._is_headphones(device_name):
+                return self.device_priorities['bluetooth_headphones']
+                
+            # USB наушники
+            elif 'usb' in device_name and self._is_headphones(device_name):
+                return self.device_priorities['usb_headphones']
+                
+            # Bluetooth колонки
+            elif 'bluetooth' in device_name:
+                return self.device_priorities['bluetooth_speakers']
+                
+            # USB аудио
+            elif 'usb' in device_name:
+                return self.device_priorities['usb_audio']
+                
+            # Системные динамики
+            elif any(tag in device_name for tag in ['macbook', 'built-in', 'internal', 'speakers']):
+                return self.device_priorities['system_speakers']
+                
+            # Остальные устройства
+            else:
+                return self.device_priorities['other']
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка вычисления приоритета: {e}")
+            return 0
+
+    def _should_auto_switch_to_headphones(self, new_device_info: dict) -> bool:
+        """Определяет, нужно ли автоматически переключиться на наушники."""
+        try:
+            if not self.auto_switch_to_headphones:
+                return False
+                
+            # Если новое устройство - наушники, переключаемся
+            if new_device_info and self._is_headphones(new_device_info['name']):
+                logger.info("🎧 Обнаружены наушники - автоматическое переключение!")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка определения необходимости переключения: {e}")
+            return False
+
+    def _handle_headphones_connection(self, device_info: dict):
+        """Обрабатывает подключение наушников."""
+        try:
+            logger.info(f"🎧 НАУШНИКИ ПОДКЛЮЧЕНЫ: {device_info['name']}")
+            
+            # Принудительно переключаем системный default на наушники
+            try:
+                import sounddevice as sd
+                current_default = sd.default.device
+                if isinstance(current_default, (list, tuple)) and len(current_default) >= 2:
+                    # Обновляем только output, оставляем input
+                    new_default = (current_default[0], device_info['index'])
+                else:
+                    new_default = device_info['index']
+                
+                sd.default.device = new_default
+                logger.info(f"🔄 Системный default переключен на наушники: {device_info['name']} (индекс: {device_info['index']})")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось переключить системный default на наушники: {e}")
+            
+            # Автоматически переключаемся на наушники
+            self.switch_to_device(device_index=device_info['index'])
+            
+            # Восстанавливаем воспроизведение если было приостановлено
+            if self.resume_on_reconnect and self._was_paused_for_disconnect:
+                self.resume_playback()
+                self._was_paused_for_disconnect = False
+                logger.info("▶️ Воспроизведение возобновлено")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки подключения наушников: {e}")
+
+    def _handle_headphones_disconnection(self):
+        """Обрабатывает отключение наушников."""
+        try:
+            logger.info(" НАУШНИКИ ОТКЛЮЧЕНЫ")
+            
+            # Пауза воспроизведения
+            if self.pause_on_disconnect and self.is_playing:
+                self.pause_playback()
+                self._was_paused_for_disconnect = True
+                logger.info("⏸️ Воспроизведение приостановлено")
+            
+            # ИСПРАВЛЕНИЕ: Не переключаемся вручную - доверяем AudioManagerDaemon
+            if self.audio_manager:
+                logger.info("🔄 AudioManagerDaemon автоматически переключит устройство")
+                # AudioManagerDaemon сам переключится на лучшее доступное устройство
+            else:
+                # Fallback только если AudioManagerDaemon недоступен
+                logger.warning("⚠️ AudioManagerDaemon недоступен, используем fallback")
+                self.switch_to_system_device()
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки отключения наушников: {e}")
+
+    def _was_headphones_disconnected(self) -> bool:
+        """Проверяет, были ли отключены наушники."""
+        try:
+            if not self.current_device_info:
+                return False
+                
+            # Если текущее устройство - наушники, проверяем несколько условий
+            if self._is_headphones(self.current_device_info['name']):
+                # 1. Проверяем, есть ли наушники в списке доступных устройств
+                available_devices = self.list_available_devices()
+                headphones_found = False
+                for device in available_devices:
+                    if device['name'] == self.current_device_info['name']:
+                        headphones_found = True
+                        break
+                
+                # 2. Проверяем, изменился ли системный default output
+                try:
+                    import sounddevice as sd
+                    current_default = sd.default.device
+                    if isinstance(current_default, (list, tuple)) and len(current_default) >= 2:
+                        current_default_out = current_default[1]
+                    else:
+                        current_default_out = current_default
+                    
+                    # Если системный default изменился и больше не указывает на наушники
+                    if current_default_out != self.current_device_info['index']:
+                        logger.info(f"🔄 Системный default изменился: {current_default_out} != {self.current_device_info['index']}")
+                        return True
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки системного default: {e}")
+                
+                # 3. Если наушники не найдены в списке, считаем их отключенными
+                if not headphones_found:
+                    logger.info(f"🎧 Наушники {self.current_device_info['name']} не найдены в списке устройств")
+                    return True
+                
+                return False
+                
+            return False
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка проверки отключения наушников: {e}")
+            return False
+
+    def switch_to_system_device(self) -> bool:
+        """Переключается на системное устройство."""
+        try:
+            logger.info("🔄 Переключение на системное устройство")
+            
+            # Используем AudioManagerDaemon если доступен
+            if self.audio_manager:
+                # Находим системное устройство через AudioManager
+                devices = self.audio_manager.get_available_devices()
+                system_device = None
+                
+                for device in devices:
+                    if device.device_type.value == 'system_speakers':
+                        system_device = device
+                        break
+                
+                if system_device:
+                    success = self.audio_manager.switch_to_device(system_device.name)
+                    if success:
+                        self._update_current_device_info()
+                        logger.info(f"✅ Переключились на системное устройство: {system_device.name}")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Не удалось переключиться на системное устройство: {system_device.name}")
+                        return False
+                else:
+                    logger.warning("⚠️ Системное устройство не найдено")
+                    return False
+            
+            # Fallback на старый метод
+            devices = self.list_available_devices()
+            system_device = None
+            
+            for device in devices:
+                if device['priority'] == self.device_priorities['system_speakers']:
+                    system_device = device
+                    break
+            
+            if system_device:
+                # Принудительно переключаем системный default
+                try:
+                    import sounddevice as sd
+                    current_default = sd.default.device
+                    if isinstance(current_default, (list, tuple)) and len(current_default) >= 2:
+                        # Обновляем только output, оставляем input
+                        new_default = (current_default[0], system_device['index'])
+                    else:
+                        new_default = system_device['index']
+                    
+                    sd.default.device = new_default
+                    logger.info(f"🔄 Системный default переключен на: {system_device['name']} (индекс: {system_device['index']})")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось переключить системный default: {e}")
+                
+                return self.switch_to_device(device_index=system_device['index'])
+            else:
+                logger.warning("⚠️ Системное устройство не найдено")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка переключения на системное устройство: {e}")
+            return False
+
+    def _detect_bluetooth_profile(self, device_info):
+        """
+        Умно определяет текущий Bluetooth профиль устройства.
+        Автоматически адаптирует параметры под реальные возможности.
         """
         try:
-            # 1) CoreAudio host API — фактический системный дефолт
-            try:
-                hostapis = sd.query_hostapis()
-                core_audio_idx = None
-                for idx, api in enumerate(hostapis):
-                    name = api.get('name', '')
-                    if 'core' in name.lower():
-                        core_audio_idx = idx
-                        break
-                if core_audio_idx is None:
-                    core_audio_idx = 0  # fallback
-                api = sd.query_hostapis(core_audio_idx)
-                d = api.get('default_output_device', -1)
-                if d is not None and d != -1:
-                    try:
-                        info = sd.query_devices(d)
-                        if info.get('max_output_channels', 0) > 0:
-                            logger.debug(f"🔊 Default output (CoreAudio): {info.get('name')} (index={d})")
-                            return d
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # 2) sd.default.device как запасной вариант
-            try:
-                default = sd.default.device
-                if isinstance(default, (list, tuple)) and len(default) >= 2:
-                    default_out = default[1]
-                    if default_out is not None and default_out != -1:
-                        try:
-                            info = sd.query_devices(default_out)
-                            if info.get('max_output_channels', 0) > 0:
-                                logger.debug(f"🔊 Default output (sd.default): {info.get('name')} (index={default_out})")
-                                return default_out
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-            logger.warning("⚠️ Default output не определён — верну None (пусть PortAudio решит)")
-            return None
+            device_name = device_info.get('name', '').lower()
+            
+            # Проверяем, является ли это Bluetooth устройством
+            if not any(tag in device_name for tag in ['airpods', 'bluetooth', 'wireless']):
+                return 'unknown', None
+            
+            logger.info(f"🔍 Определяю профиль Bluetooth для: {device_info.get('name', 'Unknown')}")
+            
+            # Получаем реальные возможности устройства
+            max_channels = device_info.get('max_output_channels', 0)
+            default_sr = device_info.get('default_samplerate', 0)
+            max_sr = device_info.get('max_samplerate', 0)
+            
+            logger.info(f"📊 Возможности устройства:")
+            logger.info(f"   Максимум каналов: {max_channels}")
+            logger.info(f"   Дефолтная частота: {default_sr}")
+            logger.info(f"   Максимальная частота: {max_sr}")
+            
+            # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ПРОФИЛЯ
+            if max_channels <= 1 and default_sr <= 16000:
+                profile = 'hfp'  # Hands-Free Profile (гарнитура)
+                logger.info("🎧 Определен профиль: HFP (гарнитура)")
+                
+                # HFP-совместимые параметры
+                compatible_params = [
+                    {'channels': 1, 'samplerate': 8000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 22050, 'dtype': 'int16'},
+                ]
+                
+            elif max_channels >= 2 and default_sr >= 44100:
+                profile = 'a2dp'  # Advanced Audio Distribution Profile (качество)
+                logger.info("🎧 Определен профиль: A2DP (качество)")
+                
+                # A2DP-совместимые параметры
+                compatible_params = [
+                    {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
+                    {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                ]
+                
+            else:
+                profile = 'mixed'  # Смешанный профиль
+                logger.info("🎧 Определен профиль: MIXED (адаптивный)")
+                
+                # Адаптивные параметры
+                compatible_params = [
+                    {'channels': min(2, max_channels), 'samplerate': min(48000, default_sr), 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': min(44100, default_sr), 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                ]
+            
+            # Проверяем совместимость параметров
+            logger.info(f"🎯 Совместимые параметры для профиля {profile.upper()}:")
+            for i, params in enumerate(compatible_params):
+                logger.info(f"   {i+1}. ch={params['channels']}, sr={params['samplerate']}, dtype={params['dtype']}")
+            
+            return profile, compatible_params
+            
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось определить default output: {e} — использую None")
-            return None
-
-    def _monitor_output_device_changes(self):
-        """Следит за сменой выходного устройства и перезапускает поток при изменении."""
+            logger.warning(f"⚠️ Ошибка определения профиля: {e}")
+            return 'unknown', None
+    
+    def _test_device_compatibility(self, device_idx, params):
+        """
+        Тестирует совместимость устройства с заданными параметрами.
+        Возвращает True если параметры работают.
+        """
         try:
-            while self.is_playing and not self.stop_output_monitor.is_set():
-                try:
-                    # Упрощенный режим: всегда следуем системному default без приостановок
-
-                    new_device = self._resolve_output_device()
-                    if new_device != self.current_output_device:
-                        # Дебаунс: требуем два подряд одинаковых чтения default
-                        if self._pending_output_device == new_device:
-                            self._pending_output_count += 1
-                        else:
-                            self._pending_output_device = new_device
-                            self._pending_output_count = 1
-
-                        if self._pending_output_count >= 2:
-                            old = self.current_output_device
-                            if self._restart_output_stream(new_device):
-                                self.current_output_device = new_device
-                                logger.info(f"🔄 Переключил выходное устройство: {old} → {new_device}")
-                            self._pending_output_device = None
-                            self._pending_output_count = 0
-                except Exception:
-                    pass
-                time.sleep(0.5)
-        except Exception:
-            pass
-
-    def _restart_output_stream(self, new_device) -> bool:
-        """Останавливает текущий OutputStream и запускает новый для нового устройства."""
-        try:
-            try:
-                old_info, old_name = self._get_device_info(self.current_output_device)
-                new_info, new_name = self._get_device_info(new_device)
-                logger.info(f"🎛️ restart_output_stream: {old_name} → {new_name}")
-            except Exception:
-                pass
-            with self.stream_lock:
-                if self.stream:
-                    try:
-                        if hasattr(self.stream, 'active') and self.stream.active:
-                            self.stream.stop()
-                        self.stream.close()
-                    except Exception:
-                        pass
-                    self.stream = None
-            # Создаем новый поток с авто-подбором параметров
-            self.stream = self._safe_init_stream(preferred_device=new_device)
-            try:
-                logger.info(f"✅ OutputStream restarted on device index={new_device}")
-            except Exception:
-                pass
+            logger.info(f"🧪 Тестирую совместимость: ch={params['channels']}, sr={params['samplerate']}")
+            
+            # Создаем тестовый поток
+            test_stream = sd.OutputStream(
+                device=device_idx,
+                channels=params['channels'],
+                samplerate=params['samplerate'],
+                dtype=params['dtype']
+            )
+            
+            # Запускаем поток
+            test_stream.start()
+            time.sleep(0.1)  # Даем потоку инициализироваться
+            
+            # Останавливаем и закрываем
+            test_stream.stop()
+            test_stream.close()
+            
+            logger.info(f"✅ Совместимость подтверждена: ch={params['channels']}, sr={params['samplerate']}")
             return True
+            
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось переключить выходное устройство: {e}")
+            logger.warning(f"⚠️ Несовместимость: {e}")
             return False
+    
+    def _get_adaptive_configs(self, devices, device_idx):
+        """
+        Умно определяет адаптивные параметры для устройства.
+        Автоматически подбирает параметры под текущий профиль Bluetooth.
+        """
+        if device_idx == -1 or device_idx >= len(devices):
+            # Fallback на универсальные параметры
+            return [
+                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
+                {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+            ]
+        
+        device = devices[device_idx]
+        
+        # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ПРОФИЛЯ
+        profile, compatible_params = self._detect_bluetooth_profile(device)
+        
+        if profile != 'unknown' and compatible_params:
+            logger.info(f"🎯 Использую профиль {profile.upper()} для устройства {device_idx}")
+            return compatible_params
+        
+        # Fallback на старую логику
+        device_name = device.get('name', '').lower()
+        
+        # Определяем тип устройства и профиль
+        if 'airpods' in device_name or 'bluetooth' in device_name:
+            # Bluetooth устройство - адаптируемся под профиль
+            max_channels = device.get('max_output_channels', 0)
+            default_sr = device.get('default_samplerate', 0)
+            
+            logger.info(f"🎧 Bluetooth устройство: {device_name}")
+            logger.info(f"   Максимум каналов: {max_channels}")
+            logger.info(f"   Дефолтная частота: {default_sr}")
+            
+            if max_channels <= 1 or default_sr <= 16000:
+                # HFP режим (гарнитура) - только низкое качество
+                logger.info("🎧 Режим HFP (гарнитура) - используем низкое качество")
+                return [
+                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 8000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 22050, 'dtype': 'int16'},
+                ]
+            else:
+                # A2DP режим (качество) - высокое качество
+                logger.info("🎧 Режим A2DP (качество) - используем высокое качество")
+                return [
+                    {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
+                    {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                ]
+        
+        elif any(tag in device_name for tag in ['macbook', 'built-in', 'internal']):
+            # Встроенные устройства - стабильные параметры
+            logger.info("💻 Встроенное устройство - используем стандартные параметры")
+            return [
+                {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
+                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
+                {'channels': 1, 'samplerate': 48000, 'dtype': 'int16'},
+            ]
+        
+        else:
+            # Неизвестное устройство - пробуем все варианты
+            logger.info("❓ Неизвестное устройство - пробуем все варианты")
+            return [
+                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
+                {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
+                {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+            ]
+
+    def _find_builtin_devices(self):
+        """Находит встроенные устройства MacBook для fallback."""
+        try:
+            devices = sd.query_devices()
+            builtin = {'input': None, 'output': None}
+            
+            for idx, dev in enumerate(devices):
+                try:
+                    name = (dev.get('name') or '').lower()
+                    if any(tag in name for tag in ['macbook', 'built-in', 'internal']):
+                        if dev.get('max_input_channels', 0) > 0 and builtin['input'] is None:
+                            builtin['input'] = idx
+                        if dev.get('max_output_channels', 0) > 0 and builtin['output'] is None:
+                            builtin['output'] = idx
+                except Exception:
+                    continue
+            
+            return builtin if any(builtin.values()) else None
+        except Exception:
+            return None
+
+
+
+
 
     def _clear_buffers(self):
         """Очищает внутренний буфер и очередь аудио."""
@@ -901,47 +1922,24 @@ class AudioPlayer:
         except Exception as e:
             logger.warning(f"⚠️ Не удалось воспроизвести сигнал: {e}")
 
-    def start_audio_monitoring(self):
-        """
-        Запускает фоновый мониторинг завершения аудио.
-        НЕ блокирует основной поток!
-        """
-        logger.info("🎵 Запускаю фоновый мониторинг аудио...")
-        
-        # Создаем фоновую задачу для мониторинга
-        import threading
-        
-        def monitor_audio():
-            """Фоновая функция мониторинга"""
-            try:
-                while self.is_playing:
-                    time.sleep(0.5)  # Проверяем каждые 500ms
-                    
-                    # Проверяем статус
-                    queue_size = self.audio_queue.qsize()
-                    with self.buffer_lock:
-                        buffer_size = len(self.internal_buffer)
-                    
-                    # Если все воспроизведено - останавливаем
-                    if queue_size == 0 and buffer_size == 0:
-                        logger.info("✅ Аудио завершено, останавливаю мониторинг")
-                        self.is_playing = False
-                        break
-                        
-                logger.info("✅ Мониторинг аудио завершен")
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка в мониторинге аудио: {e}")
-                self.is_playing = False
-        
-        # Запускаем мониторинг в отдельном потоке
-        self.monitor_thread = threading.Thread(target=monitor_audio, daemon=True)
-        self.monitor_thread.start()
-        logger.info("✅ Мониторинг аудио запущен в фоне")
+
 
     async def cleanup(self):
         """Очистка ресурсов плеера."""
         self.stop_playback()
+        self.stop_device_monitoring()
+        
+        # НЕ останавливаем глобальный AudioManagerDaemon, так как он может использоваться другими экземплярами
+        # Просто сбрасываем ссылку
+        if self.audio_manager:
+            try:
+                # Удаляем callback, чтобы избежать утечек памяти
+                # self.audio_manager.remove_callback(self._on_device_change_callback)  # Если будет метод
+                self.audio_manager = None
+                logger.info("✅ Ссылка на AudioManagerDaemon сброшена")
+            except Exception as e:
+                logger.error(f"❌ Ошибка очистки AudioManagerDaemon: {e}")
+        
         logger.info("Ресурсы AudioPlayer очищены.")
 
     def get_audio_status(self):
@@ -950,142 +1948,28 @@ class AudioPlayer:
         """
         return {
             'is_playing': self.is_playing,
-            'has_error': self.audio_error,
-            'error_message': self.audio_error_message,
+
             'stream_active': self.stream is not None and hasattr(self.stream, 'active') and self.stream.active,
             'queue_size': self.audio_queue.qsize(),
             'buffer_size': len(self.internal_buffer)
         }
 
-    def reset_audio_error(self):
-        """
-        Сбрасывает флаги ошибок аудио для повторной попытки инициализации.
-        """
-        self.audio_error = False
-        self.audio_error_message = ""
-        logger.info("🔄 Флаги ошибок аудио сброшены")
 
-    def clear_all_audio_data(self):
-        """ПРИНУДИТЕЛЬНО очищает ВСЕ аудио данные - включая очередь и активное воспроизведение"""
-        clear_time = time.time()
-        logger.warning(f"🚨 clear_all_audio_data() вызван в {clear_time:.3f}")
-        
-        try:
-            # Логируем состояние ДО очистки
-            queue_before = self.audio_queue.qsize()
-            buffer_before = len(self.internal_buffer)
-            stream_active = hasattr(self, 'stream') and self.stream and hasattr(self.stream, 'active') and self.stream.active
-            logger.warning(f"   📊 Состояние ДО: queue={queue_before}, buffer={buffer_before}, stream_active={stream_active}")
-            
-            logger.warning("🚨 ПРИНУДИТЕЛЬНАЯ очистка ВСЕХ аудио данных...")
-            
-            # 1️⃣ ПРИНУДИТЕЛЬНО очищаем очередь чанков
-            while not self.audio_queue.empty():
-                try:
-                    self.audio_queue.get_nowait()
-                    self.audio_queue.task_done()
-                except:
-                    pass
-            
-            # 2️⃣ ДОПОЛНИТЕЛЬНАЯ очистка очереди через mutex
-            try:
-                with self.audio_queue.mutex:
-                    self.audio_queue.queue.clear()
-                logger.warning("🚨 Очередь ПРИНУДИТЕЛЬНО очищена через mutex!")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка очистки через mutex: {e}")
-            
-            # 3️⃣ ПРИНУДИТЕЛЬНО очищаем внутренний буфер
-            with self.buffer_lock:
-                self.internal_buffer = np.array([], dtype=np.int16)
-            
-            # 4️⃣ ПРИНУДИТЕЛЬНО останавливаем поток воспроизведения
-            if hasattr(self, 'stream') and self.stream:
-                try:
-                    if hasattr(self.stream, 'active') and self.stream.active:
-                        self.stream.abort()  # Агрессивная остановка
-                        logger.warning("🚨 Аудио поток ПРИНУДИТЕЛЬНО остановлен через abort!")
-                    self.stream.close()
-                    self.stream = None
-                    logger.warning("🚨 Аудио поток ПРИНУДИТЕЛЬНО закрыт!")
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка остановки потока: {e}")
-            
-            # 5️⃣ Сбрасываем состояние
-            self.is_playing = False
-            
-            # 6️⃣ ПРИНУДИТЕЛЬНО останавливаем все звуковые потоки
-            try:
-                sd.stop()  # Останавливает все звуковые потоки
-                logger.warning("🚨 ВСЕ звуковые потоки ПРИНУДИТЕЛЬНО остановлены!")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка остановки всех потоков: {e}")
-            
-            # 7️⃣ ДОПОЛНИТЕЛЬНАЯ очистка через _clear_buffers
-            try:
-                self._clear_buffers()
-                logger.warning("🚨 Дополнительная очистка буферов выполнена!")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка дополнительной очистки: {e}")
-            
-            # 8️⃣ Устанавливаем временную блокировку буфера
-            try:
-                self.set_buffer_lock()
-                logger.warning("🚨 Временная блокировка буфера установлена!")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка установки временной блокировки: {e}")
-            
-            # Логируем состояние ПОСЛЕ очистки
-            queue_after = self.audio_queue.qsize()
-            buffer_after = len(self.internal_buffer)
-            total_time = (time.time() - clear_time) * 1000
-            logger.warning(f"   📊 Состояние ПОСЛЕ: queue={queue_after}, buffer={buffer_after}")
-            logger.warning(f"   ⏱️ Общее время очистки: {total_time:.1f}ms")
-            
-            # Проверяем результат
-            if queue_after == 0 and buffer_after == 0:
-                logger.warning("   🎯 ОЧИСТКА УСПЕШНА - все буферы пусты!")
-            else:
-                logger.warning(f"   ⚠️ ОЧИСТКА НЕПОЛНАЯ - queue={queue_after}, buffer={buffer_after}")
-            
-            logger.warning("✅ ВСЕ аудио данные ПРИНУДИТЕЛЬНО очищены!")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при очистке всех аудио данных: {e}")
-            import traceback
-            logger.error(f"   🔍 Traceback: {traceback.format_exc()}")
 
-    def interrupt_immediately(self):
-        """МГНОВЕННОЕ прерывание без ожидания - для критических ситуаций"""
-        try:
-            logger.warning("🚨 МГНОВЕННОЕ прерывание аудио...")
-            
-            # 1️⃣ НЕМЕДЛЕННО устанавливаем флаги прерывания
-            self.interrupt_flag.set()
-            self.stop_event.set()
-            
-            # 2️⃣ ПРИНУДИТЕЛЬНО очищаем буферы
-            with self.buffer_lock:
-                self.internal_buffer = np.array([], dtype=np.int16)
-            
-            # 3️⃣ Очищаем очередь чанков
-            while not self.audio_queue.empty():
-                try:
-                    self.audio_queue.get_nowait()
-                    self.audio_queue.task_done()
-                except:
-                    pass
-            
-            # 4️⃣ Сбрасываем состояние
-            self.is_playing = False
-            
-            logger.warning("✅ МГНОВЕННОЕ прерывание аудио выполнено!")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при мгновенном прерывании: {e}")
+
+
+
 
     def force_stop(self, immediate=False):
         """Универсальный метод остановки аудио с опцией мгновенной остановки"""
+        if getattr(self, '_is_shutting_down', False):
+            logger.info("🔒 Shutdown уже идёт — force_stop пропущен")
+            return
+        with self._shutdown_mutex:
+            if self._is_shutting_down:
+                logger.info("🔒 Shutdown уже идёт — force_stop пропущен")
+                return
+            self._is_shutting_down = True
         if immediate:
             logger.info("🚨 force_stop(immediate=True) вызван - МГНОВЕННАЯ остановка")
         else:
@@ -1195,77 +2079,12 @@ class AudioPlayer:
             
         except Exception as e:
             logger.error(f"❌ Ошибка в force_stop: {e}")
+        finally:
+            self._is_shutting_down = False
     
-    def force_stop_playback(self):
-        """МГНОВЕННО останавливает воспроизведение аудио (alias для force_stop(immediate=True))"""
-        return self.force_stop(immediate=True)
+
     
-    def stop_all_audio_threads(self):
-        """Останавливает все аудио потоки"""
-        logger.info("🚨 stop_all_audio_threads() вызван")
-        
-        try:
-            # 1️⃣ Останавливаем основной поток воспроизведения
-            if self.playback_thread and self.playback_thread.is_alive():
-                logger.info("   🚨 Останавливаю основной поток воспроизведения...")
-                self.stop_event.set()
-                self.playback_thread.join(timeout=0.2)
-                if self.playback_thread.is_alive():
-                    logger.warning("   ⚠️ Основной поток не остановился в таймаут")
-                else:
-                    logger.info("   ✅ Основной поток остановлен")
-            
-            # 2️⃣ Останавливаем все дочерние потоки
-            import threading
-            current_thread = threading.current_thread()
-            all_threads = threading.enumerate()
-            
-            audio_threads = []
-            for thread in all_threads:
-                if (thread != current_thread and 
-                    thread != threading.main_thread() and 
-                    thread.is_alive() and
-                    'audio' in thread.name.lower()):
-                    audio_threads.append(thread)
-            
-            if audio_threads:
-                logger.info(f"   🚨 Найдено {len(audio_threads)} аудио потоков для остановки")
-                for thread in audio_threads:
-                    try:
-                        logger.info(f"   🚨 Останавливаю поток: {thread.name}")
-                        # Принудительно прерываем поток
-                        import ctypes
-                        thread_id = thread.ident
-                        if thread_id:
-                            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-                                ctypes.c_long(thread_id), 
-                                ctypes.py_object(SystemExit)
-                            )
-                            if res > 1:
-                                ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, 0)
-                                logger.warning(f"   ⚠️ Не удалось прервать поток: {thread.name}")
-                            else:
-                                logger.info(f"   ✅ Поток прерван: {thread.name}")
-                    except Exception as e:
-                        logger.warning(f"   ⚠️ Ошибка прерывания потока {thread.name}: {e}")
-            else:
-                logger.info("   ✅ Дополнительные аудио потоки не найдены")
-            
-            # 3️⃣ Останавливаем аудио поток
-            if self.stream and self.stream.active:
-                logger.info("   🚨 Останавливаю аудио поток...")
-                try:
-                    self.stream.stop()
-                    self.stream.close()
-                    self.stream = None
-                    logger.info("   ✅ Аудио поток остановлен")
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Ошибка остановки аудио потока: {e}")
-            
-            logger.info("✅ stop_all_audio_threads завершен")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка в stop_all_audio_threads: {e}")
+
     
     def clear_audio_buffers(self):
         """Очищает все аудио буферы"""
@@ -1308,17 +2127,74 @@ class AudioPlayer:
             logger.info("✅ Аудио устройства доступны.")
         except Exception as e:
             logger.warning(f"⚠️ Не удалось получить список аудио устройств: {e}")
-            self.audio_error = True
-            self.audio_error_message = f"Не удалось получить список аудио устройств: {e}"
     
-    def set_buffer_lock(self, duration=None):
-        """Устанавливает временную блокировку буфера для предотвращения добавления новых чанков."""
-        if duration is None:
-            duration = self.buffer_block_duration
+    # Новые методы для интеграции с AudioManagerDaemon
+    
+    def switch_to_headphones_via_manager(self) -> bool:
+        """Переключается на наушники через AudioManagerDaemon"""
+        try:
+            if self.audio_manager:
+                success = self.audio_manager.switch_to_headphones()
+                if success:
+                    self._update_current_device_info()
+                    logger.info("✅ Переключились на наушники через AudioManagerDaemon")
+                return success
+            else:
+                logger.warning("⚠️ AudioManagerDaemon недоступен")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка переключения на наушники: {e}")
+            return False
+    
+    def auto_switch_to_best_device_via_manager(self) -> bool:
+        """Автоматически переключается на лучшее устройство через AudioManagerDaemon"""
+        try:
+            if self.audio_manager:
+                success = self.audio_manager.auto_switch_to_best()
+                if success:
+                    self._update_current_device_info()
+                    logger.info("✅ Автоматически переключились на лучшее устройство через AudioManagerDaemon")
+                return success
+            else:
+                logger.warning("⚠️ AudioManagerDaemon недоступен")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка автоматического переключения: {e}")
+            return False
+    
+    def get_available_devices_via_manager(self) -> List[DeviceInfo]:
+        """Получает список доступных устройств через AudioManagerDaemon"""
+        try:
+            if self.audio_manager:
+                return self.audio_manager.get_available_devices()
+            else:
+                logger.warning("⚠️ AudioManagerDaemon недоступен")
+                return []
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения списка устройств: {e}")
+            return []
+    
+    def is_audio_manager_available(self) -> bool:
+        """Проверяет доступность AudioManagerDaemon"""
+        return self.audio_manager is not None
+    
+    def get_audio_manager_status(self) -> dict:
+        """Возвращает статус AudioManagerDaemon"""
+        if not self.audio_manager:
+            return {'available': False, 'error': 'AudioManagerDaemon не инициализирован'}
         
-        self.buffer_blocked_until = time.time() + duration
-        logger.warning(f"🚨 Временная блокировка буфера установлена на {duration:.1f} секунд")
+        try:
+            current_device = self.audio_manager.get_current_device()
+            devices = self.audio_manager.get_available_devices()
+            
+            return {
+                'available': True,
+                'current_device': current_device,
+                'total_devices': len(devices),
+                'running': self.audio_manager.running
+            }
+        except Exception as e:
+            return {'available': True, 'error': str(e)}
     
-    def is_buffer_locked(self):
-        """Проверяет, заблокирован ли буфер временно."""
-        return time.time() < self.buffer_blocked_until
+        
+         

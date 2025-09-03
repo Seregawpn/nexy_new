@@ -14,12 +14,45 @@ audio:
   channels: 1
   chunk_size: 1024
   format: "int16"
-  follow_system_default: true
-  bluetooth_policy: "strict_default"  # prefer_quality | strict_default
-  settle_ms: 400
-  retries: 3
-  preflush_on_switch: true
-  use_coreaudio_listeners: true
+  follow_system_default: false  # Автоматический режим через macOS
+  bluetooth_policy: "auto"  # Пусть система сама управляет
+  settle_ms: 100  # Минимальный settle
+  retries: 2  # Меньше попыток
+  preflush_on_switch: false
+  use_coreaudio_listeners: true  # Включаем мониторинг устройств
+  
+  # Новая система управления аудио устройствами
+  device_manager:
+    enabled: true  # Включить AudioManagerDaemon
+    monitoring_interval: 3.0  # Интервал мониторинга в секундах
+    switch_cooldown: 2.0  # Минимальное время между переключениями
+    cache_timeout: 5.0  # Время кэширования информации об устройствах
+    auto_switch_to_headphones: true  # Автоматическое переключение на наушники
+    auto_switch_to_best: true  # Автоматическое переключение на лучшее устройство
+    exclude_virtual_devices: true  # Исключать виртуальные устройства из автоматического выбора
+    virtual_device_keywords:  # Ключевые слова для определения виртуальных устройств
+      - blackhole
+      - soundflower
+      - loopback
+      - virtual
+      - aggregate
+      - multi-output
+      - sound source
+      - audio hijack
+    
+    # Система приоритетов устройств (чем выше число, тем выше приоритет)
+    device_priorities:
+      airpods: 100  # AirPods - высший приоритет
+      beats: 95  # Beats наушники
+      bluetooth_headphones: 90  # Bluetooth наушники
+      usb_headphones: 85  # USB наушники
+      bluetooth_speakers: 70  # Bluetooth колонки
+      usb_audio: 60  # USB аудио
+      system_speakers: 40  # Системные динамики MacBook
+      built_in: 20  # Встроенные устройства
+      other: 10  # Остальные устройства
+      microphone: 5  # Микрофоны
+      virtual_device: 1  # Виртуальные устройства (BlackHole, SoundFlower) - минимальный приоритет
   
 # STT settings (Speech Recognition)
 stt:
