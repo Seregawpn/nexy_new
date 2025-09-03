@@ -595,7 +595,7 @@ class AudioPlayer:
                 for i, dev in enumerate(devices):
                     if device_name.lower() in dev.get('name', '').lower():
                         target_device = i
-                        break
+                    break
             elif device_index is not None:
                 if 0 <= device_index < len(devices):
                     target_device = device_index
@@ -639,7 +639,7 @@ class AudioPlayer:
                     'max_samplerate': device_info.get('max_samplerate', 0),
                     'timestamp': time.time()
                 }
-            return True
+                return True
             
         except Exception as e:
             logger.error(f"❌ Ошибка при переключении устройства: {e}")
@@ -1139,7 +1139,7 @@ class AudioPlayer:
                         if hasattr(sd, '_coreaudio'):
                             sd._coreaudio.reinitialize()
                             logger.info("✅ CoreAudio переинициализирован через API")
-                        else:
+                else:
                             logger.info("🔄 API недоступен, использую базовый сброс")
                             sd.stop()
                             time.sleep(0.5)
@@ -1197,7 +1197,7 @@ class AudioPlayer:
                         # Определяем профиль AirPods
                         if 'airpods' in default_out_name.lower():
                             out_info = devices[current_default_out]
-                else:
+            else:
                     # Fallback к старому методу
                     logger.warning("⚠️ AudioManagerDaemon недоступен, использую fallback")
                     devices = sd.query_devices()
@@ -1240,7 +1240,7 @@ class AudioPlayer:
                 else:
                     logger.warning(f"⚠️ Некорректный default input: {current_default_in}")
                 
-            except Exception as e:
+                                    except Exception as e:
                 logger.warning(f"⚠️ Не удалось обновить список устройств: {e}")
             
             # Универсальная адаптивная система параметров
@@ -1294,9 +1294,9 @@ class AudioPlayer:
                     }
                     
                     logger.info(f"📱 Устройство: {self._last_device_info['name']} (индекс: {current_default_out})")
-                    return stream
+                        return stream
                     
-                except Exception as e:
+                    except Exception as e:
                     error_msg = str(e)
                     logger.warning(f"⚠️ Попытка {i+1} не удалась: {error_msg}")
                     
@@ -1333,12 +1333,12 @@ class AudioPlayer:
                                 logger.info("🔄 Пробую снова после сброса...")
                                 try:
                                     with self.stream_lock:
-                                        stream = sd.OutputStream(
+                stream = sd.OutputStream(
                                             device=None,  # Автоматический выбор
-                                            callback=self._playback_callback,
+                    callback=self._playback_callback,
                                             **config
-                                            )
-                                        stream.start()
+                )
+                stream.start()
                                     
                                     logger.info(f"✅ Успех после сброса: ch={config['channels']}, sr={config['samplerate']}")
                                     self.channels = config['channels'],
@@ -1355,7 +1355,7 @@ class AudioPlayer:
                                     }
                                     
                                     logger.info(f"📱 Устройство после сброса: {self._last_device_info['name']} (индекс: {current_default_out})")
-                                    return stream
+                return stream
                                     
                                 except Exception as retry_e:
                                     logger.warning(f"⚠️ Повторная попытка не удалась: {retry_e}")
@@ -1501,7 +1501,7 @@ class AudioPlayer:
                 
                 sd.default.device = new_default
                 logger.info(f"🔄 Системный default переключен на наушники: {device_info['name']} (индекс: {device_info['index']})")
-            except Exception as e:
+        except Exception as e:
                 logger.warning(f"⚠️ Не удалось переключить системный default на наушники: {e}")
             
             # Автоматически переключаемся на наушники
@@ -1561,7 +1561,7 @@ class AudioPlayer:
                     current_default = sd.default.device
                     if isinstance(current_default, (list, tuple)) and len(current_default) >= 2:
                         current_default_out = current_default[1]
-                    else:
+                        else:
                         current_default_out = current_default
                     
                     # Если системный default изменился и больше не указывает на наушники

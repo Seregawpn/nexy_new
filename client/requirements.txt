@@ -39,4 +39,5 @@ pystray
 pyobjc-core
 pyobjc-framework-CoreAudio
 pyobjc-framework-CoreFoundation
+pyobjc-framework-AVFoundation
 rumps
