@@ -149,8 +149,8 @@ class AudioGenerator:
 
     async def generate_streaming_audio(self, text: str, interrupt_checker=None) -> AsyncGenerator[np.ndarray, None]:
         """
-        🚀 НОВЫЙ МЕТОД: Генерирует аудио для ПОЛНОГО предложения и отправляет ЦЕЛИКОМ.
-        Это решает проблему со скрипом и упрощает архитектуру - отправляем по предложениям.
+        🚀 НОВАЯ АРХИТЕКТУРА: Разбиваем текст на маленькие чанки для генерации,
+        но собираем аудио в предложения перед отправкой клиенту.
         """
         if not text or not text.strip():
             return
@@ -159,14 +159,34 @@ class AudioGenerator:
             self.is_generating = True
             logger.info(f"🎵 Генерирую аудио для предложения: {text[:50]}...")
             
-            # Генерируем ПОЛНОЕ аудио для предложения
-            complete_audio = await self.generate_complete_audio_for_sentence(text, interrupt_checker)
+            # Разбиваем текст на маленькие чанки для генерации
+            text_chunks = self._split_text_into_chunks(text, max_chunk_size=50)
+            logger.info(f"📝 Разбил текст на {len(text_chunks)} чанков для генерации")
             
-            if complete_audio is not None and len(complete_audio) > 0:
-                # Отправляем ВСЕ аудио одним большим чанком (целое предложение)
+            # Собираем аудио от всех чанков в одно предложение
+            complete_audio = np.array([], dtype=np.int16)
+            
+            for i, chunk_text in enumerate(text_chunks):
+                if interrupt_checker and interrupt_checker():
+                    logger.info("🛑 Прерывание генерации аудио")
+                    break
+                
+                logger.debug(f"🎵 Генерирую аудио для чанка {i+1}/{len(text_chunks)}: {chunk_text[:30]}...")
+                
+                # Генерируем аудио для маленького чанка
+                chunk_audio = await self.generate_complete_audio_for_sentence(chunk_text, interrupt_checker)
+                
+                if chunk_audio is not None and len(chunk_audio) > 0:
+                    # Добавляем к общему аудио
+                    complete_audio = np.concatenate([complete_audio, chunk_audio])
+                    logger.debug(f"✅ Чанк {i+1} добавлен: {len(chunk_audio)} сэмплов, общий размер: {len(complete_audio)}")
+                else:
+                    logger.warning(f"⚠️ Не удалось сгенерировать аудио для чанка {i+1}")
+            
+            if len(complete_audio) > 0:
+                # Отправляем ПОЛНОЕ предложение клиенту
                 logger.info(f"🎵 Отправляю ПОЛНОЕ аудио предложения: {len(complete_audio)} сэмплов")
                 yield complete_audio
-                
                 logger.info(f"✅ Потоковая генерация завершена: {len(complete_audio)} сэмплов")
             else:
                 logger.warning("⚠️ Не удалось сгенерировать аудио для предложения")
@@ -175,6 +195,33 @@ class AudioGenerator:
             logger.error(f"❌ Ошибка при генерации аудио для предложения: {e}")
         finally:
             self.is_generating = False
+
+    def _split_text_into_chunks(self, text: str, max_chunk_size: int = 50) -> list[str]:
+        """
+        Разбивает текст на маленькие чанки для эффективной генерации аудио.
+        """
+        if not text or len(text) <= max_chunk_size:
+            return [text]
+        
+        chunks = []
+        words = text.split()
+        current_chunk = []
+        
+        for word in words:
+            # Проверяем, поместится ли слово в текущий чанк
+            if len(' '.join(current_chunk + [word])) <= max_chunk_size:
+                current_chunk.append(word)
+            else:
+                # Сохраняем текущий чанк и начинаем новый
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+                current_chunk = [word]
+        
+        # Добавляем последний чанк
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
+        return chunks
 
     def set_voice(self, voice: str):
         """Устанавливает новый голос."""
