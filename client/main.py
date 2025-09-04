@@ -1033,7 +1033,7 @@ class StateManager:
                 self.console.print("[bold yellow]⚠️ Захват экрана недоступен[/bold yellow]")
                 self.current_screenshot = None
                 return
-            self.current_screenshot = self.screen_capture.capture_screen(quality=80)
+            self.current_screenshot = self.screen_capture.capture_screen(quality=85)
             if self.current_screenshot:
                 self.console.print(f"[bold green]✅ Base64 скриншот захвачен: {len(self.current_screenshot)} символов[/bold green]")
             else:

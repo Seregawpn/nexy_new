@@ -64,7 +64,11 @@ class ScreenCapture:
                 # Конвертируем в PIL Image
                 pil_image = Image.frombytes('RGB', pil_image.size, pil_image.bgra, 'raw', 'BGRX')
                 
-                logger.info(f"✅ Реальный экран захвачен: {pil_image.size[0]}x{pil_image.size[1]} пикселей")
+                # 🔧 СЖАТИЕ как в официальной документации Gemini Live API
+                original_size = pil_image.size
+                pil_image.thumbnail([1024, 1024], Image.Resampling.LANCZOS)
+                logger.info(f"✅ Реальный экран захвачен: {original_size[0]}x{original_size[1]} -> {pil_image.size[0]}x{pil_image.size[1]} пикселей")
+                
                 return self._convert_to_base64(pil_image, quality)
                 
         except Exception as e:
