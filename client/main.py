@@ -1,5 +1,3 @@
-
-                                                
 import asyncio
 import logging
 import time
@@ -1327,7 +1325,7 @@ async def main():
     # 3. Инициализируем аудио плеер
     console.print("[blue]🔊 Инициализация аудио плеера...[/blue]")
     try:
-        audio_player = AudioPlayer(sample_rate=48000)
+        audio_player = AudioPlayer(sample_rate=48000, channels=2)
         # Применяем настройки воспроизведения
         if hasattr(audio_player, '__dict__'):
             audio_player.follow_system_default = audio_follow_default

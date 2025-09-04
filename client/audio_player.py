@@ -840,12 +840,14 @@ class AudioPlayer:
                         if self.channels == 1:
                             outdata[:frames, 0] = fs
                         else:
+                            # Стерео: дублируем моно сигнал на оба канала
                             for ch in range(self.channels):
                                 outdata[:frames, ch] = fs
                     else:
                         if self.channels == 1:
                             outdata[:frames, 0] = mono_samples
                         else:
+                            # Стерео: дублируем моно сигнал на оба канала
                             for ch in range(self.channels):
                                 outdata[:frames, ch] = mono_samples
                     self.internal_buffer = self.internal_buffer[frames:]
@@ -980,6 +982,7 @@ class AudioPlayer:
         
         # 🔍 ОТЛАДКА: Анализируем входящие аудио данные
         logger.info(f"🔍 Входящий аудио чанк: shape={audio_chunk.shape}, dtype={audio_chunk.dtype}, min={audio_chunk.min()}, max={audio_chunk.max()}, mean={audio_chunk.mean():.2f}")
+        logger.info(f"🔊 Текущие настройки плеера: channels={self.channels}, sample_rate={self.sample_rate}")
         
         # Нормализуем вход к формату int16 mono
         try:
