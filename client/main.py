@@ -193,6 +193,9 @@ class StateManager:
         self.current_screenshot = None
         self.current_screen_info = None
         
+        # Флаг для fade-in первого аудио чанка
+        self._first_tts_chunk = True
+        
         # Время начала прерывания для логирования
         self.interrupt_start_time = time.time()
         
@@ -703,6 +706,9 @@ class StateManager:
             self.set_state(AppState.IN_PROCESS)
             logger.info(f"   📊 Состояние установлено: {self.state.name}")
             
+            # Сбрасываем флаг для fade-in первого чанка
+            self._first_tts_chunk = True
+            
             # Потребляем генератор до конца
             chunk_count = 0
             self.console.print("[bold red]🚨 НАЧАЛО ОБРАБОТКИ gRPC СТРИМА![/bold red]")
@@ -773,6 +779,9 @@ class StateManager:
                                 logger.warning(f"   ⚠️ Неизвестный dtype '{dtype_str}', использую int16")
                             
                             audio_array = np.frombuffer(audio_data, dtype=dtype)
+                            
+                            # Делаем копию массива для возможности изменения
+                            audio_array = audio_array.copy()
 
                             # Короткий fade-in для первого чанка чтобы убрать щелчок на старте
                             try:

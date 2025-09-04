@@ -148,162 +148,41 @@ class AudioGenerator:
 
     async def generate_streaming_audio(self, text: str, interrupt_checker=None) -> AsyncGenerator[np.ndarray, None]:
         """
-        🚀 НОВЫЙ МЕТОД: Генерирует аудио и отдает его по частям по мере готовности.
-        Это позволяет начать воспроизведение до завершения генерации всего аудио.
+        🚀 ИСПРАВЛЕННЫЙ МЕТОД: Генерирует аудио для ПОЛНОГО предложения и разбивает на чанки.
+        Это решает проблему со скрипом, так как мы не разбиваем MP3 поток на произвольные куски.
         """
         if not text or not text.strip():
             return
         
         try:
             self.is_generating = True
-            logger.info(f"🎵 Начинаю ПОТОКОВУЮ генерацию аудио для: {text[:50]}...")
+            logger.info(f"🎵 Генерирую аудио для предложения: {text[:50]}...")
             
-            # Вариант 1: Azure Speech (если доступен)
-            if self._use_azure:
-                # Для Azure Speech пока используем полную генерацию
-                complete_audio = await self.generate_complete_audio_for_sentence(text, interrupt_checker)
-                if complete_audio is not None and len(complete_audio) > 0:
-                    # Разбиваем на чанки для имитации стриминга
-                    chunk_size = 4800  # Примерно 100ms при 48kHz
-                    for i in range(0, len(complete_audio), chunk_size):
-                        if interrupt_checker and interrupt_checker():
-                            logger.warning("🚨 Потоковая генерация аудио прервана")
-                            return
-                        chunk = complete_audio[i:i + chunk_size]
-                        if len(chunk) > 0:
-                            yield chunk
-                return
-
-            # Вариант 2: edge-tts (основной)
-            communicate = edge_tts.Communicate(
-                text, 
-                self.voice,
-                rate=self.rate,
-                volume=self.volume,
-                pitch=self.pitch
-            )
-
-            # Накапливаем аудио данные и отправляем по частям
-            audio_buffer = io.BytesIO()
-            chunk_count = 0
-            total_bytes_received = 0
-            chunk_sequence = []
+            # Генерируем ПОЛНОЕ аудио для предложения
+            complete_audio = await self.generate_complete_audio_for_sentence(text, interrupt_checker)
             
-            async for chunk in communicate.stream():
-                # КРИТИЧНО: проверяем необходимость прерывания в КАЖДОЙ итерации
-                if interrupt_checker and interrupt_checker():
-                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ПОТОКОВУЮ ГЕНЕРАЦИЮ АУДИО!")
-                    return
+            if complete_audio is not None and len(complete_audio) > 0:
+                # Разбиваем на чанки для потокового воспроизведения
+                chunk_size = 4800  # Примерно 100ms при 48kHz
+                chunk_count = 0
                 
-                if chunk["type"] == "audio":
-                    chunk_data = chunk["data"]
-                    chunk_size = len(chunk_data)
-                    total_bytes_received += chunk_size
+                for i in range(0, len(complete_audio), chunk_size):
+                    if interrupt_checker and interrupt_checker():
+                        logger.warning("🚨 Потоковая генерация аудио прервана")
+                        return
                     
-                    # Логируем детали каждого чанка
-                    chunk_sequence.append({
-                        'size': chunk_size,
-                        'total_bytes': total_bytes_received,
-                        'timestamp': asyncio.get_event_loop().time()
-                    })
-                    
-                    logger.info(f"🎵 Получен Edge TTS чанк: {chunk_size} байт, всего: {total_bytes_received} байт")
-                    
-                    audio_buffer.write(chunk_data)
-                    
-                    # Отправляем накопленное аудио каждые ~100ms (примерно 4800 байт MP3)
-                    if audio_buffer.tell() > 4800:  # Примерно 100ms аудио
-                        audio_buffer.seek(0)
-                        
-                        try:
-                            # Валидация MP3 данных перед декодированием
-                            buffer_data = audio_buffer.getvalue()
-                            if len(buffer_data) < 100:  # Слишком маленький чанк
-                                logger.warning(f"⚠️ Пропускаю слишком маленький MP3 чанк: {len(buffer_data)} байт")
-                                continue
-                            
-                            # Проверяем, что это валидный MP3 (начинается с MP3 заголовка)
-                            # Edge TTS может генерировать чанки без заголовков, но они все равно декодируются
-                            if not (buffer_data.startswith(b'\xff\xfb') or buffer_data.startswith(b'\xff\xfa') or 
-                                   buffer_data.startswith(b'ID3')):
-                                logger.warning(f"⚠️ MP3 чанк без заголовка, но пытаюсь декодировать (Edge TTS особенность)")
-                                # Не пропускаем, а пытаемся декодировать
-                            
-                            # Декодируем накопленное MP3 аудио
-                            audio_segment = AudioSegment.from_mp3(audio_buffer)
-                            audio_segment = audio_segment.set_frame_rate(Config.SAMPLE_RATE).set_channels(1)
-                            
-                            samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
-                            
-                            if len(samples) > 0:
-                                chunk_count += 1
-                                logger.info(f"🎵 Отправляю аудио чанк {chunk_count}: {len(samples)} сэмплов")
-                                yield samples
-                            
-                        except Exception as e:
-                            logger.warning(f"⚠️ Ошибка декодирования аудио чанка: {e}")
-                            # Продолжаем работу, не прерываем весь процесс
-                        
-                        # Очищаем буфер для следующего чанка
-                        audio_buffer = io.BytesIO()
-            
-            # Отправляем оставшееся аудио
-            if audio_buffer.tell() > 0:
-                audio_buffer.seek(0)
-                try:
-                    # Валидация финального MP3 чанка
-                    buffer_data = audio_buffer.getvalue()
-                    if len(buffer_data) < 100:  # Слишком маленький чанк
-                        logger.warning(f"⚠️ Пропускаю слишком маленький финальный MP3 чанк: {len(buffer_data)} байт")
-                    elif not (buffer_data.startswith(b'\xff\xfb') or buffer_data.startswith(b'\xff\xfa') or 
-                             buffer_data.startswith(b'ID3')):
-                        logger.warning(f"⚠️ Финальный MP3 чанк без заголовка, но пытаюсь декодировать (Edge TTS особенность)")
-                        # Не пропускаем, а пытаемся декодировать
-                    
-                    # Пытаемся декодировать в любом случае
-                    audio_segment = AudioSegment.from_mp3(audio_buffer)
-                    audio_segment = audio_segment.set_frame_rate(Config.SAMPLE_RATE).set_channels(1)
-                    samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
-                    
-                    if len(samples) > 0:
+                    chunk = complete_audio[i:i + chunk_size]
+                    if len(chunk) > 0:
                         chunk_count += 1
-                        logger.info(f"🎵 Отправляю финальный аудио чанк {chunk_count}: {len(samples)} сэмплов")
-                        yield samples
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка декодирования финального аудио чанка: {e}")
-                    # Продолжаем работу, не прерываем весь процесс
-            
-                    # Анализируем последовательность чанков
-                    if chunk_sequence:
-                        logger.info(f"📊 Анализ последовательности Edge TTS чанков:")
-                        logger.info(f"   - Всего чанков получено: {len(chunk_sequence)}")
-                        logger.info(f"   - Общий размер: {total_bytes_received} байт")
-                        
-                        # Проверяем на дублирование размеров
-                        sizes = [c['size'] for c in chunk_sequence]
-                        unique_sizes = set(sizes)
-                        if len(unique_sizes) < len(sizes) * 0.5:  # Много повторяющихся размеров
-                            logger.warning(f"⚠️ Подозрение на дублирование чанков: {len(unique_sizes)} уникальных размеров из {len(sizes)}")
-                        
-                        # Проверяем временные интервалы
-                        if len(chunk_sequence) > 1:
-                            intervals = []
-                            for i in range(1, len(chunk_sequence)):
-                                interval = chunk_sequence[i]['timestamp'] - chunk_sequence[i-1]['timestamp']
-                                intervals.append(interval)
-                            
-                            avg_interval = sum(intervals) / len(intervals)
-                            logger.info(f"   - Средний интервал между чанками: {avg_interval*1000:.1f}ms")
-                            
-                            # Проверяем на аномальные интервалы
-                            if any(interval > avg_interval * 3 for interval in intervals):
-                                logger.warning(f"⚠️ Обнаружены аномальные временные интервалы между чанками")
-                    
-                    logger.info(f"✅ Потоковая генерация аудио завершена: {chunk_count} чанков")
-
+                        logger.info(f"🎵 Отправляю аудио чанк {chunk_count}: {len(chunk)} сэмплов")
+                        yield chunk
+                
+                logger.info(f"✅ Потоковая генерация завершена: {chunk_count} чанков, {len(complete_audio)} сэмплов")
+            else:
+                logger.warning("⚠️ Не удалось сгенерировать аудио для предложения")
+                
         except Exception as e:
-            logger.error(f"❌ Ошибка при потоковой генерации аудио для текста '{text[:30]}...': {e}")
+            logger.error(f"❌ Ошибка при генерации аудио для предложения: {e}")
         finally:
             self.is_generating = False
 

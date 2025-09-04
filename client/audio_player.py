@@ -121,13 +121,13 @@ class AudioPlayer:
                         config = {
                             'channels': 2,
                             'samplerate': 44100,
-                            'dtype': 'int16'
+                            'dtype': np.int16
                         }
                     else:
                         config = {
                             'channels': 2,
                             'samplerate': 48000,
-                            'dtype': 'int16'
+                            'dtype': np.int16
                         }
                     
                     # Кэшируем конфигурацию
@@ -852,13 +852,18 @@ class AudioPlayer:
                 else:
                     # Недостаточно данных, пытаемся получить из очереди
                     try:
-                        # Собираем ВСЕ доступные чанки в буфер
+                        # Собираем ВСЕ доступные чанки в буфер (эффективно)
+                        chunks_to_add = []
                         while not self.audio_queue.empty():
                             chunk = self.audio_queue.get_nowait()
                             if chunk is not None and len(chunk) > 0:
-                                self.internal_buffer = np.concatenate([self.internal_buffer, chunk])
-                                logger.debug(f"🎵 Добавлен чанк в буфер: {len(chunk)} сэмплов. Общий размер буфера: {len(self.internal_buffer)}")
+                                chunks_to_add.append(chunk)
                             self.audio_queue.task_done()
+                        
+                        if chunks_to_add:
+                            # Эффективная конкатенация всех чанков сразу
+                            self.internal_buffer = np.concatenate([self.internal_buffer] + chunks_to_add)
+                            logger.debug(f"🎵 Добавлено {len(chunks_to_add)} чанков в буфер. Общий размер буфера: {len(self.internal_buffer)}")
                     except queue.Empty:
                         pass
                     
@@ -1100,7 +1105,7 @@ class AudioPlayer:
                 config = {
                     'channels': self.stream.channels,
                     'samplerate': self.stream.samplerate,
-                    'dtype': 'int16'
+                    'dtype': np.int16
                 }
                 self._cache_stream_config(config, self.current_device_info)
             
@@ -1496,7 +1501,7 @@ class AudioPlayer:
                                                 device=out_idx,
                                                 channels=2,
                                                 samplerate=48000,
-                                                dtype='int16',
+                                                dtype=np.int16,
                                                 callback=self._playback_callback
                                             )
                                             stream.start()
@@ -1513,7 +1518,7 @@ class AudioPlayer:
                                             
                                             self.channels = 2
                                             self.sample_rate = 48000
-                                            self.dtype = 'int16'
+                                            self.dtype = np.int16
                                             
                                             logger.info(f"📱 Fallback устройство: {self._last_device_info['name']} (индекс: {out_idx})")
                                             return stream
@@ -1805,9 +1810,9 @@ class AudioPlayer:
                 
                 # HFP-совместимые параметры
                 compatible_params = [
-                    {'channels': 1, 'samplerate': 8000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 22050, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 8000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 16000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 22050, 'dtype': np.int16},
                 ]
                 
             elif max_channels >= 2 and default_sr >= 44100:
@@ -1816,9 +1821,9 @@ class AudioPlayer:
                 
                 # A2DP-совместимые параметры
                 compatible_params = [
-                    {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
-                    {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                    {'channels': 2, 'samplerate': 44100, 'dtype': np.int16},
+                    {'channels': 2, 'samplerate': 48000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 44100, 'dtype': np.int16},
                 ]
                 
             else:
@@ -1827,9 +1832,9 @@ class AudioPlayer:
                 
                 # Адаптивные параметры
                 compatible_params = [
-                    {'channels': min(2, max_channels), 'samplerate': min(48000, default_sr), 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': min(44100, default_sr), 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                    {'channels': min(2, max_channels), 'samplerate': min(48000, default_sr), 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': min(44100, default_sr), 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 16000, 'dtype': np.int16},
                 ]
             
             # Проверяем совместимость параметров
@@ -1882,9 +1887,9 @@ class AudioPlayer:
         if device_idx == -1 or device_idx >= len(devices):
             # Fallback на универсальные параметры
             return [
-                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
-                {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
-                {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                {'channels': 2, 'samplerate': 44100, 'dtype': np.int16},
+                {'channels': 1, 'samplerate': 44100, 'dtype': np.int16},
+                {'channels': 1, 'samplerate': 16000, 'dtype': np.int16},
             ]
         
         device = devices[device_idx]
@@ -1913,36 +1918,36 @@ class AudioPlayer:
                 # HFP режим (гарнитура) - только низкое качество
                 logger.info("🎧 Режим HFP (гарнитура) - используем низкое качество")
                 return [
-                    {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 8000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 22050, 'dtype': 'int16'},
+                    {'channels': 1, 'samplerate': 16000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 8000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 22050, 'dtype': np.int16},
                 ]
             else:
                 # A2DP режим (качество) - высокое качество
                 logger.info("🎧 Режим A2DP (качество) - используем высокое качество")
                 return [
-                    {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
-                    {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
-                    {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
+                    {'channels': 2, 'samplerate': 44100, 'dtype': np.int16},
+                    {'channels': 2, 'samplerate': 48000, 'dtype': np.int16},
+                    {'channels': 1, 'samplerate': 44100, 'dtype': np.int16},
                 ]
         
         elif any(tag in device_name for tag in ['macbook', 'built-in', 'internal']):
             # Встроенные устройства - стабильные параметры
             logger.info("💻 Встроенное устройство - используем стандартные параметры")
             return [
-                {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
-                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
-                {'channels': 1, 'samplerate': 48000, 'dtype': 'int16'},
+                {'channels': 2, 'samplerate': 48000, 'dtype': np.int16},
+                {'channels': 2, 'samplerate': 44100, 'dtype': np.int16},
+                {'channels': 1, 'samplerate': 48000, 'dtype': np.int16},
             ]
         
         else:
             # Неизвестное устройство - пробуем все варианты
             logger.info("❓ Неизвестное устройство - пробуем все варианты")
             return [
-                {'channels': 2, 'samplerate': 44100, 'dtype': 'int16'},
-                {'channels': 1, 'samplerate': 44100, 'dtype': 'int16'},
-                {'channels': 2, 'samplerate': 48000, 'dtype': 'int16'},
-                {'channels': 1, 'samplerate': 16000, 'dtype': 'int16'},
+                {'channels': 2, 'samplerate': 44100, 'dtype': np.int16},
+                {'channels': 1, 'samplerate': 44100, 'dtype': np.int16},
+                {'channels': 2, 'samplerate': 48000, 'dtype': np.int16},
+                {'channels': 1, 'samplerate': 16000, 'dtype': np.int16},
             ]
 
     def _find_builtin_devices(self):
