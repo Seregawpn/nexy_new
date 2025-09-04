@@ -4,6 +4,9 @@ import os
 import re
 from typing import AsyncGenerator, List
 
+# Импортируем конфигурацию для загрузки переменных окружения
+import config
+
 # 🚀 НОВЫЙ: Gemini Live API (основной)
 try:
     from google import genai
@@ -101,22 +104,24 @@ class TextProcessor:
                     api_key=os.environ.get("GEMINI_API_KEY"),
                 )
                 
-                # 🔧 КОНФИГУРАЦИЯ Live API с System Prompt и инструментами
+                # 🔧 УПРОЩЕННАЯ КОНФИГУРАЦИЯ Live API для диагностики
                 self.live_config = types.LiveConnectConfig(
                     response_modalities=["TEXT"],
-                    media_resolution="MEDIA_RESOLUTION_MEDIUM",
-                    context_window_compression=types.ContextWindowCompressionConfig(
-                        trigger_tokens=8000,
-                    ),
+                    # Убираем проблемные параметры для диагностики
+                    # media_resolution="MEDIA_RESOLUTION_MEDIUM",
+                    # context_window_compression=types.ContextWindowCompressionConfig(
+                    #     trigger_tokens=8000,
+                    # ),
                     # 🔧 System Prompt передается ТОЛЬКО в конфигурации
                     system_instruction=self.base_system_instruction,
-                    # Включаем Google Search
-                    tools=[
-                        types.Tool(
-                            google_search=types.GoogleSearch()
-                        )
-                    ]
+                    # Временно убираем Google Search для диагностики
+                    # tools=[
+                    #     types.Tool(
+                    #         google_search=types.GoogleSearch()
+                    #     )
+                    # ]
                 )
+                
                 # Модель Live API
                 self.live_model = "models/gemini-2.5-flash-live-preview"
                 
@@ -540,6 +545,12 @@ class TextProcessor:
             logger.info(f"🔍 Live API Direct: Full user_content: '{user_content}'")
             logger.info(f"🔍 Live API Direct: Content length: {len(user_content)} characters")
             
+            # 🔍 ДИАГНОСТИКА: Проверяем конфигурацию перед подключением
+            logger.info(f"🔍 Live API Direct: Configuration check:")
+            logger.info(f"   - Model: {self.live_model}")
+            logger.info(f"   - API Key: {os.environ.get('GEMINI_API_KEY', 'None')[:10]}...")
+            logger.info(f"   - Config: {self.live_config}")
+            
             # Создаем Live API сессию
             async with self.live_client.aio.live.connect(model=self.live_model, config=self.live_config) as session:
                 try:
@@ -559,8 +570,14 @@ class TextProcessor:
                             logger.info(f"🔍 Live API Direct: Screenshot validation:")
                             logger.info(f"   - Base64 length: {len(screenshot_data['data'])} chars")
                             logger.info(f"   - Decoded bytes: {len(image_bytes)} bytes")
+                            logger.info(f"   - Size in KB: {len(image_bytes) / 1024:.1f} KB")
                             logger.info(f"   - MIME type: {screenshot_data['mime_type']}")
                             logger.info(f"   - Base64 starts with: {screenshot_data['data'][:50]}...")
+                            
+                            # 🚨 ПРЕДУПРЕЖДЕНИЕ: Если скриншот слишком большой
+                            if len(image_bytes) > 100 * 1024:  # 100KB
+                                logger.warning(f"⚠️ Screenshot too large ({len(image_bytes) / 1024:.1f} KB), this might cause 1007 error")
+                                logger.warning(f"⚠️ Consider compressing the screenshot or reducing quality")
                             
                             # 🔧 ПРОВЕРЯЕМ ВАЛИДНОСТЬ Base64
                             if len(screenshot_data['data']) < 100:
