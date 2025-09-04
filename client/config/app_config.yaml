@@ -1,0 +1,131 @@
+# =====================================================
+# APPLICATION CONFIGURATION "AI VOICE ASSISTANT"
+# =====================================================
+
+# Main application settings
+app:
+  name: "Nexy"
+  version: "1.70.0"
+  debug: false
+  
+# Audio settings
+audio:
+  sample_rate: 48000
+  channels: 1
+  chunk_size: 1024
+  format: "int16"
+  follow_system_default: false  # Автоматический режим через macOS
+  bluetooth_policy: "auto"  # Пусть система сама управляет
+  settle_ms: 100  # Минимальный settle
+  retries: 2  # Меньше попыток
+  preflush_on_switch: false
+  use_coreaudio_listeners: true  # Включаем мониторинг устройств
+  
+  # Новая система управления аудио устройствами
+  device_manager:
+    enabled: true  # Включить AudioManagerDaemon
+    monitoring_interval: 3.0  # Интервал мониторинга в секундах
+    switch_cooldown: 2.0  # Минимальное время между переключениями
+    cache_timeout: 5.0  # Время кэширования информации об устройствах
+    auto_switch_to_headphones: true  # Автоматическое переключение на наушники
+    auto_switch_to_best: true  # Автоматическое переключение на лучшее устройство
+    exclude_virtual_devices: true  # Исключать виртуальные устройства из автоматического выбора
+    virtual_device_keywords:  # Ключевые слова для определения виртуальных устройств
+      - blackhole
+      - soundflower
+      - loopback
+      - virtual
+      - aggregate
+      - multi-output
+      - sound source
+      - audio hijack
+    
+    # Система приоритетов устройств (чем выше число, тем выше приоритет)
+    device_priorities:
+      airpods: 100  # AirPods - высший приоритет
+      beats: 95  # Beats наушники
+      bluetooth_headphones: 90  # Bluetooth наушники
+      usb_headphones: 85  # USB наушники
+      bluetooth_speakers: 70  # Bluetooth колонки
+      usb_audio: 60  # USB аудио
+      system_speakers: 40  # Системные динамики MacBook
+      built_in: 20  # Встроенные устройства
+      other: 10  # Остальные устройства
+      microphone: 5  # Микрофоны
+      virtual_device: 1  # Виртуальные устройства (BlackHole, SoundFlower) - минимальный приоритет
+  
+# STT settings (Speech Recognition)
+stt:
+  sample_rate: 16000
+  chunk_size: 1024
+  energy_threshold: 100
+  dynamic_energy_threshold: true
+  pause_threshold: 0.5
+  phrase_threshold: 0.3
+  non_speaking_duration: 0.3
+  
+# Screen capture settings
+screen_capture:
+  quality: 85
+  format: "webp"
+  max_width: 1920
+  max_height: 1080
+  
+# gRPC client settings - ПРИНУДИТЕЛЬНО ЛОКАЛЬНЫЙ СЕРВЕР ДЛЯ ТЕСТИРОВАНИЯ
+grpc:
+  # Локальный сервер (приоритет 1 для тестирования)
+  local:
+    server_host: "127.0.0.1"  # localhost
+    server_port: 50051
+    use_ssl: false
+    timeout: 60
+    retry_attempts: 2
+    retry_delay: 0.5
+  
+  # Продакшн сервер (fallback)
+  production:
+    server_host: "20.151.51.172"  # Azure VM
+    server_port: 50051
+    use_ssl: false
+    timeout: 120
+    retry_attempts: 3
+    retry_delay: 1
+  
+  # Общие настройки
+  auto_fallback: true  # Автоматическое переключение при ошибке
+  connection_check_interval: 5  # Проверка соединения каждые 5 секунд
+  
+# Logging settings
+logging:
+  level: "INFO"
+  file: "~/Library/Logs/Nexy/app.log"
+  max_size: "10MB"
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# Accessibility settings
+accessibility:
+  voice_feedback: true
+  sound_notifications: true
+  startup_sound: true
+  error_sound: true
+  success_sound: true
+  
+# Autostart settings
+autostart:
+  enabled: false
+  delay: 5  # Delay in seconds after system login
+  
+# Performance settings
+performance:
+  max_memory: "512MB"
+  cpu_limit: 0.8  # Maximum CPU load
+  battery_optimization: true
+  
+# Security settings
+security:
+  require_network_permission: true
+  require_microphone_permission: true
+  require_screen_permission: true
+
+

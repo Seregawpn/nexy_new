@@ -1,0 +1,42 @@
+# =====================================================
+# ЗАВИСИМОСТИ ДЛЯ СЕРВЕРА AZURE CONTAINER APPS
+# =====================================================
+
+# 🌐 HTTP сервер для health checks (ОБЯЗАТЕЛЬНО для Azure)
+aiohttp>=3.8.0
+
+# 🚀 Google Gemini API (основной LLM)
+google-genai
+
+# 🔄 LangChain интеграция
+langchain
+langchain-google-genai
+langchain-core
+
+# 🔧 Утилиты
+python-dotenv
+
+# gRPC и Protocol Buffers
+grpcio
+grpcio-tools
+protobuf
+
+# Обработка изображений
+Pillow
+
+# Edge TTS
+edge-tts
+
+# Azure Speech TTS
+azure-cognitiveservices-speech
+
+# База данных
+psycopg2-binary
+
+# Аудио обработка
+numpy
+sounddevice
+pydub
+
+# Логирование и утилиты
+rich
