@@ -851,6 +851,7 @@ class AudioPlayer:
                             for ch in range(self.channels):
                                 outdata[:frames, ch] = mono_samples
                     self.internal_buffer = self.internal_buffer[frames:]
+                    logger.debug(f"🎵 Воспроизведено {frames} сэмплов, осталось в буфере: {len(self.internal_buffer)}")
                 else:
                     # Недостаточно данных, пытаемся получить из очереди
                     try:

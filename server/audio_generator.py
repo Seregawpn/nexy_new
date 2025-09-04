@@ -1,3 +1,4 @@
+
 import asyncio
 import os
 import logging
@@ -148,8 +149,8 @@ class AudioGenerator:
 
     async def generate_streaming_audio(self, text: str, interrupt_checker=None) -> AsyncGenerator[np.ndarray, None]:
         """
-        🚀 ИСПРАВЛЕННЫЙ МЕТОД: Генерирует аудио для ПОЛНОГО предложения и разбивает на чанки.
-        Это решает проблему со скрипом, так как мы не разбиваем MP3 поток на произвольные куски.
+        🚀 НОВЫЙ МЕТОД: Генерирует аудио для ПОЛНОГО предложения и отправляет ЦЕЛИКОМ.
+        Это решает проблему со скрипом и упрощает архитектуру - отправляем по предложениям.
         """
         if not text or not text.strip():
             return
@@ -162,22 +163,11 @@ class AudioGenerator:
             complete_audio = await self.generate_complete_audio_for_sentence(text, interrupt_checker)
             
             if complete_audio is not None and len(complete_audio) > 0:
-                # Разбиваем на чанки для потокового воспроизведения
-                chunk_size = 4800  # Примерно 100ms при 48kHz
-                chunk_count = 0
+                # Отправляем ВСЕ аудио одним большим чанком (целое предложение)
+                logger.info(f"🎵 Отправляю ПОЛНОЕ аудио предложения: {len(complete_audio)} сэмплов")
+                yield complete_audio
                 
-                for i in range(0, len(complete_audio), chunk_size):
-                    if interrupt_checker and interrupt_checker():
-                        logger.warning("🚨 Потоковая генерация аудио прервана")
-                        return
-                    
-                    chunk = complete_audio[i:i + chunk_size]
-                    if len(chunk) > 0:
-                        chunk_count += 1
-                        logger.info(f"🎵 Отправляю аудио чанк {chunk_count}: {len(chunk)} сэмплов")
-                        yield chunk
-                
-                logger.info(f"✅ Потоковая генерация завершена: {chunk_count} чанков, {len(complete_audio)} сэмплов")
+                logger.info(f"✅ Потоковая генерация завершена: {len(complete_audio)} сэмплов")
             else:
                 logger.warning("⚠️ Не удалось сгенерировать аудио для предложения")
                 
