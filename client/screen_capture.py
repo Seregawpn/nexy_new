@@ -30,7 +30,7 @@ class ScreenCapture:
             logger.error("❌ mss не установлен - используйте: pip install mss")
             raise ImportError("mss не установлен. Установите: pip install mss")
     
-    def capture_screen(self, quality: int = 85, max_size: int = 1024) -> str:
+    def capture_screen(self, quality: int = 75, max_size: int = 1024) -> str:
         """
         Захватывает реальный экран через mss
         
@@ -64,11 +64,10 @@ class ScreenCapture:
                 # Конвертируем в PIL Image
                 pil_image = Image.frombytes('RGB', pil_image.size, pil_image.bgra, 'raw', 'BGRX')
                 
-                # 🔧 СЖАТИЕ как в официальной документации Gemini Live API
-                original_size = pil_image.size
-                pil_image.thumbnail([1024, 1024], Image.Resampling.LANCZOS)
-                logger.info(f"✅ Реальный экран захвачен: {original_size[0]}x{original_size[1]} -> {pil_image.size[0]}x{pil_image.size[1]} пикселей")
+                # 🔧 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: сжатие как в официальной документации
+                pil_image.thumbnail([max_size, max_size], Image.Resampling.LANCZOS)
                 
+                logger.info(f"✅ Реальный экран захвачен: {pil_image.size[0]}x{pil_image.size[1]} пикселей")
                 return self._convert_to_base64(pil_image, quality)
                 
         except Exception as e:

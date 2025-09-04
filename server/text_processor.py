@@ -104,23 +104,21 @@ class TextProcessor:
                     api_key=os.environ.get("GEMINI_API_KEY"),
                 )
                 
-                # 🔧 КОНФИГУРАЦИЯ Live API на основе официальной документации
+                # 🔧 КОНФИГУРАЦИЯ Live API как в официальной документации
                 self.live_config = types.LiveConnectConfig(
                     response_modalities=["TEXT"],
-                    # ⚠️ ВАЖНО: Разрешаем большие изображения как в документации
-                    media_resolution="MEDIA_RESOLUTION_MEDIUM",
+                    media_resolution="MEDIA_RESOLUTION_MEDIUM",  # 🔧 ВОССТАНАВЛИВАЕМ
                     context_window_compression=types.ContextWindowCompressionConfig(
-                        trigger_tokens=25600,
-                        sliding_window=types.SlidingWindow(target_tokens=12800),
+                        trigger_tokens=8000,  # Уменьшаем для стабильности
                     ),
                     # 🔧 System Prompt передается ТОЛЬКО в конфигурации
                     system_instruction=self.base_system_instruction,
-                    # Временно убираем Google Search для диагностики
-                    # tools=[
-                    #     types.Tool(
-                    #         google_search=types.GoogleSearch()
-                    #     )
-                    # ]
+                    # 🔧 ВОССТАНАВЛИВАЕМ Google Search
+                    tools=[
+                        types.Tool(
+                            google_search=types.GoogleSearch()
+                        )
+                    ]
                 )
                 
                 # Модель Live API
@@ -575,10 +573,7 @@ class TextProcessor:
                             logger.info(f"   - MIME type: {screenshot_data['mime_type']}")
                             logger.info(f"   - Base64 starts with: {screenshot_data['data'][:50]}...")
                             
-                            # 🔍 ДИАГНОСТИКА: Размер скриншота после сжатия
-                            logger.info(f"📊 Screenshot size after compression: {len(image_bytes) / 1024:.1f} KB")
-                            if len(image_bytes) > 200 * 1024:  # 200KB - предупреждение
-                                logger.warning(f"⚠️ Screenshot still large ({len(image_bytes) / 1024:.1f} KB), but should work with MEDIA_RESOLUTION_MEDIUM")
+                            # 🔧 Скриншот уже сжат на клиенте, диагностика не нужна
                             
                             # 🔧 ПРОВЕРЯЕМ ВАЛИДНОСТЬ Base64
                             if len(screenshot_data['data']) < 100:
