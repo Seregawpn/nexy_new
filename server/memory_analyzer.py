@@ -308,11 +308,11 @@ LONG MEMORY: User's name is Sergei, they are a developer from Moscow
 
 # Пример использования
 if __name__ == "__main__":
-    import os
+    from config import Config
     
     # Запуск теста
     # Проверяем доступность API ключа
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = Config.GEMINI_API_KEY
     if not api_key:
         print("❌ GEMINI_API_KEY is not set")
     else:

@@ -24,10 +24,10 @@ protobuf
 # Обработка изображений
 Pillow
 
-# Edge TTS
+# Edge TTS (бесплатный, без API ключей)
 edge-tts
 
-# Azure Speech TTS
+# Azure Speech Services
 azure-cognitiveservices-speech
 
 # База данных

@@ -780,7 +780,8 @@ class GrpcClient:
             
             console.print(f"[cyan]🔍 hardware_id: '{hardware_id}' (тип: {type(hardware_id).__name__})[/cyan]")
             
-            self.audio_player.start_playback()
+            # УБИРАЕМ избыточный вызов start_playback() - он будет вызван автоматически в add_chunk()
+            # self.audio_player.start_playback()
             
             try:
                 request = streaming_pb2.StreamRequest(

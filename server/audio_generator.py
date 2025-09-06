@@ -1,288 +1,222 @@
+#!/usr/bin/env python3
+"""
+AudioGenerator with Azure Speech Services
+High-quality TTS with proper authentication
+"""
 
 import asyncio
-import os
 import logging
-from typing import Optional, Dict, Any, AsyncGenerator, Union
-import edge_tts
-try:
-    import azure.cognitiveservices.speech as speechsdk  # type: ignore
-except Exception:
-    speechsdk = None
+import tempfile
+import os
+from typing import Optional, AsyncGenerator
 import numpy as np
 from pydub import AudioSegment
 import io
+import azure.cognitiveservices.speech as speechsdk
 from config import Config
+from utils.text_utils import split_into_sentences
 
 logger = logging.getLogger(__name__)
 
 class AudioGenerator:
     """
-    Генерирует аудио с помощью edge-tts.
-    Может возвращать как поток, так и полный аудиофрагмент.
+    Audio generator with Azure Speech Services
+    High-quality TTS with proper authentication
     """
     
-    def __init__(self, voice: str = None, rate: str = None, volume: str = None, pitch: str = None):
-        self.voice = voice or Config.EDGE_TTS_VOICE
-        self.rate = rate or Config.EDGE_TTS_RATE
-        self.volume = volume or Config.EDGE_TTS_VOLUME
-        self.pitch = pitch or "+0Hz"
-        # КРИТИЧНО: флаг для отслеживания состояния генерации
+    def __init__(self, voice: str = "en-US-JennyNeural"):
+        self.voice = voice
         self.is_generating = False
-        self._validate_voice()
         
-        # Флаг и конфигурация Azure Speech (если заданы ключ и регион)
-        self._use_azure = bool(getattr(Config, 'SPEECH_KEY', None) and getattr(Config, 'SPEECH_REGION', None) and speechsdk is not None)
-        if self._use_azure:
-            try:
-                self._azure_speech_config = speechsdk.SpeechConfig(subscription=Config.SPEECH_KEY, region=Config.SPEECH_REGION)
-                # Устанавливаем голос (совместимый с Azure, например en-US-JennyNeural)
-                self._azure_speech_config.speech_synthesis_voice_name = self.voice
-                # Возвращаем PCM 48kHz mono 16-bit для прямой конвертации в numpy
-                self._azure_speech_config.set_speech_synthesis_output_format(
-                    speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm
-                )
-                logger.info("Azure Speech TTS включён")
-            except Exception as azure_init_err:
-                self._use_azure = False
-                logger.error(f"Azure Speech инициализация не удалась, fallback на edge-tts: {azure_init_err}")
+        # Проверяем конфигурацию Azure
+        if not Config.SPEECH_KEY or not Config.SPEECH_REGION:
+            raise ValueError("Azure Speech Services не настроены. Проверьте SPEECH_KEY и SPEECH_REGION в config.env")
         
-    def _validate_voice(self):
-        """Проверяет доступность выбранного голоса."""
-        logger.info(f"Голос {self.voice} установлен")
-
-    async def generate_complete_audio_for_sentence(self, text: str, interrupt_checker=None) -> Optional[np.ndarray]:
+        # Настраиваем Azure Speech Services
+        self.speech_config = speechsdk.SpeechConfig(
+            subscription=Config.SPEECH_KEY,
+            region=Config.SPEECH_REGION
+        )
+        self.speech_config.speech_synthesis_voice_name = self.voice
+        
+        # Настраиваем формат аудио для возврата 48000Hz 16-bit mono PCM
+        self.speech_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Riff48Khz16BitMonoPcm
+        )
+        
+        logger.info(f"🎵 AudioGenerator initialized with voice: {self.voice}")
+        logger.info(f"✅ Using Azure Speech Services - Region: {Config.SPEECH_REGION}")
+        logger.info(f"🎵 Audio format: 48000Hz 16-bit mono PCM")
+    
+    def _is_russian_text(self, text: str) -> bool:
         """
-        Генерирует аудио для ЦЕЛОГО предложения и возвращает его ОДНИМ numpy-массивом.
-        interrupt_checker: функция для проверки необходимости прерывания
+        Проверяет, содержит ли текст русские символы
+        NOTE: This method is kept for compatibility but always returns False
+        since we only work with English now.
         """
+        return False  # Always use English/Azure TTS
+    
+    async def generate_audio(self, text: str) -> Optional[np.ndarray]:
+        """
+        Генерирует аудио для текста и возвращает numpy массив
+        """
+        logger.info(f"🎵 [AUDIO_GEN] generate_audio() вызван для текста: '{text[:50]}...'")
+        
         if not text or not text.strip():
-            logger.warning("Пустой текст для генерации аудио")
+            logger.warning("⚠️ [AUDIO_GEN] Пустой текст для генерации аудио")
             return None
-
+        
         try:
-            # КРИТИЧНО: устанавливаем флаг генерации
             self.is_generating = True
-            logger.info(f"🎵 Начинаю генерацию аудио для: {text[:50]}...")
+            logger.info(f"🎵 [AUDIO_GEN] Generating audio for: {text[:50]}...")
             
-            # Вариант 1: Azure Speech (если доступен)
-            if self._use_azure:
-                loop = asyncio.get_running_loop()
-                def _speak_sync() -> bytes:
-                    synthesizer = speechsdk.SpeechSynthesizer(speech_config=self._azure_speech_config, audio_config=None)
-                    result = synthesizer.speak_text_async(text).get()
-                    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                        return result.audio_data or b""
-                    raise RuntimeError(f"Azure Speech синтез не выполнен: {result.reason}")
-                audio_bytes: bytes = await loop.run_in_executor(None, _speak_sync)
-                if not audio_bytes:
-                    logger.error("Azure Speech вернул пустой аудиопоток")
-                    return None
-                samples = np.frombuffer(audio_bytes, dtype=np.int16)
-                # Приводим к целевому sample rate при необходимости
-                if Config.SAMPLE_RATE != 48000:
-                    audio_segment = AudioSegment(
-                        audio_bytes,
-                        frame_rate=48000,
-                        sample_width=2,
-                        channels=1
-                    )
-                    audio_segment = audio_segment.set_frame_rate(Config.SAMPLE_RATE).set_channels(1)
-                    samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
-                logger.info(f"Аудио (Azure) сгенерировано ({len(samples)} сэмплов).")
-                return samples
-
-            # Вариант 2: edge-tts (fallback)
-            communicate = edge_tts.Communicate(
-                text, 
-                self.voice,
-                rate=self.rate,
-                volume=self.volume,
-                pitch=self.pitch
-            )
-
-            logger.info(f"Начинаю полную генерацию аудио для предложения: {text[:50]}...")
-
-            # 1. Накапливаем весь аудиопоток для предложения в памяти
-            audio_stream = io.BytesIO()
-            async for chunk in communicate.stream():
-                # КРИТИЧНО: проверяем необходимость прерывания в КАЖДОЙ итерации
-                if interrupt_checker and interrupt_checker():
-                    logger.warning(f"🚨 ГЛОБАЛЬНЫЙ ФЛАГ ПРЕРЫВАНИЯ АКТИВЕН - МГНОВЕННО ПРЕРЫВАЮ ГЕНЕРАЦИЮ АУДИО!")
-                    return None
-                
-                if chunk["type"] == "audio":
-                    audio_stream.write(chunk["data"])
+            # Используем Azure Speech Services
+            logger.info("🇺🇸 [AUDIO_GEN] Using Azure Speech Services for all text")
+            result = await self._generate_with_azure_tts(text)
+            logger.info(f"🎵 [AUDIO_GEN] generate_audio() завершен, результат: {len(result) if result is not None else 'None'} сэмплов")
+            return result
             
-            audio_stream.seek(0)
-
-            if audio_stream.getbuffer().nbytes > 0:
-                # 2. Декодируем MP3 и преобразуем в нужный формат
-                audio_segment = AudioSegment.from_mp3(audio_stream)
-                audio_segment = audio_segment.set_frame_rate(Config.SAMPLE_RATE).set_channels(1)
-                
-                samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
-                
-                logger.info(f"Аудио для предложения сгенерировано ({len(samples)} сэмплов).")
-                return samples
-            else:
-                logger.error("Ошибка генерации аудио: стрим не содержит данных.")
-                return None
-
         except Exception as e:
-            logger.error(f"Ошибка при генерации аудио для текста '{text[:30]}...': {e}")
+            logger.error(f"❌ Audio generation error: {e}")
             return None
         finally:
-            # КРИТИЧНО: сбрасываем флаг генерации
             self.is_generating = False
-            logger.info(f"🎵 Генерация аудио завершена")
-
-    async def generate_audio_stream(self, text: str) -> AsyncGenerator[np.ndarray, None]:
+    
+    async def _generate_with_azure_tts(self, text: str) -> Optional[np.ndarray]:
+        """Генерирует аудио с помощью Azure Speech Services"""
+        logger.info(f"🎵 [AZURE_TTS] _generate_with_azure_tts() вызван для: '{text[:30]}...'")
+        
+        try:
+            # Создаем синтезатор речи
+            logger.info(f"🎵 [AZURE_TTS] Создаю синтезатор речи...")
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self.speech_config,
+                audio_config=None  # Будем получать аудио в память
+            )
+            
+            # Выполняем синтез речи
+            logger.info(f"🎵 [AZURE_TTS] Выполняю синтез речи...")
+            result = synthesizer.speak_text_async(text).get()
+            logger.info(f"🎵 [AZURE_TTS] Результат синтеза: {result.reason}")
+            
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                # Получаем аудио данные
+                audio_data = result.audio_data
+                logger.info(f"🎵 [AZURE_TTS] Получены аудио данные: {len(audio_data)} байт")
+                
+                if len(audio_data) == 0:
+                    logger.error("❌ [AZURE_TTS] Не получены аудио данные")
+                    return None
+                
+                # Конвертируем в numpy массив
+                logger.info(f"🎵 [AZURE_TTS] Конвертирую в AudioSegment...")
+                audio_segment = AudioSegment.from_wav(io.BytesIO(audio_data))
+                logger.info(f"🎵 [AZURE_TTS] Исходный AudioSegment: {audio_segment.frame_rate}Hz, {audio_segment.channels}ch, {len(audio_segment)}ms")
+                
+                # Azure TTS уже настроен на 48000Hz 16-bit mono, конвертируем только каналы если нужно
+                if audio_segment.channels != 1:
+                    audio_segment = audio_segment.set_channels(1)
+                    logger.info(f"🎵 [AZURE_TTS] Конвертирован в моно: {audio_segment.frame_rate}Hz, {audio_segment.channels}ch, {len(audio_segment)}ms")
+                else:
+                    logger.info(f"🎵 [AZURE_TTS] Аудио уже в правильном формате: {audio_segment.frame_rate}Hz, {audio_segment.channels}ch, {len(audio_segment)}ms")
+                
+                samples = np.array(audio_segment.get_array_of_samples()).astype(np.int16)
+                logger.info(f"✅ [AZURE_TTS] Аудио сгенерировано: {len(samples)} сэмплов")
+                logger.info(f"📊 [AZURE_TTS] Статистика сэмплов: min={samples.min()}, max={samples.max()}, mean={samples.mean():.2f}")
+                return samples
+                
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                cancellation_details = result.cancellation_details
+                logger.error(f"❌ Azure TTS отменен: {cancellation_details.reason}")
+                if cancellation_details.reason == speechsdk.CancellationReason.Error:
+                    logger.error(f"❌ Ошибка: {cancellation_details.error_details}")
+                return None
+            else:
+                logger.error(f"❌ Azure TTS: Неожиданный результат: {result.reason}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"❌ Azure TTS ошибка: {e}")
+            raise
+    
+    async def generate_streaming_audio(self, text: str) -> AsyncGenerator[np.ndarray, None]:
         """
-        (УСТАРЕВШИЙ МЕТОД) Генерирует аудио и отдает его маленькими чанками.
-        Оставлен для обратной совместимости, если понадобится.
+        Генерирует аудио по частям для потоковой передачи
         """
-        # Этот метод теперь просто обертка над новым для сохранения интерфейса
-        complete_audio = await self.generate_complete_audio_for_sentence(text)
-        if complete_audio is not None and len(complete_audio) > 0:
-            # Для имитации стриминга можно разбивать, но сейчас просто отдаем целиком
-            yield complete_audio
-
-    async def generate_streaming_audio(self, text: str, interrupt_checker=None) -> AsyncGenerator[np.ndarray, None]:
-        """
-        🚀 НОВАЯ АРХИТЕКТУРА: Разбиваем текст на маленькие чанки для генерации,
-        но собираем аудио в предложения перед отправкой клиенту.
-        """
+        logger.info(f"🎵 [STREAM_GEN] generate_streaming_audio() вызван для: '{text[:50]}...'")
+        
         if not text or not text.strip():
+            logger.warning("⚠️ [STREAM_GEN] Пустой текст для потоковой генерации")
             return
         
         try:
             self.is_generating = True
-            logger.info(f"🎵 Генерирую аудио для предложения: {text[:50]}...")
+            logger.info(f"🎵 [STREAM_GEN] Streaming generation for: {text[:50]}...")
             
-            # Разбиваем текст на маленькие чанки для генерации
-            text_chunks = self._split_text_into_chunks(text, max_chunk_size=50)
-            logger.info(f"📝 Разбил текст на {len(text_chunks)} чанков для генерации")
+            # Split text into sentences
+            sentences = split_into_sentences(text)
+            logger.info(f"📝 [STREAM_GEN] Split into {len(sentences)} sentences")
             
-            # Собираем аудио от всех чанков в одно предложение
-            complete_audio = np.array([], dtype=np.int16)
+            valid_sentences = 0
+            generated_chunks = 0
             
-            for i, chunk_text in enumerate(text_chunks):
-                if interrupt_checker and interrupt_checker():
-                    logger.info("🛑 Прерывание генерации аудио")
-                    break
+            for i, sentence in enumerate(sentences):
+                # КРИТИЧНО: Пропускаем пустые предложения
+                if not sentence or not sentence.strip():
+                    logger.debug(f"🔇 [STREAM_GEN] Пропускаю пустое предложение {i+1}")
+                    continue
                 
-                logger.debug(f"🎵 Генерирую аудио для чанка {i+1}/{len(text_chunks)}: {chunk_text[:30]}...")
+                valid_sentences += 1
+                logger.info(f"🎵 [STREAM_GEN] Generating sentence {valid_sentences}/{len(sentences)}: {sentence[:30]}...")
                 
-                # Генерируем аудио для маленького чанка
-                chunk_audio = await self.generate_complete_audio_for_sentence(chunk_text, interrupt_checker)
+                # Generate audio for sentence
+                logger.info(f"🎵 [STREAM_GEN] Вызываю generate_audio() для предложения {valid_sentences}")
+                audio = await self.generate_audio(sentence)
+                logger.info(f"🎵 [STREAM_GEN] generate_audio() вернул: {len(audio) if audio is not None else 'None'} сэмплов")
                 
-                if chunk_audio is not None and len(chunk_audio) > 0:
-                    # Добавляем к общему аудио
-                    complete_audio = np.concatenate([complete_audio, chunk_audio])
-                    logger.debug(f"✅ Чанк {i+1} добавлен: {len(chunk_audio)} сэмплов, общий размер: {len(complete_audio)}")
+                # КРИТИЧНО: Проверяем, что аудио не пустое перед отправкой
+                if audio is not None and len(audio) > 0:
+                    generated_chunks += 1
+                    logger.info(f"✅ [STREAM_GEN] Sentence {valid_sentences} ready: {len(audio)} samples - ОТПРАВЛЯЮ")
+                    yield audio
                 else:
-                    logger.warning(f"⚠️ Не удалось сгенерировать аудио для чанка {i+1}")
+                    logger.warning(f"⚠️ [STREAM_GEN] Failed to generate audio for sentence {valid_sentences} - НЕ ОТПРАВЛЯЮ пустой чанк")
             
-            if len(complete_audio) > 0:
-                # Отправляем ПОЛНОЕ предложение клиенту
-                logger.info(f"🎵 Отправляю ПОЛНОЕ аудио предложения: {len(complete_audio)} сэмплов")
-                yield complete_audio
-                logger.info(f"✅ Потоковая генерация завершена: {len(complete_audio)} сэмплов")
-            else:
-                logger.warning("⚠️ Не удалось сгенерировать аудио для предложения")
-                
+            logger.info(f"✅ [STREAM_GEN] Streaming generation completed: {generated_chunks} чанков из {valid_sentences} предложений")
+            
         except Exception as e:
-            logger.error(f"❌ Ошибка при генерации аудио для предложения: {e}")
+            logger.error(f"❌ [STREAM_GEN] Streaming generation error: {e}")
         finally:
             self.is_generating = False
-
-    def _split_text_into_chunks(self, text: str, max_chunk_size: int = 50) -> list[str]:
-        """
-        Разбивает текст на маленькие чанки для эффективной генерации аудио.
-        """
-        if not text or len(text) <= max_chunk_size:
-            return [text]
-        
-        chunks = []
-        words = text.split()
-        current_chunk = []
-        
-        for word in words:
-            # Проверяем, поместится ли слово в текущий чанк
-            if len(' '.join(current_chunk + [word])) <= max_chunk_size:
-                current_chunk.append(word)
-            else:
-                # Сохраняем текущий чанк и начинаем новый
-                if current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-        
-        # Добавляем последний чанк
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        return chunks
-
+            logger.info(f"🎵 [STREAM_GEN] generate_streaming_audio() завершен")
+    
     def set_voice(self, voice: str):
-        """Устанавливает новый голос."""
+        """
+        Sets new voice
+        """
         if voice and voice.strip():
             self.voice = voice
-            logger.info(f"Установлен голос: {voice}")
+            self.speech_config.speech_synthesis_voice_name = voice
+            logger.info(f"🎵 Voice changed to: {voice}")
         else:
-            logger.warning(f"Голос {voice} недоступен, используем текущий: {self.voice}")
-
-    def set_audio_params(self, rate: str = None, volume: str = None, pitch: str = None):
-        """Устанавливает параметры аудио."""
-        if rate: self.rate = rate
-        if volume: self.volume = volume
-        if pitch: self.pitch = pitch
-        logger.info(f"Параметры аудио: rate={self.rate}, volume={self.volume}, pitch={self.pitch}")
-
-    def get_audio_params(self) -> dict:
-        """Возвращает текущие параметры аудио."""
-        return {
-            'voice': self.voice,
-            'rate': self.rate,
-            'volume': self.volume,
-            'pitch': self.pitch
-        }
+            logger.warning(f"⚠️ Invalid voice: {voice}")
     
-    def clear_buffers(self):
+    def get_voice(self) -> str:
         """
-        МГНОВЕННО очищает все буферы и отменяет генерацию аудио.
-        Используется для принудительного прерывания.
+        Returns current voice
         """
-        try:
-            logger.warning("🚨 МГНОВЕННАЯ очистка буферов аудио генератора!")
-            
-            # КРИТИЧНО: очищаем все внутренние буферы
-            if hasattr(self, '_current_communicate'):
-                try:
-                    # Отменяем текущую генерацию edge-tts
-                    if hasattr(self._current_communicate, 'cancel'):
-                        self._current_communicate.cancel()
-                        logger.warning("🚨 Edge TTS генерация МГНОВЕННО ОТМЕНЕНА!")
-                except:
-                    pass
-                self._current_communicate = None
-            
-            # КРИТИЧНО: очищаем все временные буферы
-            if hasattr(self, '_temp_buffers'):
-                self._temp_buffers.clear()
-                logger.warning("🚨 Временные буферы МГНОВЕННО ОЧИЩЕНЫ!")
-            
-            logger.warning("✅ Все буферы аудио генератора МГНОВЕННО очищены!")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка очистки буферов аудио: {e}")
+        return self.voice
     
-    def cancel_generation(self):
+    def stop_generation(self):
         """
-        МГНОВЕННО отменяет текущую генерацию аудио.
+        Stops audio generation
         """
-        try:
-            logger.warning("🚨 МГНОВЕННАЯ отмена генерации аудио!")
-            self.clear_buffers()
-            logger.warning("✅ Генерация аудио МГНОВЕННО отменена!")
-        except Exception as e:
-            logger.error(f"❌ Ошибка отмены генерации аудио: {e}")
+        logger.info("🛑 Stopping audio generation")
+        self.is_generating = False
+    
+    def is_busy(self) -> bool:
+        """
+        Checks if audio is being generated
+        """
+        return self.is_generating
+

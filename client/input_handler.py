@@ -20,7 +20,7 @@ class InputHandler:
         self.short_press_threshold = 0.1   # Порог для коротких нажатий (100ms) - быстрая реакция
         self.space_pressed = False
         self.last_event_time = 0
-        self.event_cooldown = 0.1
+        self.event_cooldown = 0.3  # УВЕЛИЧИВАЕМ cooldown до 300ms для предотвращения быстрых повторных нажатий
         self.recording_started = False
         self._start_timer = None
         
@@ -28,6 +28,8 @@ class InputHandler:
         self.interrupting = False
         # 🆕 Флаг: была ли команда уже обработана в deactivate_microphone
         self.command_processed = False
+        # 🆕 Флаг для предотвращения множественных быстрых нажатий
+        self.processing_event = False
 
         # Запускаем listener в отдельном потоке
         self.listener_thread = Thread(target=self._run_listener, daemon=True)
@@ -43,6 +45,11 @@ class InputHandler:
         if key == keyboard.Key.space and not self.space_pressed:
             current_time = time.time()
             
+            # 🆕 ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: если уже обрабатываем событие
+            if self.processing_event:
+                console.print(f"[dim]⏰ Событие уже обрабатывается, игнорирую нажатие[/dim]")
+                return
+            
             # Проверяем cooldown для предотвращения множественных событий
             if current_time - self.last_event_time < self.event_cooldown:
                 console.print(f"[dim]⏰ Cooldown активен: {self.event_cooldown - (current_time - self.last_event_time):.3f}s[/dim]")
@@ -53,6 +60,7 @@ class InputHandler:
             self.press_time = current_time
             self.last_event_time = current_time
             self.recording_started = False
+            self.processing_event = True  # 🆕 БЛОКИРУЕМ новые события
             
             # На всякий случай отменяем предыдущий таймер, если он ещё активен
             try:
@@ -63,17 +71,16 @@ class InputHandler:
             
             # 1. УСТАНАВЛИВАЕМ ФЛАГ ПРЕРЫВАНИЯ
             self.interrupting = True
-            console.print(f"[bold red]🔇 ПРОБЕЛ НАЖАТ - МГНОВЕННОЕ ПРЕРЫВАНИЕ РЕЧИ! (время: {current_time:.3f})[/bold red]")
+            console.print(f"[bold red]🔇 ПРОБЕЛ НАЖАТ - ПОДГОТОВКА К ПРЕРЫВАНИЮ! (время: {current_time:.3f})[/bold red]")
             console.print(f"[dim]🔍 Флаг interrupting установлен: {self.interrupting}[/dim]")
             
-            # 2. СНАЧАЛА: немедленное прерывание текущей речи/стрима
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
-            console.print(f"[dim]📤 Событие interrupt_or_cancel отправлено в очередь[/dim]")
-
-            # 3. ЗАПУСК ЗАПИСИ ТОЛЬКО при удержании дольше порога
+            # 2. ЗАПУСК ЗАПИСИ при удержании дольше порога
             def start_if_still_pressed():
                 try:
                     if self.space_pressed and not self.recording_started:
+                        # СБРАСЫВАЕМ флаг прерывания перед отправкой start_recording
+                        self.interrupting = False
+                        console.print(f"[dim]🔄 Флаг interrupting сброшен перед start_recording[/dim]")
                         self.recording_started = True
                         self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
                         console.print(f"[dim]📤 Порог удержания пройден → start_recording отправлен[/dim]")
@@ -119,9 +126,15 @@ class InputHandler:
                 self.loop.call_soon_threadsafe(self.queue.put_nowait, "deactivate_microphone")
                 console.print(f"[dim]📤 Событие deactivate_microphone отправлено в очередь[/dim]")
             else:
-                # Короткое нажатие → только прерывание, без записи
-                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - только прерывание")
+                # Короткое нажатие → прерывание + активация микрофона
+                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - прерывание + активация микрофона")
                 console.print(f"[dim]🔍 Длительность {duration:.3f}s < {self.short_press_threshold}s - короткое нажатие[/dim]")
+                # Отправляем interrupt_or_cancel для прерывания
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
+                console.print(f"[dim]📤 Событие interrupt_or_cancel отправлено в очередь[/dim]")
+                # И сразу start_recording для активации микрофона
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
+                console.print(f"[dim]📤 Событие start_recording отправлено в очередь[/dim]")
             
             # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ
             console.print(f"[dim]🔍 Флаг interrupting ДО сброса: {self.interrupting}[/dim]")
@@ -132,6 +145,16 @@ class InputHandler:
             # Сбрасываем флаги запуска записи
             self.recording_started = False
             self._start_timer = None
+            
+            # 🆕 РАЗБЛОКИРУЕМ новые события с небольшой задержкой
+            def unblock_events():
+                self.processing_event = False
+                console.print(f"[dim]🔄 События разблокированы[/dim]")
+            
+            try:
+                Timer(0.1, unblock_events).start()  # Разблокируем через 100ms
+            except Exception:
+                self.processing_event = False
 
     def reset_interrupt_flag(self):
         """Сбрасывает флаг прерывания - вызывается из StateManager"""

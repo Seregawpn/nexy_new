@@ -12,6 +12,10 @@ import logging
 import psycopg2
 from pathlib import Path
 
+# Импортируем Config для получения URL базы данных
+sys.path.append(os.path.dirname(__file__))
+from config import Config
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -19,22 +23,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_database_url():
-    """Получает URL базы данных из переменных окружения или config.py"""
-    # Сначала проверяем переменные окружения
-    if os.environ.get("DATABASE_URL"):
-        return os.environ.get("DATABASE_URL")
-    
-    # Затем пытаемся импортировать из config.py
-    try:
-        sys.path.append(os.path.dirname(__file__))
-        from config import Config
-        return Config.get_database_url()
-    except Exception as e:
-        logger.warning(f"Не удалось импортировать Config: {e}")
-    
-    # Возвращаем значение по умолчанию
-    return "postgresql://localhost/voice_assistant_db"
 
 def read_migration_file():
     """Читает файл миграции"""
@@ -169,57 +157,6 @@ def apply_migration(db_url: str):
             conn.close()
             logger.info("🔌 Соединение с базой данных закрыто")
 
-def test_memory_system(db_url: str):
-    """Тестирует систему памяти"""
-    try:
-        logger.info("🧪 Тестирование системы памяти...")
-        conn = psycopg2.connect(db_url)
-        
-        # Тестируем создание пользователя с памятью
-        with conn.cursor() as cursor:
-            test_hardware_id = "test_memory_system_123"
-            
-            # Создаем тестового пользователя
-            cursor.execute("""
-                INSERT INTO users (hardware_id_hash, short_term_memory, long_term_memory)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (hardware_id_hash) 
-                DO UPDATE SET 
-                    short_term_memory = EXCLUDED.short_term_memory,
-                    long_term_memory = EXCLUDED.long_term_memory,
-                    memory_updated_at = NOW()
-            """, (test_hardware_id, "Тест краткосрочной памяти", "Тест долгосрочной памяти"))
-            
-            # Проверяем, что память сохранена
-            cursor.execute("""
-                SELECT short_term_memory, long_term_memory 
-                FROM users 
-                WHERE hardware_id_hash = %s
-            """, (test_hardware_id,))
-            
-            result = cursor.fetchone()
-            if result and result[0] and result[1]:
-                logger.info("✅ Тест создания памяти прошел успешно")
-            else:
-                raise Exception("Память не была сохранена")
-            
-            # Очищаем тестовые данные
-            cursor.execute("DELETE FROM users WHERE hardware_id_hash = %s", (test_hardware_id,))
-            logger.info("🧹 Тестовые данные очищены")
-        
-        conn.commit()
-        logger.info("✅ Тестирование системы памяти завершено успешно")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка тестирования: {e}")
-        if 'conn' in locals():
-            conn.rollback()
-        return False
-        
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 def main():
     """Основная функция"""
@@ -227,7 +164,7 @@ def main():
     
     try:
         # Получаем URL базы данных
-        db_url = get_database_url()
+        db_url = Config.get_database_url()
         logger.info(f"📊 База данных: {db_url.split('@')[-1] if '@' in db_url else db_url}")
         
         # Применяем миграцию

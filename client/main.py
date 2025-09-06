@@ -162,6 +162,16 @@ def _release_single_instance_lock():
                 pass
     except Exception:
         pass
+    
+    # ДОБАВЛЕНО: Очистка глобальных ресурсов при завершении приложения
+    try:
+        from unified_audio_system import stop_global_unified_audio_system
+        from realtime_device_monitor import stop_global_realtime_monitor
+        stop_global_unified_audio_system()
+        stop_global_realtime_monitor()
+        logger.info("🧹 Глобальные ресурсы очищены при завершении")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка очистки глобальных ресурсов: {e}")
 
 class AppState(Enum):
     LISTENING = 1     # Ассистент слушает команды (микрофон активен)
@@ -197,6 +207,10 @@ class StateManager:
         # Время начала прерывания для логирования
         self.interrupt_start_time = time.time()
         
+        # Защита от дублирования команд
+        self._last_command_time = 0
+        self._command_debounce = 0.5  # 500ms защита от дублирования команд
+        
         # Простое отслеживание состояния
         pass
     
@@ -212,10 +226,25 @@ class StateManager:
         """Возвращает текущее состояние"""
         return self.state
     
+    def _check_interrupt_status(self) -> bool:
+        """
+        Централизованная проверка статуса прерывания.
+        Возвращает True если обнаружено прерывание.
+        """
+        try:
+            if hasattr(self, 'input_handler') and self.input_handler:
+                return self.input_handler.get_interrupt_status()
+            return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка при проверке статуса прерывания: {e}")
+            return False
+    
     def set_state(self, new_state: AppState):
         """Установка состояния приложения с синхронизацией в трей."""
         old_state = self.state
         self.state = new_state
+        
+        # Синхронизируем с треем
         try:
             self._write_tray_status_file(new_state.name)
         except Exception:
@@ -223,12 +252,27 @@ class StateManager:
         try:
             if self.tray_controller:
                 self.tray_controller.update_status(new_state.name)
+                # Синхронизируем _current в трее
+                if hasattr(self.tray_controller, '_current'):
+                    self.tray_controller._current = new_state.name
         except Exception:
             pass
         return old_state, new_state
     
     def handle_start_recording(self):
-        """ПРОБЕЛ ЗАЖАТ - включаем микрофон"""
+        """ПРОБЕЛ ЗАЖАТ - включаем микрофон (БЕЗ прерывания)"""
+        
+        # 🛡️ ЗАЩИТА: проверяем состояние приложения
+        if self.state == AppState.IN_PROCESS:
+            logger.info("   ℹ️ Ассистент работает - игнорирую start_recording")
+            self.console.print("[blue]ℹ️ Ассистент работает - микрофон неактивен[/blue]")
+            return
+        
+        # 🛡️ ЗАЩИТА: проверяем, не активен ли уже микрофон
+        if hasattr(self.stt_recognizer, 'is_recording') and self.stt_recognizer.is_recording:
+            logger.info("   ℹ️ Микрофон уже активен - дублирование предотвращено")
+            self.console.print("[blue]ℹ️ Микрофон уже активен[/blue]")
+            return
         
         if self.state == AppState.SLEEPING:
             logger.info("   🎤 Активация микрофона из состояния SLEEPING")
@@ -245,7 +289,7 @@ class StateManager:
             
             # Сигнал включения микрофона (короткий beep)
             try:
-                if hasattr(self.audio_player, 'play_beep'):
+                if self.audio_player and hasattr(self.audio_player, 'play_beep'):
                     self.audio_player.play_beep()
                     logger.info("   🔊 Beep воспроизведен")
             except Exception as e:
@@ -262,43 +306,38 @@ class StateManager:
             logger.info("   🎤 Микрофон активирован из состояния SLEEPING")
         
         elif self.state == AppState.IN_PROCESS:
-            # Прерываем работу и переходим в LISTENING
-            self.console.print("[bold yellow]🔇 Ассистент работает - ПРЕРЫВАЮ и перехожу в LISTENING![/bold yellow]")
-            logger.info("   🚨 Прерывание работы ассистента")
+            # 🚨 КРИТИЧНО: НЕ прерываем здесь! Только переходим в LISTENING
+            logger.info("   🎤 Переход в LISTENING из IN_PROCESS (БЕЗ прерывания)")
+            self.console.print("[blue]🎤 Переход в LISTENING - микрофон будет включен[/blue]")
             
-            # 🚨 ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНЫЙ МЕТОД!
-            success = self.force_stop_everything()
-            
-            if success:
-                logger.info("   ✅ Универсальная остановка успешна")
-                self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
-            else:
-                logger.warning("   ⚠️ Универсальная остановка неполная")
-                self.console.print("[yellow]⚠️ Остановка неполная[/yellow]")
-            
-            # Переходим в LISTENING и включаем микрофон
+            # Переходим в LISTENING
             self.set_state(AppState.LISTENING)
+            
+            # Подготовка устройств
+            try:
+                if hasattr(self.stt_recognizer, 'prepare_for_recording'):
+                    self.stt_recognizer.prepare_for_recording()
+                    logger.info("   🎤 STT подготовлен для записи")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Ошибка подготовки STT: {e}")
+            
+            # Сигнал включения микрофона
             try:
                 if hasattr(self.audio_player, 'play_beep'):
                     self.audio_player.play_beep()
             except Exception:
                 pass
+            
+            # Запускаем запись
             try:
                 self._start_recording_delayed()
                 logger.info("   ⚡ Запись запущена мгновенно")
             except Exception as e:
                 logger.error(f"   ❌ Ошибка запуска записи: {e}")
-            self.console.print("[bold green]✅ Переход в LISTENING - микрофон включен![/bold green]")
-            logger.info("   🎤 Микрофон активирован после прерывания")
+                self.set_state(AppState.SLEEPING)
             
-            # СБРАСЫВАЕМ ФЛАГИ В INPUT_HANDLER
-            if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
-                self.input_handler.reset_interrupt_flag()
-                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler после прерывания IN_PROCESS")
-            
-            if self.input_handler and hasattr(self.input_handler, 'reset_command_processed_flag'):
-                self.input_handler.reset_command_processed_flag()
-                logger.info(f"   🔄 Флаг обработки команды сброшен в InputHandler")
+            self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
+            logger.info("   🎤 Микрофон активирован из IN_PROCESS")
         
         elif self.state == AppState.LISTENING:
             # Уже слушаем → перезапускаем запись для надежности
@@ -431,6 +470,12 @@ class StateManager:
         """ПРОБЕЛ ОТПУЩЕН - деактивируем микрофон и возвращаемся в SLEEPING"""
         logger.info("   🔇 handle_deactivate_microphone() вызван")
         
+        # 🛡️ ЗАЩИТА: проверяем состояние приложения
+        if self.state != AppState.LISTENING:
+            logger.info(f"   ℹ️ Неправильное состояние для deactivate_microphone: {self.state.name}")
+            self.console.print(f"[blue]ℹ️ Неправильное состояние: {self.state.name}[/blue]")
+            return
+        
         if self.state == AppState.LISTENING:
             # Останавливаем запись и РАСПОЗНАЕМ КОМАНДУ
             command = None
@@ -480,7 +525,7 @@ class StateManager:
             logger.info("   ℹ️ Уже в состоянии SLEEPING")
     
     async def handle_interrupt_or_cancel(self):
-        """Обрабатывает событие прерывания или отмены"""
+        """ПРОБЕЛ НАЖАТ - прерываем работу (ЕДИНСТВЕННОЕ место прерывания)"""
         # Обновляем время начала прерывания
         self.interrupt_start_time = time.time()
         
@@ -488,6 +533,20 @@ class StateManager:
         
         current_state = self.state
         logger.info(f"   📊 Текущее состояние: {current_state.name}")
+        
+        # 🛡️ ЗАЩИТА: проверяем, не обрабатывается ли уже прерывание
+        if hasattr(self, '_processing_interrupt') and self._processing_interrupt:
+            logger.info("   ℹ️ Прерывание уже обрабатывается - дублирование предотвращено")
+            return
+        
+        # 🛡️ ЗАЩИТА: проверяем, есть ли что прерывать
+        if current_state == AppState.SLEEPING:
+            logger.info("   ℹ️ Ассистент уже спит - нечего прерывать")
+            self.console.print("[blue]ℹ️ Ассистент уже спит[/blue]")
+            return
+        
+        # Устанавливаем флаг обработки прерывания
+        self._processing_interrupt = True
         
         if current_state == AppState.IN_PROCESS:
             # Ассистент работает → ПРИНУДИТЕЛЬНО прерываем работу!
@@ -586,6 +645,9 @@ class StateManager:
                 self.input_handler.reset_interrupt_flag()
                 logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler (SLEEPING)")
         
+        # Сбрасываем флаг обработки прерывания
+        self._processing_interrupt = False
+        
         # Логируем время выполнения
         end_time = time.time()
         execution_time = (end_time - self.interrupt_start_time) * 1000
@@ -602,6 +664,18 @@ class StateManager:
         try:
             if event == "start_recording":
                 logger.info(f"   🎤 Маршрутизация события start_recording")
+                
+                # 🚨 НОВОЕ: Если ассистент говорит - отправляем interrupt_or_cancel вместо start_recording
+                if self.state == AppState.IN_PROCESS:
+                    logger.info(f"   🚨 Ассистент говорит - перенаправляю на interrupt_or_cancel")
+                    self.console.print("[bold red]🚨 Ассистент говорит - прерываю речь![/bold red]")
+                    await self.handle_interrupt_or_cancel()
+                    return
+                
+                # Проверяем флаг прерывания - если есть, игнорируем start_recording
+                if hasattr(self.input_handler, 'interrupting') and self.input_handler.interrupting:
+                    logger.info(f"   ⚠️ Игнорирую start_recording - активен флаг прерывания")
+                    return
                 self.handle_start_recording()
             elif event == "interrupt_or_cancel":
                 logger.info(f"   🔇 Маршрутизация события interrupt_or_cancel")
@@ -634,6 +708,14 @@ class StateManager:
     def _process_command(self, command):
         """Обрабатывает команду через gRPC"""
         try:
+            # Защита от дублирования команд
+            current_time = time.time()
+            if current_time - self._last_command_time < self._command_debounce:
+                logger.info("   ⚠️ Игнорирую дублированную команду")
+                self.console.print("[yellow]⚠️ Дублированная команда проигнорирована[/yellow]")
+                return
+            self._last_command_time = current_time
+            
             # Сбрасываем флаг отмены для новой команды
             self._cancelled = False
             self.console.print("[blue]🔄 Сброшен флаг отмены для новой команды[/blue]")
@@ -715,33 +797,31 @@ class StateManager:
             try:
                 async for chunk in stream_generator:
                     # 🚨 КРИТИЧНО: ПРОВЕРЯЕМ ПРЕРЫВАНИЕ ПЕРЕД КАЖДЫМ ЧАНКОМ
-                    if hasattr(self, 'input_handler') and self.input_handler:
-                        interrupt_status = self.input_handler.get_interrupt_status()
-                        if interrupt_status:
-                            logger.warning(f"   🚨 ОБНАРУЖЕНО ПРЕРЫВАНИЕ! Останавливаю обработку чанков")
-                            self.console.print("[bold red]🚨 ОБНАРУЖЕНО ПРЕРЫВАНИЕ! Останавливаю обработку чанков![/bold red]")
-                            
-                            # Принудительно очищаем аудио буферы при прерывании
-                            try:
+                    if self._check_interrupt_status():
+                        logger.warning(f"   🚨 ОБНАРУЖЕНО ПРЕРЫВАНИЕ! Останавливаю обработку чанков")
+                        self.console.print("[bold red]🚨 ОБНАРУЖЕНО ПРЕРЫВАНИЕ! Останавливаю обработку чанков![/bold red]")
+                        
+                        # Принудительно очищаем аудио буферы при прерывании
+                        try:
                                 if hasattr(self.audio_player, 'clear_all_audio_data'):
                                     self.audio_player.clear_all_audio_data()
                                     logger.info(f"   🚨 Аудио буферы очищены при прерывании")
                                     self.console.print("[green]✅ Аудио буферы очищены при прерывании[/green]")
                                 elif hasattr(self.audio_player, 'force_stop'):
-                                    self.audio_player.force_stop()
+                                    self.audio_player.force_stop(immediate=True)
                                     logger.info(f"   🚨 Аудио принудительно остановлено при прерывании")
                                     self.console.print("[green]✅ Аудио принудительно остановлено при прерывании[/green]")
                                 else:
                                     logger.warning(f"   ⚠️ Не найден метод очистки аудио")
                                     self.console.print("[yellow]⚠️ Не найден метод очистки аудио[/yellow]")
-                            except Exception as e:
-                                logger.error(f"   ❌ Ошибка очистки аудио при прерывании: {e}")
-                                self.console.print(f"[red]❌ Ошибка очистки аудио при прерывании: {e}[/red]")
-                            
-                            # Выходим из цикла обработки чанков
-                            logger.info(f"   🚨 Выход из цикла обработки чанков при прерывании")
-                            self.console.print("[bold red]🚨 Выход из цикла обработки чанков при прерывании![/bold red]")
-                            break
+                        except Exception as e:
+                            logger.error(f"   ❌ Ошибка очистки аудио при прерывании: {e}")
+                            self.console.print(f"[red]❌ Ошибка очистки аудио при прерывании: {e}[/red]")
+                        
+                        # Выходим из цикла обработки чанков
+                        logger.info(f"   🚨 Выход из цикла обработки чанков при прерывании")
+                        self.console.print("[bold red]🚨 Выход из цикла обработки чанков при прерывании![/bold red]")
+                        break
                     
                     chunk_count += 1
                     logger.info(f"   📦 Получен чанк {chunk_count} в {time.time():.3f}")
@@ -757,61 +837,73 @@ class StateManager:
                         # 🔧 ИСПРАВЛЕНИЕ: правильно вычисляем количество сэмплов
                         # audio_data - это bytes, поэтому делим на размер одного сэмпла (2 байта для int16)
                         audio_samples = len(audio_data) // 2
-                        logger.info(f"   🎵 Аудио чанк {chunk_count}: {audio_samples} сэмплов")
+                        logger.info(f"   🎵 [CLIENT] Аудио чанк {chunk_count}: {audio_samples} сэмплов")
                         self.console.print(f"[green]🎵 Аудио чанк получен: {audio_samples} сэмплов[/green]")
                         
-                        # Добавляем аудио в плеер!
-                        try:
-                            import numpy as np
-                            # 🔧 ИСПРАВЛЕНИЕ: используем правильный dtype из protobuf
-                            dtype_str = chunk.audio_chunk.dtype
-                            if dtype_str == 'int16':
-                                dtype = np.int16
-                            elif dtype_str == 'float32':
-                                dtype = np.float32
-                            elif dtype_str == 'float64':
-                                dtype = np.float64
-                            else:
-                                # Fallback на int16 если dtype не распознан
-                                dtype = np.int16
-                                logger.warning(f"   ⚠️ Неизвестный dtype '{dtype_str}', использую int16")
-                            
-                            audio_array = np.frombuffer(audio_data, dtype=dtype)
-                            
-                            # Делаем копию массива для возможности изменения
-                            audio_array = audio_array.copy()
-
-                            # Короткий fade-in для первого чанка чтобы убрать щелчок на старте
+                        # КРИТИЧНО: Проверяем, что аудио чанк не пустой
+                        if audio_samples > 0:
+                            logger.info(f"   🎵 [CLIENT] Обрабатываю непустой аудио чанк {chunk_count}")
+                            # Добавляем аудио в плеер!
                             try:
-                                if getattr(self, '_first_tts_chunk', True):
-                                    fade_len = min(512, audio_array.size)
-                                    if fade_len > 0:
-                                        if audio_array.dtype.kind == 'f':
-                                            window = np.linspace(0.0, 1.0, num=fade_len, endpoint=False)
-                                            audio_array[:fade_len] *= window
-                                        else:
-                                            window = np.linspace(0.0, 1.0, num=fade_len, endpoint=False).astype(np.float32)
-                                            tmp = audio_array[:fade_len].astype(np.float32)
-                                            audio_array[:fade_len] = (tmp * window).astype(np.int16)
-                                    self._first_tts_chunk = False
-                            except Exception as fade_e:
-                                logger.warning(f"   ⚠️ Fade-in не выполнен: {fade_e}")
-                            
-                            # Логируем состояние очереди ДО добавления
-                            queue_before = self.audio_player.audio_queue.qsize()
-                            logger.info(f"   📊 Очередь ДО добавления: {queue_before}")
-                            
-                            # КРИТИЧНО: используем правильное имя метода!
-                            self.audio_player.add_chunk(audio_array)
-                            
-                            # Логируем состояние очереди ПОСЛЕ добавления
-                            queue_after = self.audio_player.audio_queue.qsize()
-                            logger.info(f"   📊 Очередь ПОСЛЕ добавления: {queue_after}")
-                            
-                            self.console.print(f"[green]✅ Аудио добавлено в плеер[/green]")
-                        except Exception as e:
-                            logger.error(f"   ❌ Ошибка добавления аудио: {e}")
-                            self.console.print(f"[red]❌ Ошибка добавления аудио: {e}[/red]")
+                                import numpy as np
+                                # 🔧 ИСПРАВЛЕНИЕ: используем правильный dtype из protobuf
+                                dtype_str = chunk.audio_chunk.dtype
+                                if dtype_str == 'int16':
+                                    dtype = np.int16
+                                elif dtype_str == 'float32':
+                                    dtype = np.float32
+                                elif dtype_str == 'float64':
+                                    dtype = np.float64
+                                else:
+                                    # Fallback на int16 если dtype не распознан
+                                    dtype = np.int16
+                                    logger.warning(f"   ⚠️ Неизвестный dtype '{dtype_str}', использую int16")
+                                
+                                audio_array = np.frombuffer(audio_data, dtype=dtype)
+                                
+                                # Делаем копию массива для возможности изменения
+                                audio_array = audio_array.copy()
+
+                                # Короткий fade-in для первого чанка чтобы убрать щелчок на старте
+                                try:
+                                    if getattr(self, '_first_tts_chunk', True):
+                                        fade_len = min(512, audio_array.size)
+                                        if fade_len > 0:
+                                            if audio_array.dtype.kind == 'f':
+                                                window = np.linspace(0.0, 1.0, num=fade_len, endpoint=False)
+                                                audio_array[:fade_len] *= window
+                                            else:
+                                                window = np.linspace(0.0, 1.0, num=fade_len, endpoint=False).astype(np.float32)
+                                                tmp = audio_array[:fade_len].astype(np.float32)
+                                                audio_array[:fade_len] = (tmp * window).astype(np.int16)
+                                        self._first_tts_chunk = False
+                                except Exception as fade_e:
+                                    logger.warning(f"   ⚠️ Fade-in не выполнен: {fade_e}")
+                                
+                                # Логируем состояние очереди ДО добавления
+                                if self.audio_player and hasattr(self.audio_player, 'audio_queue'):
+                                    queue_before = self.audio_player.audio_queue.qsize()
+                                    logger.info(f"   📊 [CLIENT] Очередь ДО добавления: {queue_before}")
+                                
+                                # КРИТИЧНО: используем правильное имя метода!
+                                logger.info(f"   🎵 [CLIENT] Вызываю audio_player.add_chunk() для чанка {chunk_count}")
+                                if self.audio_player:
+                                    self.audio_player.add_chunk(audio_array)
+                                else:
+                                    logger.warning("   ⚠️ AudioPlayer недоступен - пропускаю аудио чанк")
+                                
+                                # Логируем состояние очереди ПОСЛЕ добавления
+                                if self.audio_player and hasattr(self.audio_player, 'audio_queue'):
+                                    queue_after = self.audio_player.audio_queue.qsize()
+                                    logger.info(f"   📊 [CLIENT] Очередь ПОСЛЕ добавления: {queue_after}")
+                                
+                                self.console.print(f"[green]✅ Аудио добавлено в плеер[/green]")
+                            except Exception as e:
+                                logger.error(f"   ❌ Ошибка добавления аудио: {e}")
+                                self.console.print(f"[red]❌ Ошибка добавления аудио: {e}[/red]")
+                        else:
+                            logger.debug(f"   🔇 [CLIENT] Пропускаю пустой аудио чанк {chunk_count}")
+                            self.console.print(f"[yellow]🔇 Пропускаю пустой аудио чанк[/yellow]")
                     
                     if hasattr(chunk, 'error_message') and chunk.error_message:
                         self.console.print(f"[red]❌ Ошибка сервера: {chunk.error_message}[/red]")
@@ -832,20 +924,19 @@ class StateManager:
             logger.info(f"   🏁 _consume_stream завершен в {final_time:.3f}")
             
             # 🚨 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: если было прерывание, принудительно очищаем аудио
-            if hasattr(self, 'input_handler') and self.input_handler:
-                if self.input_handler.get_interrupt_status():
-                    logger.warning(f"   🚨 В finally: обнаружено прерывание, принудительно очищаю аудио")
-                    self.console.print("[bold red]🚨 В finally: обнаружено прерывание, принудительно очищаю аудио![/bold red]")
-                    
-                    try:
-                        if hasattr(self.audio_player, 'clear_all_audio_data'):
-                            self.audio_player.clear_all_audio_data()
-                            logger.info(f"   🚨 Аудио буферы очищены в finally при прерывании")
-                        elif hasattr(self.audio_player, 'force_stop'):
-                            self.audio_player.force_stop()
-                            logger.info(f"   🚨 Аудио принудительно остановлено в finally при прерывании")
-                    except Exception as e:
-                        logger.error(f"   ❌ Ошибка очистки аудио в finally: {e}")
+            if self._check_interrupt_status():
+                logger.warning(f"   🚨 В finally: обнаружено прерывание, принудительно очищаю аудио")
+                self.console.print("[bold red]🚨 В finally: обнаружено прерывание, принудительно очищаю аудио![/bold red]")
+                
+                try:
+                    if hasattr(self.audio_player, 'clear_all_audio_data'):
+                        self.audio_player.clear_all_audio_data()
+                        logger.info(f"   🚨 Аудио буферы очищены в finally при прерывании")
+                    elif hasattr(self.audio_player, 'force_stop'):
+                        self.audio_player.force_stop(immediate=True)
+                        logger.info(f"   🚨 Аудио принудительно остановлено в finally при прерывании")
+                except Exception as e:
+                    logger.error(f"   ❌ Ошибка очистки аудио в finally: {e}")
                     
                     # При прерывании НЕ запускаем ожидание завершения аудио
                     logger.info(f"   🚨 Прерывание обнаружено - пропускаю ожидание завершения аудио")
@@ -858,46 +949,43 @@ class StateManager:
                     self.console.print(f"[green]🌙 Ассистент прерван, перешел в режим ожидания[/green]")
                     return  # Выходим из finally
             
-            # ДОЖИДАЕМСЯ ЗАВЕРШЕНИЯ ВОСПРОИЗВЕДЕНИЯ АУДИО ПЕРЕД ПЕРЕХОДОМ В SLEEPING
+            # УПРОЩЕННОЕ ОЖИДАНИЕ ЗАВЕРШЕНИЯ АУДИО
             try:
-                if hasattr(self.audio_player, 'wait_for_queue_empty'):
-                    logger.info(f"   🎵 Ожидаю естественного завершения воспроизведения аудио...")
+                if self.audio_player and hasattr(self.audio_player, 'is_playing') and self.audio_player.is_playing:
+                    logger.info(f"   🎵 Ожидаю завершения воспроизведения аудио...")
                     self.console.print("[blue]🎵 Ожидаю завершения воспроизведения аудио...[/blue]")
                     
-                    # 🚨 ИСПРАВЛЕНИЕ: делаем БЛОКИРУЮЩЕЕ ожидание завершения аудио
-                    # Это гарантирует, что мы не перейдем в SLEEPING раньше времени
-                    logger.info(f"   🎵 Блокирующее ожидание завершения аудио...")
+                    # Упрощенное ожидание с таймаутом
+                    max_wait_time = 90.0  # 90 секунд максимум для длинных речей
+                    wait_start = time.time()
                     
-                    # Ждем завершения воспроизведения всех аудио данных
-                    while True:
-                        # Проверяем статус каждые 100ms
+                    while time.time() - wait_start < max_wait_time:
                         await asyncio.sleep(0.1)
                         
-                        # Проверяем, завершилось ли аудио
-                        if self.audio_player.wait_for_queue_empty():
+                        # Проверяем, завершилось ли воспроизведение
+                        if self.audio_player and self.audio_player.wait_for_queue_empty():
                             logger.info(f"   🎵 Аудио естественно завершено")
                             self.console.print("[green]🎵 Аудио естественно завершено[/green]")
                             break
                             
-                        # Проверяем, не прервано ли воспроизведение
-                        if not self.audio_player.is_playing:
-                            logger.info(f"   🎵 Воспроизведение прервано")
-                            self.console.print("[yellow]🎵 Воспроизведение прервано[/yellow]")
-                            break
-                            
                         # Проверяем, не было ли прерывания
-                        if hasattr(self, 'input_handler') and self.input_handler:
-                            if self.input_handler.get_interrupt_status():
-                                logger.info(f"   🚨 Обнаружено прерывание во время ожидания аудио")
-                                self.console.print("[red]🚨 Прерывание во время ожидания аудио[/red]")
-                                break
+                        if self._check_interrupt_status():
+                            logger.info(f"   🚨 Обнаружено прерывание во время ожидания аудио")
+                            self.console.print("[bold red]🚨 Обнаружено прерывание во время ожидания аудио![/bold red]")
+                            break
+                    else:
+                        # Таймаут достигнут
+                        logger.warning(f"   ⚠️ Таймаут ожидания аудио - принудительная остановка")
+                        self.console.print("[yellow]⚠️ Таймаут ожидания аудио - принудительная остановка[/yellow]")
+                        # Принудительно останавливаем аудио
+                        if self.audio_player and hasattr(self.audio_player, 'force_stop'):
+                            self.audio_player.force_stop(immediate=True)
                     
                     logger.info(f"   🎵 Ожидание завершения аудио завершено")
-                    self.console.print("[blue]✅ Ожидание завершения аудио завершено[/blue]")
-                    
+                    self.console.print("[green]✅ Ожидание завершения аудио завершено[/green]")
                 else:
-                    logger.warning(f"   ⚠️ Метод wait_for_queue_empty недоступен")
-                    self.console.print("[yellow]⚠️ Не могу дождаться завершения аудио[/yellow]")
+                    logger.info(f"   ℹ️ Аудио не воспроизводится - переход в SLEEPING")
+                    self.console.print("[blue]ℹ️ Аудио не воспроизводится - переход в SLEEPING[/blue]")
                     
             except Exception as e:
                 logger.error(f"   ❌ Ошибка ожидания завершения аудио: {e}")
@@ -958,7 +1046,7 @@ class StateManager:
                 
                 # Останавливаем воспроизведение
                 if hasattr(self.audio_player, 'force_stop'):
-                    self.audio_player.force_stop()
+                    self.audio_player.force_stop(immediate=True)
                     logger.info(f"   ✅ Аудио принудительно остановлено")
                 elif hasattr(self.audio_player, 'stop'):
                     self.audio_player.stop()
@@ -1047,54 +1135,33 @@ class StateManager:
         logger.info(f"🚨 force_stop_everything() вызван в {time.time():.3f}")
         self.console.print("[bold red]🚨 УНИВЕРСАЛЬНАЯ ОСТАНОВКА ВСЕГО![/bold red]")
         
-        start_time = time.time()
-        
         try:
-            # 1️⃣ МГНОВЕННО останавливаем аудио воспроизведение
-            audio_start = time.time()
-            self._force_stop_audio_playback()
-            audio_time = (time.time() - audio_start) * 1000
-            logger.info(f"   ✅ _force_stop_audio_playback: {audio_time:.1f}ms")
+            # 1️⃣ Останавливаем аудио воспроизведение
+            if hasattr(self.audio_player, 'force_stop'):
+                self.audio_player.force_stop(immediate=True)
+                logger.info("   ✅ Аудио принудительно остановлено")
             
-            # 2️⃣ МГНОВЕННО останавливаем gRPC стрим
-            grpc_start = time.time()
-            self._force_stop_grpc_stream()
-            grpc_time = (time.time() - grpc_start) * 1000
-            logger.info(f"   ✅ _force_stop_grpc_stream: {grpc_time:.1f}ms")
+            # 2️⃣ Закрываем gRPC соединение
+            if hasattr(self.grpc_client, 'close_connection'):
+                self.grpc_client.close_connection()
+                logger.info("   ✅ gRPC соединение закрыто")
             
-            # 3️⃣ МГНОВЕННО отменяем все задачи
-            tasks_start = time.time()
-            self._force_cancel_all_tasks()
-            tasks_time = (time.time() - tasks_start) * 1000
-            logger.info(f"   ✅ _force_cancel_all_tasks: {tasks_time:.1f}ms")
+            # 3️⃣ Очищаем аудио буферы
+            if hasattr(self.audio_player, 'clear_all_audio_data'):
+                self.audio_player.clear_all_audio_data()
+                logger.info("   ✅ Аудио буферы очищены")
             
-            # 4️⃣ МГНОВЕННО очищаем все буферы
-            buffer_start = time.time()
-            self._force_clear_all_buffers()
-            buffer_time = (time.time() - buffer_start) * 1000
-            logger.info(f"   ✅ _force_clear_all_buffers: {buffer_time:.1f}ms")
+            # 4️⃣ Отменяем активные задачи
+            if self.streaming_task and not self.streaming_task.done():
+                self.streaming_task.cancel()
+                logger.info("   ✅ Streaming задача отменена")
             
-            # 5️⃣ МГНОВЕННО отправляем команду прерывания на сервер
-            server_start = time.time()
-            self._force_interrupt_server()
-            server_time = (time.time() - server_start) * 1000
-            logger.info(f"   ✅ _force_interrupt_server: {server_time:.1f}ms")
+            if self.active_call and not self.active_call.done():
+                self.active_call.cancel()
+                logger.info("   ✅ Active call отменен")
             
-            # Общее время
-            total_time = (time.time() - start_time) * 1000
-            logger.info(f"   ⏱️ Общее время force_stop_everything: {total_time:.1f}ms")
-            
-            # Проверяем результат
-            final_queue_size = self.audio_player.audio_queue.qsize()
-            logger.info(f"   📊 Финальное состояние: queue_size={final_queue_size}")
-            
-            if final_queue_size == 0:
-                logger.info("   🎯 УНИВЕРСАЛЬНАЯ ОСТАНОВКА УСПЕШНА!")
-                self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
-            else:
-                logger.warning(f"   ⚠️ УНИВЕРСАЛЬНАЯ ОСТАНОВКА НЕПОЛНАЯ - очередь: {final_queue_size}")
-                self.console.print(f"[yellow]⚠️ Остановка неполная - очередь: {final_queue_size}[/yellow]")
-            
+            logger.info("   🎯 УНИВЕРСАЛЬНАЯ ОСТАНОВКА УСПЕШНА!")
+            self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
             return True
             
         except Exception as e:
@@ -1109,10 +1176,8 @@ class StateManager:
         try:
             if hasattr(self, 'audio_player') and self.audio_player:
                 # 1️⃣ Принудительно останавливаем воспроизведение
-                if hasattr(self.audio_player, 'force_stop_playback'):
-                    self.audio_player.force_stop_playback()
-                elif hasattr(self.audio_player, 'force_stop'):
-                    self.audio_player.force_stop()
+                if hasattr(self.audio_player, 'force_stop'):
+                    self.audio_player.force_stop(immediate=True)
                 
                 # 2️⃣ Принудительно очищаем все аудио буферы (включая очереди и потоки)
                 if hasattr(self.audio_player, 'clear_all_audio_data'):
@@ -1567,35 +1632,8 @@ async def main():
     except Exception as e:
         console.print(f"[bold red]❌ Ошибка инициализации аудио плеера: {e}[/bold red]")
         console.print("[yellow]⚠️ Ассистент будет работать без звука[/yellow]")
-        # Создаем заглушку для аудио плеера
-        class AudioPlayerStub:
-            def __init__(self):
-                self.is_playing = False
-                self.audio_error = True
-                self.audio_error_message = str(e)
-            
-            def start_playback(self):
-                console.print("[yellow]🔇 Аудио недоступно[/yellow]")
-            
-            def stop_playback(self):
-                pass
-            
-            def interrupt(self):
-                pass
-            
-            def add_audio_chunk(self, audio_chunk):
-                console.print(f"[dim]🔇 Аудио чанк получен (звук отключен): {len(audio_chunk)} сэмплов[/dim]")
-            
-            def wait_for_queue_empty(self):
-                return True
-            
-            def cleanup(self):
-                pass
-            
-            def get_audio_status(self):
-                return {'is_playing': False, 'has_error': True, 'error_message': str(e)}
-        
-        audio_player = AudioPlayerStub()
+        # Используем None вместо заглушки - код будет проверять на None
+        audio_player = None
     
     # 4. Инициализируем gRPC клиент (последним)
     console.print("[blue]🌐 Инициализация gRPC клиента...[/blue]")

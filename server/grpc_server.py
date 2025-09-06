@@ -22,6 +22,19 @@ from database.database_manager import DatabaseManager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def _get_dtype_string(dtype) -> str:
+    """Правильно преобразует numpy dtype в строку для protobuf"""
+    if hasattr(dtype, 'name'):
+        return dtype.name  # np.int16 -> 'int16'
+    dtype_str = str(dtype)
+    if dtype_str == '<i2':
+        return 'int16'
+    elif dtype_str == '<f4':
+        return 'float32'
+    elif dtype_str == '<f8':
+        return 'float64'
+    return dtype_str
+
 class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
     """gRPC сервис для стриминга аудио и текста (АСИНХРОННАЯ ВЕРСИЯ)"""
     
@@ -76,15 +89,12 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             greeting_text = prompt.split(":", 1)[1].strip()
             logger.info(f"🎬 Режим приветствия. Текст: {greeting_text[:100]}...")
             try:
-                audio_chunk_complete = await self.audio_generator.generate_complete_audio_for_sentence(
-                    greeting_text,
-                    interrupt_checker=lambda: (self.global_interrupt_flag and self.interrupt_hardware_id == hardware_id)
-                )
+                audio_chunk_complete = await self.audio_generator.generate_audio(greeting_text)
                 if audio_chunk_complete is not None and len(audio_chunk_complete) > 0:
                     yield streaming_pb2.StreamResponse(
                         audio_chunk=streaming_pb2.AudioChunk(
                             audio_data=audio_chunk_complete.tobytes(),
-                            dtype=str(audio_chunk_complete.dtype),
+                            dtype=_get_dtype_string(audio_chunk_complete.dtype),
                             shape=list(audio_chunk_complete.shape)
                         )
                     )
@@ -120,7 +130,7 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             # Асинхронная обработка БД (запускаем как фоновую задачу)
             if hardware_id and self.db_manager:
                 screen_info_for_db = {'width': screen_width, 'height': screen_height} if screen_width > 0 else {}
-                asyncio.create_task(self._process_hardware_id_async(hardware_id, prompt, screenshot_base64, screen_info_for_db))
+                asyncio.create_task(self._process_hardware_id(hardware_id, prompt, screenshot_base64, screen_info_for_db))
             
             logger.info(f"🚀 Запускаю Gemini Live API streaming для сессии {session_id}...")
             
@@ -182,24 +192,10 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 
                 # КРИТИЧНО: проверяем состояние gRPC соединения
                 try:
-                    # Проверяем abort (соединение прервано)
-                    if hasattr(context, 'abort') and context.aborted():
-                        logger.warning(f"🚨 gRPC соединение прервано для сессии {session_id}!")
+                    # Проверяем cancel (задача отменена) - правильная проверка
+                    if hasattr(context, 'cancelled') and context.cancelled():
+                        logger.warning(f"🚨 gRPC задача ОТМЕНЕНА для сессии {session_id}!")
                         break
-                    
-                    # Проверяем cancel (задача отменена) - УЛУЧШЕННАЯ ПРОВЕРКА
-                    if hasattr(context, 'cancelled'):
-                        if context.cancelled():
-                            logger.warning(f"🚨 gRPC задача ОТМЕНЕНА для сессии {session_id}!")
-                            break
-                    else:
-                        # Альтернативная проверка для разных версий gRPC
-                        try:
-                            if context._state.cancelled:
-                                logger.warning(f"🚨 gRPC задача ОТМЕНЕНА (альтернативная проверка) для сессии {session_id}!")
-                                break
-                        except:
-                            pass
                         
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка проверки состояния gRPC: {e}")
@@ -230,38 +226,60 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                         logger.warning(f"🚨 Сессия {session_id} ОТМЕНЕНА - прерываю генерацию аудио!")
                         break
                     
-                    # 1. Отправляем текстовый чанк клиенту
-                    yield streaming_pb2.StreamResponse(text_chunk=text_chunk)
+                    # 1. Отправляем текстовый чанк клиенту (очищаем маркер LangChain)
+                    clean_text_chunk = text_chunk
+                    if text_chunk.startswith("__LANGCHAIN_TEXT_ONLY__:"):
+                        clean_text_chunk = text_chunk.replace("__LANGCHAIN_TEXT_ONLY__:", "", 1)
+                    
+                    yield streaming_pb2.StreamResponse(text_chunk=clean_text_chunk)
                     
                     # 2. 🚀 ПОТОКОВАЯ генерация аудио для этого предложения
+                    # 🔄 ПРОВЕРЯЕМ: если это LangChain fallback (TEXT_ONLY), пропускаем генерацию аудио
+                    if text_chunk.startswith("__LANGCHAIN_TEXT_ONLY__:"):
+                        logger.info(f"   🔄 [GRPC_SERVER] LangChain fallback detected - пропускаю генерацию аудио для чанка {iteration_count}")
+                        # Отправляем пустой аудио чанк для завершения
+                        yield streaming_pb2.StreamResponse(audio_chunk=streaming_pb2.AudioChunk(
+                            audio_data=b"",
+                            dtype="int16",
+                            shape=[0]
+                        ))
+                        continue
+                    
                     try:
                         logger.info(f"   🎵 Начинаю ПОТОКОВУЮ генерацию аудио для чанка {iteration_count}...")
                         audio_start_time = asyncio.get_event_loop().time()
                         
                         # Используем новый потоковый метод
-                        async for audio_chunk in self.audio_generator.generate_streaming_audio(
-                            text_chunk,
-                            # КРИТИЧНО: передаем функцию проверки прерывания
-                            interrupt_checker=lambda: (self.global_interrupt_flag and self.interrupt_hardware_id == hardware_id)
-                        ):
+                        audio_chunk_count = 0
+                        async for audio_chunk in self.audio_generator.generate_streaming_audio(text_chunk):
+                            audio_chunk_count += 1
+                            logger.info(f"   🎵 [GRPC_SERVER] Получен аудио чанк {audio_chunk_count} от генератора: {len(audio_chunk) if audio_chunk is not None else 'None'} сэмплов")
+                            
                             # Проверяем прерывание перед отправкой каждого аудио чанка
                             if self.global_interrupt_flag and self.interrupt_hardware_id == hardware_id:
-                                logger.warning(f"🚨 ПРЕРЫВАНИЕ АКТИВНО для {hardware_id} - прерываю потоковую генерацию аудио!")
+                                logger.warning(f"🚨 [GRPC_SERVER] ПРЕРЫВАНИЕ АКТИВНО для {hardware_id} - прерываю потоковую генерацию аудио!")
                                 break
                             
                             if session_id in self.active_sessions and self.active_sessions[session_id]['cancelled']:
-                                logger.warning(f"🚨 Сессия {session_id} ОТМЕНЕНА - прерываю потоковую генерацию аудио!")
+                                logger.warning(f"🚨 [GRPC_SERVER] Сессия {session_id} ОТМЕНЕНА - прерываю потоковую генерацию аудио!")
                                 break
                             
-                            # Отправляем аудио чанк клиенту
-                            yield streaming_pb2.StreamResponse(
-                                audio_chunk=streaming_pb2.AudioChunk(
-                                    audio_data=audio_chunk.tobytes(),
-                                    dtype=str(audio_chunk.dtype),
-                                    shape=list(audio_chunk.shape)
+                            # КРИТИЧНО: Проверяем, что аудио чанк не пустой перед отправкой
+                            if audio_chunk is not None and len(audio_chunk) > 0:
+                                logger.info(f"   🎵 [GRPC_SERVER] Отправляю аудио чанк {audio_chunk_count} клиенту: {len(audio_chunk)} сэмплов")
+                                # Отправляем аудио чанк клиенту
+                                yield streaming_pb2.StreamResponse(
+                                    audio_chunk=streaming_pb2.AudioChunk(
+                                        audio_data=audio_chunk.tobytes(),
+                                        dtype=_get_dtype_string(audio_chunk.dtype),
+                                        shape=list(audio_chunk.shape)
+                                    )
                                 )
-                            )
-                            logger.info(f"   🎵 Аудио чанк отправлен: {len(audio_chunk)} сэмплов")
+                                logger.info(f"   ✅ [GRPC_SERVER] Аудио чанк {audio_chunk_count} отправлен успешно")
+                            else:
+                                logger.debug(f"   🔇 [GRPC_SERVER] Пропускаю пустой аудио чанк {audio_chunk_count}")
+                        
+                        logger.info(f"   🎵 [GRPC_SERVER] Потоковая генерация завершена: {audio_chunk_count} чанков обработано")
                         
                         audio_gen_time = (asyncio.get_event_loop().time() - audio_start_time) * 1000
                         logger.info(f"   ⏱️ Потоковая генерация аудио завершена: {audio_gen_time:.1f}ms")
@@ -339,14 +357,9 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 logger.warning(f"🚨 Генерация LLM МГНОВЕННО ОТМЕНЕНА для {hardware_id}!")
             
             # 2️⃣ Отменяем генерацию аудио ВСЕГДА
-            if hasattr(self.audio_generator, 'cancel_generation'):
-                self.audio_generator.cancel_generation()
+            if hasattr(self.audio_generator, 'stop_generation'):
+                self.audio_generator.stop_generation()
                 logger.warning(f"🚨 Генерация аудио МГНОВЕННО ОТМЕНЕНА для {hardware_id}!")
-            
-            # 3️⃣ ПРИНУДИТЕЛЬНО очищаем ВСЕ буферы ВСЕГДА
-            if hasattr(self.audio_generator, 'clear_buffers'):
-                self.audio_generator.clear_buffers()
-                logger.warning(f"🚨 Буферы аудио МГНОВЕННО ОЧИЩЕНЫ для {hardware_id}!")
             
             if hasattr(self.text_processor, 'clear_buffers'):
                 self.text_processor.clear_buffers()
@@ -361,9 +374,9 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         # КРИТИЧНО: ВСЕГДА очищаем все буферы и процессы
         try:
             # Очищаем буферы аудио генератора ВСЕГДА
-            if hasattr(self.audio_generator, 'clear_buffers'):
-                self.audio_generator.clear_buffers()
-                logger.warning(f"🚨 Буферы аудио МГНОВЕННО ОЧИЩЕНЫ для {hardware_id}!")
+            if hasattr(self.audio_generator, 'stop_generation'):
+                self.audio_generator.stop_generation()
+                logger.warning(f"🚨 Генерация аудио ОСТАНОВЛЕНА для {hardware_id}!")
             
             # Очищаем буферы текстового процессора ВСЕГДА
             if hasattr(self.text_processor, 'clear_buffers'):
@@ -411,10 +424,10 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 # КРИТИЧНО: очищаем все чанки и буферы
                 try:
                     # Очищаем буферы аудио генератора ТОЛЬКО если аудио уже генерировалось
-                    if hasattr(self.audio_generator, 'clear_buffers') and hasattr(self.audio_generator, 'is_generating'):
-                        if self.audio_generator.is_generating:
-                            self.audio_generator.clear_buffers()
-                            logger.warning(f"🚨 Буферы аудио МГНОВЕННО ОЧИЩЕНЫ для {session_id}!")
+                    if hasattr(self.audio_generator, 'is_busy'):
+                        if self.audio_generator.is_busy():
+                            self.audio_generator.stop_generation()
+                            logger.warning(f"🚨 Генерация аудио ОСТАНОВЛЕНА для {session_id}!")
                         else:
                             logger.info(f"ℹ️ Аудио не генерировалось для {session_id} - пропускаем очистку буферов")
                 except:
@@ -467,20 +480,22 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         except Exception as e:
             logger.error(f"❌ Ошибка автоматической очистки старых сессий: {e}")
     
-    async def _process_hardware_id_async(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
+    async def _process_hardware_id(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
         """Асинхронная обработка информации в базе данных."""
-        # Эта функция теперь может быть нативной корутиной, если db_manager поддерживает async
-        # Пока что оставляем запуск в executor'е для совместимости с синхронной библиотекой БД
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._process_hardware_id_sync, hardware_id, prompt, screenshot_base64, screen_info)
-
+        if not self.db_manager:
+            logger.warning("⚠️ База данных недоступна для обработки Hardware ID")
+            return
+        
+        try:
+            # Запускаем синхронную операцию в executor'е
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._process_hardware_id_sync, hardware_id, prompt, screenshot_base64, screen_info)
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки hardware_id: {e}")
+    
     def _process_hardware_id_sync(self, hardware_id: str, prompt: str, screenshot_base64: str = None, screen_info: dict = None):
         """Синхронный код для работы с БД, который будет выполняться в ThreadPoolExecutor."""
         try:
-            if not self.db_manager:
-                logger.warning("⚠️ База данных недоступна для обработки Hardware ID")
-                return
-            
             logger.info(f"🆔 Обработка Hardware ID в потоке: {hardware_id[:16]}...")
             
             # 1. Создаем или получаем пользователя

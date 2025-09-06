@@ -35,7 +35,7 @@ class Config:
     EDGE_TTS_VOLUME = os.getenv('EDGE_TTS_VOLUME', '+0%')
     
     # =====================================================
-    # AZURE SPEECH TTS
+    # AZURE SPEECH TTS - ВКЛЮЧЕН
     # =====================================================
     SPEECH_KEY = os.getenv('SPEECH_KEY')
     SPEECH_REGION = os.getenv('SPEECH_REGION')
@@ -74,7 +74,15 @@ class Config:
     
     @classmethod
     def get_database_url(cls) -> str:
-        """Получение строки подключения к базе данных"""
+        """
+        Получение строки подключения к базе данных с поддержкой переменных окружения.
+        Приоритет: DATABASE_URL > конфигурация из переменных > значения по умолчанию
+        """
+        # Сначала проверяем переменную окружения DATABASE_URL
+        if os.environ.get("DATABASE_URL"):
+            return os.environ.get("DATABASE_URL")
+        
+        # Затем строим URL из отдельных переменных
         if cls.DB_PASSWORD:
             return f"postgresql://{cls.DB_USER}:{cls.DB_PASSWORD}@{cls.DB_HOST}:{cls.DB_PORT}/{cls.DB_NAME}"
         else:

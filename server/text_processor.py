@@ -5,7 +5,8 @@ import re
 from typing import AsyncGenerator, List
 
 # Импортируем конфигурацию для загрузки переменных окружения
-import config
+from config import Config
+from utils.text_utils import split_into_sentences, clean_text, is_sentence_complete
 
 # 🚀 НОВЫЙ: Gemini Live API (основной)
 try:
@@ -25,7 +26,7 @@ except ImportError as e:
 
 # --- Загрузка конфигурации ---
 # Проверка наличия необходимых ключей API
-if not os.environ.get("GEMINI_API_KEY"):
+if not Config.GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY not found. Check config.env")
 
 # Проверяем доступность хотя бы одного API
@@ -55,7 +56,9 @@ class TextProcessor:
         self.base_system_instruction = (
             "Your name is Nexy."
             "You are a helpful assistant for blind and visually impaired users. "
-            "Answer on question, exactly what user wants to know or get. Be very polite, friendly and funny don't be rude and sad be very funny and happy. Also don't mix  answers of conversations or describe screenshot .\n"
+            "IMPORTANT: ALWAYS respond in ENGLISH ONLY, regardless of the user's language. "
+            "Respond in English. "
+            "Answer on question, exactly what user wants to know or get. Be very polite, friendly and funny don't be rude and sad be very funny and happy. ALWAYS analyze screenshots when provided to help the user understand what's on their screen and derectly answer to the question.\n"
    
             
             "🎯 YOUR CAPABILITIES:\n\n"
@@ -68,8 +71,8 @@ class TextProcessor:
             "- Scientific explanations\n"
             "- Simple advice and help\n\n"
             
-            "📱 SCREEN ANALYSIS - if screenshot available:\n"
-            "- Use screenshot ONLY as visual context for your response\n"
+            "📱 SCREEN ANALYSIS - ALWAYS when screenshot available:\n"
+            "- ALWAYS analyze and describe what you see on the screen\n"
             "- DO NOT return JSON coordinates or technical image analysis\n"
             "- Simply describe what you see on screen in natural language\n"
             "- Focus on helping the user with their question\n"
@@ -77,10 +80,15 @@ class TextProcessor:
             "- Focus on elements, applications what is on screen, you need to help with navigation and current situation and position of elements on screen\n"
            
             
-            "🔍 ONLINE SEARCH - when available:\n"
-            "- Use Google Search for current information\n"
-            "- Provide up-to-date news and facts and other information which needs to be found in internet as prices of goods and services, weather, transport, news, reviews, jobs, rates, banks, stocks, crypto, events, crypto rates, movie ratings, music ratings, book ratings, game ratings, hotel ratings, restaurant ratings, tourism, crypto rates, movie ratings, music ratings, book ratings, game ratings, hotel ratings, restaurant ratings, tourism, etc.\n"
-            "- Cite sources when possible\n\n"
+            "🔍 MANDATORY GOOGLE SEARCH - ALWAYS USE for:\n"
+            "- Latest news, current events, breaking news\n"
+            "- Weather forecasts and current conditions\n"
+            "- Stock prices, cryptocurrency rates, financial data\n"
+            "- Movie ratings, restaurant reviews, hotel reviews\n"
+            "- Product prices, shopping information\n"
+            "- ANY question requiring up-to-date information\n"
+            "- NEVER say 'I can't provide current information' - ALWAYS SEARCH FIRST\n"
+            "- ALWAYS cite sources when using search results\n\n"
             
             "📋 RESPONSE RULES:\n"
             "- Answer briefly and clearly\n"
@@ -88,7 +96,8 @@ class TextProcessor:
             "- Don't over-explain\n"
             "- Focus on what the user needs\n"
             
-            "REMEMBER: Keep it simple, helpful and Use memory just in case if you need to use, it's really helpful and user asks something about it but otherwise don't use it, also Screenshot if user don't ask you to describe or talk about you don't need to talk about this if user ask you about a screenshot then in this case, you need to talk about screenshot and describe it!"
+            "REMEMBER: Keep it simple, helpful and Use memory just in case if you need to use, it's really helpful and user asks something about it but otherwise don't use it. Analyze a screenshot just when you were asking about about a screenshot of this kind of question otherwise you need to answer exactly on the question\n\n"
+            "🚨 CRITICAL: For ANY question about news, current events, weather, prices, or recent information - you MUST use Google Search. Do NOT say you can't provide current information - search first!"
         )
         
         logger.info(f"✅ base_system_instruction created: {len(self.base_system_instruction)} characters")
@@ -98,18 +107,19 @@ class TextProcessor:
             if GEMINI_LIVE_AVAILABLE:
                 logger.info("🚀 Initializing Gemini Live API (primary)")
                 
-                # Создаем клиент Live API
+                # Создаем клиент Live API с правильными параметрами
                 self.live_client = genai.Client(
                     http_options={"api_version": "v1beta"},
-                    api_key=os.environ.get("GEMINI_API_KEY"),
+                    api_key=Config.GEMINI_API_KEY,
                 )
                 
-                # 🔧 КОНФИГУРАЦИЯ Live API как в официальной документации
+                # 🔧 КОНФИГУРАЦИЯ Live API с правильными enum значениями
                 self.live_config = types.LiveConnectConfig(
-                    response_modalities=["TEXT"],
-                    media_resolution="MEDIA_RESOLUTION_MEDIUM",  # 🔧 ВОССТАНАВЛИВАЕМ
+                    response_modalities=[types.Modality.TEXT],  # Используем enum
+                    media_resolution=types.MediaResolution.MEDIA_RESOLUTION_MEDIUM,  # Используем enum
                     context_window_compression=types.ContextWindowCompressionConfig(
-                        trigger_tokens=8000,  # Уменьшаем для стабильности
+                        trigger_tokens=25600,
+                        sliding_window=types.SlidingWindow(target_tokens=12800),
                     ),
                     # 🔧 System Prompt передается ТОЛЬКО в конфигурации
                     system_instruction=self.base_system_instruction,
@@ -120,6 +130,8 @@ class TextProcessor:
                         )
                     ]
                 )
+                
+                logger.info("✅ Google Search tool configured in Live API")
                 
                 # Модель Live API
                 self.live_model = "models/gemini-2.5-flash-live-preview"
@@ -142,12 +154,9 @@ class TextProcessor:
                 
                 self.llm = ChatGoogleGenerativeAI(
                     model="gemini-2.5-flash-lite",
-                    google_api_key=os.environ.get("GEMINI_API_KEY"),
+                    google_api_key=Config.GEMINI_API_KEY,
                     temperature=0.7,
-                    max_output_tokens=2048,
-                    streaming=True,
-                    cache=False,
-                    force_refresh=True
+                    max_output_tokens=2048
                 )
                 
                 logger.info("✅ LangChain initialized successfully (fallback)")
@@ -161,7 +170,7 @@ class TextProcessor:
                 raise RuntimeError("No LLM API available. Both Live API and LangChain failed to initialize.")
             
             # Инициализируем MemoryAnalyzer (если доступен)
-            gemini_api_key = os.environ.get("GEMINI_API_KEY")
+            gemini_api_key = Config.GEMINI_API_KEY
             if gemini_api_key:
                 try:
                     from memory_analyzer import MemoryAnalyzer
@@ -316,12 +325,12 @@ class TextProcessor:
             else:
                 logger.info("🖼️ Hybrid: No screenshot_base64 provided")
             
-            # 🚀 ПРИОРИТЕТ 1: Все запросы идут через Gemini Live API
+            # 🚀 ПРИОРИТЕТ 1: Все запросы идут через Gemini Live API (текст + аудио)
             if self.use_live_api and self.live_client:
                 try:
-                    logger.info("🚀 Main: Using Gemini Live API for ALL requests (including screenshots)")
+                    logger.info("🚀 Main: Using Gemini Live API for ALL requests (text + audio generation)")
                     
-                    # 🚀 ВЫЗЫВАЕМ LIVE API НАПРЯМУЮ с user_content (который содержит память)
+                    # 🚀 ИСПОЛЬЗУЕМ Gemini Live API для генерации текста и аудио
                     async for chunk in self._call_live_api_directly(
                         user_content, hardware_id, screenshot_data, interrupt_checker, **kwargs
                     ):
@@ -329,14 +338,15 @@ class TextProcessor:
                     return  # Успешно завершили с Live API
                     
                 except Exception as e:
-                    logger.warning(f"⚠️ Main: Live API failed, falling back to LangChain: {e}")
-                    # Продолжаем к fallback
+                    logger.warning(f"⚠️ Main: Live API failed, falling back to LangChain (TEXT ONLY): {e}")
+                    # Продолжаем к fallback ТОЛЬКО при ошибке Live API
+                    pass
+            else:
+                logger.info("🔄 Main: Live API not available, using LangChain fallback (TEXT ONLY)...")
             
-
-            
-            # 🔄 FALLBACK: Используем LangChain если Live API недоступен
+            # 🔄 FALLBACK: Используем LangChain ТОЛЬКО для текста (без аудио)
             if self.llm:
-                logger.info("🔄 Main: Using LangChain fallback...")
+                logger.info("🔄 Main: Using LangChain fallback (TEXT ONLY - no audio generation)...")
                 try:
                     # 🔧 ПОДДЕРЖКА ИЗОБРАЖЕНИЙ В FALLBACK
                     if screenshot_base64:
@@ -396,11 +406,13 @@ class TextProcessor:
                                 # Отправляем все полные предложения кроме последнего
                                 for sentence in sentences[:-1]:
                                     if sentence.strip():
-                                        yield sentence.strip()
+                                        # 🔄 LANGCHAIN FALLBACK: Добавляем маркер "TEXT_ONLY" для отключения аудио
+                                        yield f"__LANGCHAIN_TEXT_ONLY__:{sentence.strip()}"
                                 
                                 # Если есть только одно предложение и оно завершено - отправляем его
-                                if len(sentences) == 1 and self._is_sentence_complete(sentences[0]):
-                                    yield sentences[0].strip()
+                                if len(sentences) == 1 and is_sentence_complete(sentences[0]):
+                                    # 🔄 LANGCHAIN FALLBACK: Добавляем маркер "TEXT_ONLY" для отключения аудио
+                                    yield f"__LANGCHAIN_TEXT_ONLY__:{sentences[0].strip()}"
                                     buffer = ""  # Очищаем буфер
                                 else:
                                     # Оставляем последнее предложение в буфере
@@ -415,16 +427,19 @@ class TextProcessor:
                                     # Отправляем все кроме последнего
                                     for sentence in forced_sentences[:-1]:
                                         if sentence.strip():
-                                            yield sentence.strip()
+                                            # 🔄 LANGCHAIN FALLBACK: Добавляем маркер "TEXT_ONLY" для отключения аудио
+                                            yield f"__LANGCHAIN_TEXT_ONLY__:{sentence.strip()}"
                                     buffer = forced_sentences[-1]
-                                elif len(forced_sentences) == 1 and self._is_sentence_complete(forced_sentences[0]):
+                                elif len(forced_sentences) == 1 and is_sentence_complete(forced_sentences[0]):
                                     # Отправляем единственное завершенное предложение
-                                    yield forced_sentences[0].strip()
+                                    # 🔄 LANGCHAIN FALLBACK: Добавляем маркер "TEXT_ONLY" для отключения аудио
+                                    yield f"__LANGCHAIN_TEXT_ONLY__:{forced_sentences[0].strip()}"
                                     buffer = ""
                     
                     # Отправляем оставшийся текст в буфере
                     if buffer.strip():
-                        yield buffer.strip()
+                        # 🔄 LANGCHAIN FALLBACK: Добавляем маркер "TEXT_ONLY" для отключения аудио
+                        yield f"__LANGCHAIN_TEXT_ONLY__:{buffer.strip()}"
                         full_response += buffer.strip()
                     
                     logger.info("✅ Main: LangChain fallback - Streaming completed successfully")
@@ -432,7 +447,7 @@ class TextProcessor:
                     # ФОНОВОЕ обновление памяти с РЕАЛЬНЫМ ответом
                     if hardware_id and self.db_manager and self.memory_analyzer:
                         asyncio.create_task(
-                            self._update_memory_background(hardware_id, prompt, full_response)
+                            self._update_memory_background(hardware_id, user_content, full_response)
                         )
                         logger.info(f"🔄 Main: Memory update task started in background for {hardware_id} with real response ({len(full_response)} chars)")
                     
@@ -447,93 +462,13 @@ class TextProcessor:
             logger.error(f"❌ Main: Error in main request processing: {e}", exc_info=True)
             yield "Sorry, an internal error occurred while processing your request."
     
-    def clean_text(self, text: str) -> str:
-        """Очищает текст от лишних символов и форматирования"""
-        if not text:
-            return ""
-        
-        # Убираем лишние пробелы и переносы строк
-        text = ' '.join(text.split())
-        
-        # Убираем специальные символы, которые могут мешать
-        text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\[\]\{\}\"\']', '', text)
-        
-        return text.strip()
+    # clean_text method removed - using common utility function
 
     def _split_into_sentences(self, text: str) -> List[str]:
-        """Разбивает текст на предложения для стриминга - УЛУЧШЕННАЯ ВЕРСИЯ"""
-        if not text:
-            return []
-        
-        # Очищаем текст
-        text = self.clean_text(text)
-        
-        # 🎯 УЛУЧШЕННЫЙ ПАТТЕРН для разбиения на предложения
-        # Учитываем больше случаев:
-        # - Точки (.)
-        # - Восклицательные знаки (!)
-        # - Вопросительные знаки (?)
-        # - Многоточие (...)
-        # - Комбинации (!?, ?!)
-        # - Предложения без пробелов после знаков препинания
-        # - Предложения, начинающиеся с цифр
-        
-        # УЛУЧШЕННЫЙ паттерн для разбиения на предложения
-        # 1. Основной паттерн: знак препинания + пробел + заглавная буква/цифра
-        # 2. Дополнительный паттерн: знак препинания + конец строки
-        # 3. Паттерн без пробела: знак препинания + заглавная буква/цифра
-        sentence_pattern = r'(?<=[.!?])\s*(?=[A-ZА-Я0-9])|(?<=[.!?])\s*$'
-        
-        # Разбиваем по паттерну
-        sentences = re.split(sentence_pattern, text)
-        
-        # Фильтруем и обрабатываем предложения
-        result = []
-        for i, sentence in enumerate(sentences):
-            sentence = sentence.strip()
-            if sentence:
-                # Если это не последнее предложение, проверяем знак препинания
-                if i < len(sentences) - 1:
-                    # Ищем знак препинания в конце
-                    if not any(sentence.endswith(ending) for ending in ['.', '!', '?', '...', '?!', '!?']):
-                        sentence += '.'
-                result.append(sentence)
-        
-        return result
+        """Разбивает текст на предложения для стриминга - использует общую утилиту"""
+        return split_into_sentences(text)
     
-    def _is_sentence_complete(self, text: str) -> bool:
-        """Проверяет, завершено ли предложение"""
-        if not text or not text.strip():
-            return False
-        
-        text = text.strip()
-        # Проверяем, заканчивается ли текст знаком окончания предложения
-        sentence_endings = ['.', '!', '?', '...', '?!', '!?']
-        return any(text.endswith(ending) for ending in sentence_endings)
-    
-    async def _smart_stream_content(self, content: str) -> AsyncGenerator[str, None]:
-        """Умный стриминг контента с разбивкой на предложения"""
-        if not content or not content.strip():
-            return
-        
-        # Разбиваем на предложения
-        sentences = self._split_into_sentences(content)
-        
-        for sentence in sentences:
-            if sentence.strip():
-                yield sentence.strip()
-    
-    def _is_complete_sentence(self, text: str) -> bool:
-        """Проверяет, является ли предложение полным"""
-        if not text:
-            return False
-        
-        # Очищаем текст
-        text = self.clean_text(text)
-        
-        # Проверяем, заканчивается ли текст знаком окончания предложения
-        sentence_endings = ['.', '!', '?', '...', '?!', '!?']
-        return any(text.endswith(ending) for ending in sentence_endings)
+    # _is_sentence_complete method removed - using common utility function
     
     async def _call_live_api_directly(self, user_content: str, hardware_id: str = None, screenshot_data: dict = None, interrupt_checker=None, **kwargs) -> AsyncGenerator[str, None]:
         """
@@ -547,7 +482,14 @@ class TextProcessor:
             # 🔍 ДИАГНОСТИКА: Проверяем конфигурацию перед подключением
             logger.info(f"🔍 Live API Direct: Configuration check:")
             logger.info(f"   - Model: {self.live_model}")
-            logger.info(f"   - API Key: {os.environ.get('GEMINI_API_KEY', 'None')[:10]}...")
+            logger.info(f"   - API Key: {Config.GEMINI_API_KEY[:10] if Config.GEMINI_API_KEY else 'None'}...")
+            logger.info(f"   - Tools configured: {len(self.live_config.tools) if hasattr(self.live_config, 'tools') else 0}")
+            if hasattr(self.live_config, 'tools') and self.live_config.tools:
+                for i, tool in enumerate(self.live_config.tools):
+                    if hasattr(tool, 'google_search'):
+                        logger.info(f"   - Tool {i+1}: Google Search ✅")
+                    else:
+                        logger.info(f"   - Tool {i+1}: {type(tool).__name__}")
             logger.info(f"   - Config: {self.live_config}")
             
             # Создаем Live API сессию
@@ -556,80 +498,52 @@ class TextProcessor:
                     # 🔧 System Prompt уже передан в конфигурации - НЕ отправляем как системное сообщение
                     logger.info("🚀 Live API Direct: System Prompt already in config - no need to send as system message")
                     
-                    # 🔧 ПРАВИЛЬНАЯ ПЕРЕДАЧА ИЗОБРАЖЕНИЙ: используем types.Part.from_bytes()
+                    # 🔧 ОБРАБОТКА СКРИНШОТОВ (если есть)
+                    parts = []
+                    
+                    # Добавляем текстовую часть
+                    parts.append(types.Part.from_text(text=user_content))
+                    
+                    # Добавляем изображение, если есть
                     if screenshot_data and screenshot_data.get('data'):
-                        logger.info("🖼️ Live API Direct: Screenshot detected - sending as separate part")
-                        
                         try:
-                            # 🔧 ДЕКОДИРУЕМ Base64 в bytes для Live API
+                            # Декодируем Base64 данные
                             import base64
-                            image_bytes = base64.b64decode(screenshot_data['data'])
+                            image_data = base64.b64decode(screenshot_data['data'])
                             
-                            # 🔧 ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА
-                            logger.info(f"🔍 Live API Direct: Screenshot validation:")
-                            logger.info(f"   - Base64 length: {len(screenshot_data['data'])} chars")
-                            logger.info(f"   - Decoded bytes: {len(image_bytes)} bytes")
-                            logger.info(f"   - Size in KB: {len(image_bytes) / 1024:.1f} KB")
-                            logger.info(f"   - MIME type: {screenshot_data['mime_type']}")
-                            logger.info(f"   - Base64 starts with: {screenshot_data['data'][:50]}...")
-                            
-                            # 🔧 Скриншот уже сжат на клиенте, диагностика не нужна
-                            
-                            # 🔧 ПРОВЕРЯЕМ ВАЛИДНОСТЬ Base64
-                            if len(screenshot_data['data']) < 100:
-                                logger.warning("⚠️ Live API Direct: Base64 string seems too short!")
-                            
-                            if len(image_bytes) < 1000:
-                                logger.warning("⚠️ Live API Direct: Decoded image seems too small!")
-                            
-                            # 🔧 СОЗДАЕМ ПРАВИЛЬНЫЕ ЧАСТИ: текст + изображение отдельно
-                            parts = [
-                                types.Part.from_text(text=user_content),  # 🔧 ИСПРАВЛЕНО: user_content
-                                types.Part.from_bytes(                     # Изображение как bytes
-                                    data=image_bytes,
-                                    mime_type=screenshot_data['mime_type']
-                                )
-                            ]
-                            
-                            # 🔧 ЛОГИРУЕМ что отправляем
-                            logger.info(f"🔍 Live API Direct: Sending user content: '{user_content[:100]}...'")
-                            logger.info(f"🔍 Live API Direct: Sending image: {len(image_bytes)} bytes, MIME: {screenshot_data['mime_type']}")
-                            logger.info(f"🔍 Live API Direct: Total parts: {len(parts)}")
-                            
-                            # 🔧 ОТПРАВЛЯЕМ МУЛЬТИМОДАЛЬНОЕ СООБЩЕНИЕ
-                            await session.send_client_content(
-                                turns=types.Content(
-                                    role='user',
-                                    parts=parts  # Текст + изображение как отдельные части
-                                ),
-                                turn_complete=True
+                            # Создаем Part с изображением
+                            image_part = types.Part.from_bytes(
+                                data=image_data,
+                                mime_type=screenshot_data.get('mime_type', 'image/jpeg')
                             )
+                            parts.append(image_part)
                             
-                            logger.info("✅ Live API Direct: Image sent correctly as separate part!")
+                            logger.info(f"🖼️ Live API Direct: Screenshot added - {len(image_data)} bytes, MIME: {screenshot_data.get('mime_type', 'image/jpeg')}")
                             
                         except Exception as e:
-                            logger.error(f"❌ Live API Direct: Failed to send image as bytes: {e}")
-                            logger.error(f"❌ Live API Direct: Error details: {type(e).__name__}: {str(e)}")
-                            # Fallback: только текст
-                            await session.send_client_content(
-                                turns=types.Content(
-                                    role='user',
-                                    parts=[types.Part.from_text(text=user_content)]
-                                ),
-                                turn_complete=True
-                            )
-                            logger.info("✅ Live API Direct: Text-only fallback sent")
-                    else:
+                            logger.error(f"❌ Live API Direct: Error processing screenshot: {e}")
+                            logger.warning("⚠️ Live API Direct: Continuing with text-only mode")
+                    
+                    logger.info(f"🔍 Live API Direct: Sending content with {len(parts)} parts: '{user_content[:100]}...'")
+                    
+                    # 🔧 ОТПРАВЛЯЕМ КОНТЕНТ (текст + изображение если есть)
+                    if len(parts) == 1:
                         # Только текст
-                        logger.info(f"📝 Live API Direct: No screenshot - sending text-only request: '{user_content[:100]}...'")
+                        await session.send(input=user_content, end_of_turn=True)
+                    else:
+                        # Текст + изображение - используем send_client_content
                         await session.send_client_content(
                             turns=types.Content(
                                 role='user',
-                                parts=[types.Part.from_text(text=user_content)]
+                                parts=parts
                             ),
                             turn_complete=True
                         )
-                        logger.info("✅ Live API Direct: Text-only message sent")
+                    
+                    if len(parts) == 1:
+                        logger.info("✅ Live API Direct: Text-only message sent successfully")
+                    else:
+                        logger.info(f"✅ Live API Direct: Multimodal message sent successfully ({len(parts)} parts)")
                     
                     # Получаем ответ с поддержкой инструментов
                     buffer = ""  # Буфер для накопления текста
@@ -657,7 +571,7 @@ class TextProcessor:
                                             yield sentence.strip()
                                     
                                     # Если есть только одно предложение и оно завершено - отправляем его
-                                    if len(sentences) == 1 and self._is_sentence_complete(sentences[0]):
+                                    if len(sentences) == 1 and is_sentence_complete(sentences[0]):
                                         yield sentences[0].strip()
                                         buffer = ""  # Очищаем буфер
                                     else:
@@ -675,16 +589,52 @@ class TextProcessor:
                                             if sentence.strip():
                                                 yield sentence.strip()
                                         buffer = forced_sentences[-1]
-                                    elif len(forced_sentences) == 1 and self._is_sentence_complete(forced_sentences[0]):
+                                    elif len(forced_sentences) == 1 and is_sentence_complete(forced_sentences[0]):
                                         # Отправляем единственное завершенное предложение
                                         yield forced_sentences[0].strip()
                                         buffer = ""
                         
-                        # Проверяем, есть ли вызовы инструментов (Google Search)
+                        # 🔧 ИСПРАВЛЕНО: Правильная обработка tool calls
                         if hasattr(response, 'tool_calls') and response.tool_calls:
                             for tool_call in response.tool_calls:
                                 logger.info(f"🔍 Live API Direct: Tool call detected: {tool_call.function.name}")
-                                # Инструменты выполняются автоматически Live API
+                                if hasattr(tool_call, 'function') and tool_call.function.name == 'google_search':
+                                    logger.info(f"🔍 Live API Direct: Google Search tool call detected!")
+                                    # Инструменты выполняются автоматически Live API
+                                    # Результаты придут в следующих response
+                        
+                        # 🔧 ИСПРАВЛЕНО: Правильная обработка результатов tool calls
+                        if hasattr(response, 'tool_response') and response.tool_response:
+                            logger.info(f"🔍 Live API Direct: Tool response received!")
+                            logger.info(f"🔍 Live API Direct: Tool response type: {type(response.tool_response).__name__}")
+                            logger.info(f"🔍 Live API Direct: Tool response attributes: {dir(response.tool_response)}")
+                            
+                            if hasattr(response.tool_response, 'google_search'):
+                                logger.info(f"🔍 Live API Direct: Google Search results received!")
+                                # Результаты поиска автоматически включаются в контекст
+                            else:
+                                logger.info(f"🔍 Live API Direct: Other tool response: {type(response.tool_response).__name__}")
+                        
+                        # 🔧 ДОПОЛНИТЕЛЬНО: Проверяем parts на наличие результатов поиска
+                        if hasattr(response, 'parts') and response.parts:
+                            for i, part in enumerate(response.parts):
+                                if hasattr(part, 'text') and part.text:
+                                    # Проверяем, содержит ли текст результаты поиска
+                                    text_lower = part.text.lower()
+                                    if any(keyword in text_lower for keyword in ['search results', 'google search', 'found information', 'according to']):
+                                        logger.info(f"🔍 Live API Direct: Part {i} contains search results!")
+                                elif hasattr(part, 'google_search'):
+                                    logger.info(f"🔍 Live API Direct: Part {i} contains Google Search data!")
+                            
+                            # 🚫 ФИЛЬТРУЕМ executable_code - игнорируем генерацию кода
+                            for part in response.parts:
+                                if hasattr(part, 'executable_code') and part.executable_code:
+                                    logger.info(f"🚫 Live API Direct: Executable code detected and IGNORED (we don't need code generation)")
+                                    # Игнорируем код - нам нужен только текст
+                                
+                                if hasattr(part, 'code_execution_result') and part.code_execution_result:
+                                    logger.info(f"🚫 Live API Direct: Code execution result detected and IGNORED (we don't need code execution)")
+                                    # Игнорируем результат выполнения кода
                     
                     # Отправляем оставшийся текст в буфере
                     if buffer.strip():
