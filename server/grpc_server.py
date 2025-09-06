@@ -74,6 +74,11 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         stream_start_time = asyncio.get_event_loop().time()
         logger.info(f"🚨 StreamAudio() начат в {stream_start_time:.3f}")
         
+        # ДОБАВЛЯЕМ: диагностику входящих запросов
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: Получен запрос от клиента")
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: Время: {stream_start_time:.3f}")
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: Начинаю обработку...")
+        
         prompt = request.prompt
         screenshot_base64 = request.screenshot if request.HasField('screenshot') else None
         screen_width = request.screen_width if request.HasField('screen_width') else 0
@@ -83,6 +88,12 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         logger.info(f"   📝 Промпт: {prompt[:100]}...")
         logger.info(f"   🆔 Hardware ID: {hardware_id[:20] if hardware_id else 'None'}...")
         logger.info(f"   📸 Скриншот: {'Да' if screenshot_base64 else 'Нет'}")
+        
+        # ДОБАВЛЯЕМ: дополнительную диагностику
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: prompt='{prompt}'")
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: screenshot={len(screenshot_base64) if screenshot_base64 else 0} символов")
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: hardware_id='{hardware_id}'")
+        print(f"🔍 ДИАГНОСТИКА СЕРВЕРА: Передаю в text_processor...")
         
         # 🔹 Спец-режим: приветствие при запуске (минуем LLM/БД, сразу TTS)
         if isinstance(prompt, str) and prompt.startswith("__GREETING__:"):

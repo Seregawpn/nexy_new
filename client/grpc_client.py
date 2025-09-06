@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import numpy as np
-import grpc
+import grpc.aio
 import sys
 import os
 import time
@@ -123,7 +123,7 @@ class GrpcClient:
                 console.print(f"[blue]  • {server_name}: {server_config['address']} {status}[/blue]")
         
         console.print(f"[blue]🔄 Автопереключение: {'Включено' if self.auto_fallback else 'Отключено'}[/blue]")
-    
+        
     async def connect(self):
         """Подключение к gRPC серверу с автоматическим fallback"""
         return await self._try_connect_with_fallback()
@@ -177,7 +177,7 @@ class GrpcClient:
             
             if server_config['use_ssl']:
                 # Для Azure Container Apps используем SSL
-                self.channel = grpc.aio.secure_channel(server_config['address'], grpc.ssl_channel_credentials(), options=options)
+                self.channel = grpc.aio.secure_channel(server_config['address'], grpc.aio.ssl_channel_credentials(), options=options)
             else:
                 # Для локального тестирования без SSL
                 self.channel = grpc.aio.insecure_channel(server_config['address'], options=options)
@@ -258,9 +258,8 @@ class GrpcClient:
                 except:
                     pass
             
-            # Создаем синхронный канал для восстановления с увеличенными лимитами
-            import grpc
-            self.channel = grpc.insecure_channel(server_config['address'], options=options)
+            # Создаем async канал для восстановления с увеличенными лимитами
+            self.channel = grpc.aio.insecure_channel(server_config['address'], options=options)
             self.stub = streaming_pb2_grpc.StreamingServiceStub(self.channel)
             
             # Обновляем текущий сервер
@@ -627,7 +626,7 @@ class GrpcClient:
                 self.current_call.cancel()
                 console.print("[bold red]🚨 Текущий gRPC вызов ОТМЕНЕН![/bold red]")
             
-            # 2. Создаем НОВЫЙ канал ТОЛЬКО для команды прерывания
+            # 2. Создаем НОВЫЙ канал ТОЛЬКО для команды прерывания (синхронный)
             import grpc
             interrupt_channel = grpc.insecure_channel(self.server_address)
             interrupt_stub = streaming_pb2_grpc.StreamingServiceStub(interrupt_channel)
@@ -752,9 +751,12 @@ class GrpcClient:
         объект вызова (для возможности отмены), а затем ничего не возвращает, 
         поскольку обработка происходит внутри.
         """
-        if not self.stub:
-            console.print("[bold red]❌ Не подключен к серверу[/bold red]")
-            return
+        # ДОБАВЛЯЕМ: проверку соединения перед каждым запросом
+        if not self.channel or not self.stub:
+            console.print(f"[yellow]🔄 Соединение потеряно, переподключаюсь...[/yellow]")
+            if not await self._try_connect_with_fallback():
+                console.print("[bold red]❌ Не удалось переподключиться к серверу[/bold red]")
+                return
         
         call = None
         try:
@@ -785,12 +787,12 @@ class GrpcClient:
             
             try:
                 request = streaming_pb2.StreamRequest(
-                    prompt=prompt,
-                    screenshot=screenshot_base64 if screenshot_base64 else "",
-                    screen_width=screen_info.get('width', 0) if screen_info else 0,
-                    screen_height=screen_info.get('height', 0) if screen_info else 0,
-                    hardware_id=hardware_id if hardware_id else ""
-                )
+                prompt=prompt,
+                screenshot=screenshot_base64 if screenshot_base64 else "",
+                screen_width=screen_info.get('width', 0) if screen_info else 0,
+                screen_height=screen_info.get('height', 0) if screen_info else 0,
+                hardware_id=hardware_id if hardware_id else ""
+            )
                 console.print(f"[green]✅ StreamRequest создан успешно[/green]")
             except Exception as request_error:
                 console.print(f"[bold red]❌ ОШИБКА ПРИ СОЗДАНИИ StreamRequest: {request_error}[/bold red]")
@@ -820,17 +822,46 @@ class GrpcClient:
                     console.print(f"[bold red]❌ Даже безопасный запрос не создается: {safe_error}[/bold red]")
                     raise  # Перебрасываем ошибку
             
-            call = self.stub.StreamAudio(request)
+            # ИСПРАВЛЕНИЕ: используем правильный streaming RPC
+            console.print(f"[cyan]🔍 ДИАГНОСТИКА: Начинаю streaming итерацию...[/cyan]")
+            console.print(f"[cyan]🔍 ДИАГНОСТИКА: channel={self.channel is not None}[/cyan]")
+            console.print(f"[cyan]🔍 ДИАГНОСТИКА: stub={self.stub is not None}[/cyan]")
+            console.print(f"[cyan]🔍 ДИАГНОСТИКА: server_address={self.server_address}[/cyan]")
+            console.print(f"[cyan]🔍 ДИАГНОСТИКА: Ожидаю streaming ответы от сервера...[/cyan]")
             
-            # Сразу возвращаем объект вызова, чтобы main мог его отменить
-            yield call
+            response_count = 0
+            start_time = time.time()
             
-            async for response in call:
-                yield response                # Возвращаем response в main.py для обработки
-                if response.HasField("error_message"):
-                    console.print(f"[bold red]❌ Ошибка от сервера: {response.error_message}[/bold red]")
-                    break
-            
+            try:
+                # ПРАВИЛЬНО: используем async for для streaming RPC
+                async for response in self.stub.StreamAudio(request):
+                    response_count += 1
+                    current_time = time.time()
+                    
+                    console.print(f"[green]✅ Получен чанк {response_count} за {current_time - start_time:.3f}s[/green]")
+                    
+                    # Обрабатываем каждый streaming чанк
+                    yield response
+                    
+                    # Проверяем на ошибки в каждом чанке
+                    if response.HasField("error_message"):
+                        console.print(f"[bold red]❌ Ошибка от сервера: {response.error_message}[/bold red]")
+                        break
+                    
+                    # Проверяем на завершение стрима
+                    if response.HasField("end_message"):
+                        console.print(f"[blue]🏁 Стрим завершен: {response.end_message}[/blue]")
+                        break
+                
+                console.print(f"[green]✅ Обработка streaming завершена. Всего чанков: {response_count}[/green]")
+                
+            except Exception as e:
+                console.print(f"[bold red]❌ Ошибка в streaming цикле: {e}[/bold red]")
+                # ДОБАВЛЯЕМ: принудительное переподключение при ошибке
+                console.print(f"[yellow]🔄 Принудительно переподключаюсь к серверу...[/yellow]")
+                await self._try_connect_with_fallback()
+                raise
+                        
             # НЕ вызываем wait_for_queue_empty - пусть аудио воспроизводится естественным образом
             # self.audio_player.wait_for_queue_empty()
             
@@ -848,13 +879,18 @@ class GrpcClient:
             else:
                 console.print("[yellow]⚠️ Метод wait_for_queue_empty недоступен[/yellow]")
             
-            # Логируем завершение стрима, но НЕ останавливаем воспроизведение
-            console.print("[bold green]✅ gRPC стрим завершен, аудио продолжает воспроизводиться...[/bold green]")
-            
+            # Логируем завершение стрима
+            console.print("[bold green]✅ gRPC стрим завершен[/bold green]")
+                
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка в stream_audio: {e}[/red]")
+            logger.error(f"   ❌ Ошибка в stream_audio: {e}")
+            raise
+    
         except grpc.aio.AioRpcError as e:
-            if e.code() == grpc.StatusCode.CANCELLED:
+            if e.code() == grpc.aio.StatusCode.CANCELLED:
                 console.print("[bold yellow]⚠️ Стриминг отменен клиентом[/bold yellow]")
-            elif e.code() == grpc.StatusCode.UNAVAILABLE:
+            elif e.code() == grpc.aio.StatusCode.UNAVAILABLE:
                 console.print(f"[bold red]❌ Сервер недоступен: {e.details()}[/bold red]")
                 # Пытаемся автоматически переподключиться к другому серверу
                 if self.auto_fallback:
@@ -916,3 +952,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[bold yellow]👋 Выход...[/bold yellow]")
+
+

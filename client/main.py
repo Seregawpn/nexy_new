@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from audio_player import AudioPlayer
 from unified_audio_system import get_global_unified_audio_system
+from audio_device_manager import initialize_global_audio_device_manager
 from stt_recognizer import StreamRecognizer
 from input_handler import InputHandler
 
@@ -211,8 +212,14 @@ class StateManager:
         self._last_command_time = 0
         self._command_debounce = 0.5  # 500ms защита от дублирования команд
         
-        # Простое отслеживание состояния
-        pass
+        # Централизованное управление состоянием микрофона
+        import threading
+        self._microphone_state = {
+            'is_recording': False,
+            'last_start_time': 0,
+            'last_stop_time': 0,
+            'state_lock': threading.Lock()
+        }
     
     def _write_tray_status_file(self, state_name: str):
         try:
@@ -225,6 +232,47 @@ class StateManager:
     def get_state(self):
         """Возвращает текущее состояние"""
         return self.state
+    
+    def get_microphone_state(self) -> dict:
+        """Централизованное получение состояния микрофона"""
+        with self._microphone_state['state_lock']:
+            return {
+                'is_recording': self._microphone_state['is_recording'],
+                'last_start_time': self._microphone_state['last_start_time'],
+                'last_stop_time': self._microphone_state['last_stop_time']
+            }
+    
+    def set_microphone_recording(self, is_recording: bool):
+        """Централизованное управление состоянием записи"""
+        with self._microphone_state['state_lock']:
+            current_time = time.time()
+            self._microphone_state['is_recording'] = is_recording
+            if is_recording:
+                self._microphone_state['last_start_time'] = current_time
+            else:
+                self._microphone_state['last_stop_time'] = current_time
+            
+            # Синхронизируем с STT recognizer
+            if hasattr(self.stt_recognizer, 'is_recording'):
+                self.stt_recognizer.is_recording = is_recording
+    
+    def can_start_recording(self) -> bool:
+        """Проверяет, можно ли начать запись"""
+        with self._microphone_state['state_lock']:
+            # Нельзя начать запись если уже записываем
+            if self._microphone_state['is_recording']:
+                return False
+            
+            # Нельзя начать запись если приложение не в SLEEPING
+            if self.state != AppState.SLEEPING:
+                return False
+                
+            return True
+    
+    def is_microphone_recording(self) -> bool:
+        """Проверяет, активна ли запись микрофона"""
+        with self._microphone_state['state_lock']:
+            return self._microphone_state['is_recording']
     
     def _check_interrupt_status(self) -> bool:
         """
@@ -262,22 +310,18 @@ class StateManager:
     def handle_start_recording(self):
         """ПРОБЕЛ ЗАЖАТ - включаем микрофон (БЕЗ прерывания)"""
         
-        # 🛡️ ЗАЩИТА: проверяем состояние приложения
-        if self.state == AppState.IN_PROCESS:
-            logger.info("   ℹ️ Ассистент работает - игнорирую start_recording")
-            self.console.print("[blue]ℹ️ Ассистент работает - микрофон неактивен[/blue]")
-            return
-        
-        # 🛡️ ЗАЩИТА: проверяем, не активен ли уже микрофон
-        if hasattr(self.stt_recognizer, 'is_recording') and self.stt_recognizer.is_recording:
-            logger.info("   ℹ️ Микрофон уже активен - дублирование предотвращено")
-            self.console.print("[blue]ℹ️ Микрофон уже активен[/blue]")
+        # 🛡️ ЗАЩИТА: проверяем возможность начала записи
+        if not self.can_start_recording():
+            current_state = self.get_microphone_state()
+            logger.warning(f"   ⚠️ Невозможно начать запись: микрофон={current_state['is_recording']}, состояние={self.state.name}")
+            self.console.print(f"[yellow]⚠️ Невозможно начать запись: микрофон={current_state['is_recording']}, состояние={self.state.name}[/yellow]")
             return
         
         if self.state == AppState.SLEEPING:
+            # Начинаем запись через централизованную систему
             logger.info("   🎤 Активация микрофона из состояния SLEEPING")
-            # Переходим в LISTENING и включаем микрофон
             self.set_state(AppState.LISTENING)
+            self.set_microphone_recording(True)
             
             # Подготовка устройств: выставляем системные дефолты и переключаем вывод ДО бипа
             try:
@@ -304,7 +348,7 @@ class StateManager:
             
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из состояния SLEEPING")
-        
+            
         elif self.state == AppState.IN_PROCESS:
             # 🚨 КРИТИЧНО: НЕ прерываем здесь! Только переходим в LISTENING
             logger.info("   🎤 Переход в LISTENING из IN_PROCESS (БЕЗ прерывания)")
@@ -338,50 +382,40 @@ class StateManager:
             
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из IN_PROCESS")
-        
+            
         elif self.state == AppState.LISTENING:
             # Уже слушаем → перезапускаем запись для надежности
             self.console.print("[blue]🔄 Уже слушаю - перезапускаю запись для надежности[/blue]")
             logger.info("   🔄 Перезапуск записи в состоянии LISTENING")
             
             # 🚨 ЗАЩИТА: проверяем, не активен ли уже микрофон
-            try:
-                # Проверяем, не записывает ли уже STT recognizer
-                if hasattr(self.stt_recognizer, 'is_recording') and self.stt_recognizer.is_recording:
-                    logger.info("   ℹ️ Микрофон уже активен - дублирование активации предотвращено")
-                    self.console.print("[blue]ℹ️ Микрофон уже активен - дублирование предотвращено[/blue]")
-                    return  # Выходим без повторной активации
-                
-                # Останавливаем текущую запись и начинаем новую
-                try:
-                    self.stt_recognizer.stop_recording_and_recognize()
-                    logger.info("   ✅ Текущая запись остановлена")
-                except:
-                    pass
-                
-                # Начинаем новую запись (с сигналом о готовности)
-                try:
-                    if hasattr(self.audio_player, 'play_beep'):
-                        self.audio_player.play_beep()
-                except Exception:
-                    pass
-                try:
-                    import threading
-                    threading.Timer(0.12, self.stt_recognizer.start_recording).start()
-                except Exception:
-                    self.stt_recognizer.start_recording()
-                logger.info("   ✅ Новая запись запущена")
-                self.console.print("[green]🎤 Запись перезапущена - говорите команду[/green]")
-                
-            except Exception as e:
-                logger.warning(f"   ⚠️ Ошибка при перезапуске записи: {e}")
-                self.console.print(f"[yellow]⚠️ Ошибка при перезапуске записи: {e}[/yellow]")
+            if self.is_microphone_recording():
+                logger.info("   ℹ️ Микрофон уже активен - дублирование активации предотвращено")
+                self.console.print("[blue]ℹ️ Микрофон уже активен - дублирование предотвращено[/blue]")
+                return  # Выходим без повторной активации
             
-            # Сбрасываем флаг обработки команды
-            if self.input_handler and hasattr(self.input_handler, 'reset_command_processed_flag'):
-                self.input_handler.reset_command_processed_flag()
-                logger.info(f"   🔄 Флаг обработки команды сброшен в InputHandler")
-        
+            # Останавливаем текущую запись и начинаем новую
+            try:
+                self.stt_recognizer.stop_recording_and_recognize()
+                logger.info("   ✅ Текущая запись остановлена")
+            except:
+                pass
+            
+            # Начинаем новую запись (с сигналом о готовности)
+            try:
+                if hasattr(self.audio_player, 'play_beep'):
+                    self.audio_player.play_beep()
+            except Exception:
+                pass
+            
+            try:
+                import threading
+                threading.Timer(0.12, self.stt_recognizer.start_recording).start()
+            except Exception:
+                self.stt_recognizer.start_recording()
+            logger.info("   ✅ Новая запись запущена")
+            self.console.print("[green]🎤 Запись перезапущена - говорите команду[/green]")
+            
         else:
             # Неизвестное состояние → переходим в LISTENING
             self.console.print(f"[yellow]⚠️ Неизвестное состояние {self.state.name}, перехожу в LISTENING[/yellow]")
@@ -391,11 +425,13 @@ class StateManager:
                     self.audio_player.play_beep()
             except Exception:
                 pass
+            
             try:
                 self._start_recording_delayed()
                 logger.info("   ⚡ Запись запущена мгновенно")
             except Exception as e:
                 logger.error(f"   ❌ Ошибка запуска записи: {e}")
+            
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из неизвестного состояния")
     
@@ -407,7 +443,8 @@ class StateManager:
             logger.info("   ✅ Запись успешно запущена")
         except Exception as e:
             logger.error(f"   ❌ Ошибка запуска записи: {e}")
-            # Пытаемся перейти обратно в SLEEPING при ошибке
+            # При ошибке сбрасываем состояние микрофона и переходим в SLEEPING
+            self.set_microphone_recording(False)
             self.set_state(AppState.SLEEPING)
     
     def handle_stop_recording(self):
@@ -483,8 +520,12 @@ class StateManager:
                 if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
                     command = self.stt_recognizer.stop_recording_and_recognize()
                     logger.info("   ✅ Запись остановлена")
+                    # Сбрасываем состояние микрофона через централизованную систему
+                    self.set_microphone_recording(False)
             except Exception as e:
                 logger.warning(f"   ⚠️ Ошибка остановки записи: {e}")
+                # При ошибке все равно сбрасываем состояние микрофона
+                self.set_microphone_recording(False)
             
             # Если команда распознана - ОБРАБАТЫВАЕМ ЕЕ
             if command and command.strip():
@@ -541,120 +582,123 @@ class StateManager:
         
         # 🛡️ ЗАЩИТА: проверяем, есть ли что прерывать
         if current_state == AppState.SLEEPING:
-            logger.info("   ℹ️ Ассистент уже спит - нечего прерывать")
-            self.console.print("[blue]ℹ️ Ассистент уже спит[/blue]")
-            return
+            logger.info("   ℹ️ Ассистент спит - проверяю аудио")
+            self.console.print("[blue]ℹ️ Ассистент спит - проверяю аудио[/blue]")
+            
+            # ОСТАВЛЯЕМ: останавливаем аудио если оно воспроизводится
+            if (self.audio_player and 
+                hasattr(self.audio_player, 'is_playing') and 
+                self.audio_player.is_playing):
+                
+                logger.info("   🎵 Аудио воспроизводится в фоне - останавливаю")
+                self.console.print("[bold red]🎵 Останавливаю фоновое аудио![/bold red]")
+                self.force_stop_everything()
+                return
+            else:
+                logger.info("   ℹ️ Аудио не воспроизводится - нечего останавливать")
+                self.console.print("[blue]ℹ️ Аудио не воспроизводится[/blue]")
+                return
         
         # Устанавливаем флаг обработки прерывания
         self._processing_interrupt = True
         
-        if current_state == AppState.IN_PROCESS:
-            # Ассистент работает → ПРИНУДИТЕЛЬНО прерываем работу!
-            logger.info(f"   🚨 Прерывание работы (состояние: {current_state.name})")
-            self.console.print("[bold red]🚨 ПРИНУДИТЕЛЬНО прерывание работы![/bold red]")
-            
-            # 🚨 ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНЫЙ МЕТОД!
-            success = self.force_stop_everything()
-            
-            if success:
-                logger.info("   ✅ Универсальная остановка успешна")
-                self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
-            else:
-                logger.warning("   ⚠️ Универсальная остановка неполная")
-                self.console.print("[yellow]⚠️ Остановка неполная[/yellow]")
-            
-                          # 🚨 КРИТИЧНО: После прерывания ВСЕГДА переходим в SLEEPING!
-            self.set_state(AppState.SLEEPING)
-            logger.info("   🔄 Переход в SLEEPING после прерывания IN_PROCESS")
-            
-            try:
-                # Чистим экран/ресурсы при необходимости
-                pass
-            except Exception as e:
-                logger.error(f"   ❌ Ошибка обработки прерывания: {e}")
-            
-            # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
-            if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
-                self.input_handler.reset_interrupt_flag()
-                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler")
-            
-        elif current_state == AppState.LISTENING:
-            # Ассистент слушает → прерываем запись и возвращаемся в SLEEPING
-            logger.info(f"   🎤 Прерывание записи (состояние: {current_state.name})")
-            self.console.print("[bold red]🔇 Прерывание записи команды[/bold red]")
-            
-            # Останавливаем запись и распознаем речь
-            if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
-                command = self.stt_recognizer.stop_recording_and_recognize()
+        try:
+            if current_state == AppState.IN_PROCESS:
+                # Ассистент работает → ПРИНУДИТЕЛЬНО прерываем работу!
+                logger.info(f"   🚨 Прерывание работы (состояние: {current_state.name})")
+                self.console.print("[bold red]🚨 ПРИНУДИТЕЛЬНО прерывание работы![/bold red]")
                 
-                if command and command.strip():
-                    # Команда распознана - переходим в IN_PROCESS
-                    self.console.print(f"[bold green]📝 Команда распознана: {command}[/bold green]")
-                    logger.info(f"   📝 Команда распознана: {command}")
-                    
-                    # Переходим в IN_PROCESS для обработки команды
-                    self.set_state(AppState.IN_PROCESS)
-                    logger.info("   🔄 Переход в IN_PROCESS для обработки команды")
-                    
-                    # Обрабатываем команду
-                    self._process_command(command)
-                    
-            else:
-                # Команда не распознана - переходим в SLEEPING
-                self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
-                logger.info("   ⚠️ Команда не распознана")
+                # 🚨 ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНЫЙ МЕТОД!
+                success = self.force_stop_everything()
+                
+                if success:
+                    logger.info("   ✅ Универсальная остановка успешна")
+                    self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
+                else:
+                    logger.warning("   ⚠️ Универсальная остановка неполная")
+                    self.console.print("[yellow]⚠️ Остановка неполная[/yellow]")
+                
+                # 🚨 КРИТИЧНО: После прерывания ВСЕГДА переходим в SLEEPING!
+                self.set_state(AppState.SLEEPING)
+                logger.info("   🔄 Переход в SLEEPING после прерывания IN_PROCESS")
+                
+                try:
+                    # Чистим экран/ресурсы при необходимости
+                    pass
+                except Exception as e:
+                    logger.error(f"   ❌ Ошибка обработки прерывания: {e}")
+                
+                # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
+                if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
+                    self.input_handler.reset_interrupt_flag()
+                    logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler")
+                
+            elif current_state == AppState.LISTENING:
+                # Ассистент слушает → прерываем запись и возвращаемся в SLEEPING
+                logger.info(f"   🎤 Прерывание записи (состояние: {current_state.name})")
+                self.console.print("[bold red]🔇 Прерывание записи команды[/bold red]")
+            
+                # Останавливаем запись и распознаем речь
+                if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
+                    command = self.stt_recognizer.stop_recording_and_recognize()
+                    if command and command.strip():
+                        self.console.print(f"[bold green]📝 Команда распознана: {command}[/bold green]")
+                        logger.info(f"   📝 Команда распознана: {command}")
+                    else:
+                        self.console.print("[yellow]⚠️ Команда не распознана[/yellow]")
+                        logger.info("   ⚠️ Команда не распознана")
+                else:
+                    logger.warning("   ⚠️ STT recognizer недоступен")
+                    self.console.print("[yellow]⚠️ STT recognizer недоступен[/yellow]")
                 
                 # Переходим в SLEEPING
                 self.set_state(AppState.SLEEPING)
-                logger.info("   🔄 Переход в SLEEPING после неудачного распознавания")
+                logger.info("   🔄 Переход в SLEEPING - STT недоступен")
                 
-        elif not hasattr(self, 'stt_recognizer') or not self.stt_recognizer:
-            # STT recognizer недоступен
-            self.console.print("[yellow]⚠️ STT recognizer недоступен[/yellow]")
-            logger.warning("   ⚠️ STT recognizer недоступен")
-            
-            # Переходим в SLEEPING
-            self.set_state(AppState.SLEEPING)
-            logger.info("   🔄 Переход в SLEEPING - STT недоступен")
-            
-            # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
-            if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
-                self.input_handler.reset_interrupt_flag()
-                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler после прерывания записи")
+                # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ В INPUT_HANDLER
+                if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
+                    self.input_handler.reset_interrupt_flag()
+                    logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler после прерывания записи")
+                    
+            elif current_state == AppState.SLEEPING:
+                # Ассистент спит → при прерывании ничего не активируем автоматически
+                logger.info(f"   🌙 Ассистент спит - обрабатываю прерывание без автоактивации (состояние: {current_state.name})")
+                self.console.print("[blue]🌙 Ассистент спит - никаких действий, ждём нажатия для записи[/blue]")
                 
-        elif current_state == AppState.SLEEPING:
-            # Ассистент спит → при прерывании ничего не активируем автоматически
-            logger.info(f"   🌙 Ассистент спит - обрабатываю прерывание без автоактивации (состояние: {current_state.name})")
-            self.console.print("[blue]🌙 Ассистент спит - никаких действий, ждём нажатия для записи[/blue]")
-            
-            # Чистим ресурсы, но микрофон не включаем
-            try:
-                success = self.force_stop_everything()
-                if success:
-                    self.console.print("[green]✅ Очистка завершена[/green]")
-                else:
-                    self.console.print("[yellow]⚠️ Очистка неполная[/yellow]")
-            except Exception as e:
-                logger.warning(f"   ⚠️ Ошибка очистки при SLEEPING: {e}")
-            
-            # Остаёмся в SLEEPING
-            self.set_state(AppState.SLEEPING)
-            
-            # Сбрасываем флаг прерывания
-            if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
-                self.input_handler.reset_interrupt_flag()
-                logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler (SLEEPING)")
+                # Чистим ресурсы, но микрофон не включаем
+                try:
+                    success = self.force_stop_everything()
+                    if success:
+                        self.console.print("[green]✅ Очистка завершена[/green]")
+                    else:
+                        self.console.print("[yellow]⚠️ Очистка неполная[/yellow]")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Ошибка очистки при SLEEPING: {e}")
+                
+                # Остаёмся в SLEEPING
+                self.set_state(AppState.SLEEPING)
+                
+                # Сбрасываем флаг прерывания
+                if self.input_handler and hasattr(self.input_handler, 'reset_interrupt_flag'):
+                    self.input_handler.reset_interrupt_flag()
+                    logger.info(f"   🔄 Флаг прерывания сброшен в InputHandler (SLEEPING)")
         
-        # Сбрасываем флаг обработки прерывания
-        self._processing_interrupt = False
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка в handle_interrupt_or_cancel: {e}")
+            self.console.print(f"[red]❌ Ошибка обработки прерывания: {e}[/red]")
         
-        # Логируем время выполнения
-        end_time = time.time()
-        execution_time = (end_time - self.interrupt_start_time) * 1000
-        logger.info(f"   ⏱️ handle_interrupt_or_cancel завершен за {execution_time:.1f}ms")
-        
-        # Логируем финальное состояние
-        logger.info(f"   📊 Финальное состояние: {self.state.name}")
+        finally:
+            # ИСПРАВЛЕНИЕ: ВСЕГДА сбрасываем флаг обработки прерывания
+            self._processing_interrupt = False
+            logger.info("   🔄 Флаг _processing_interrupt сброшен в finally")
+            
+            # Логируем время выполнения
+            end_time = time.time()
+            execution_time = (end_time - self.interrupt_start_time) * 1000
+            logger.info(f"   ⏱️ handle_interrupt_or_cancel завершен за {execution_time:.1f}ms")
+            
+            # Логируем финальное состояние
+            logger.info(f"   📊 Финальное состояние: {self.state.name}")
     
     async def handle_event(self, event):
         """Маршрутизирует события к соответствующим обработчикам"""
@@ -664,13 +708,6 @@ class StateManager:
         try:
             if event == "start_recording":
                 logger.info(f"   🎤 Маршрутизация события start_recording")
-                
-                # 🚨 НОВОЕ: Если ассистент говорит - отправляем interrupt_or_cancel вместо start_recording
-                if self.state == AppState.IN_PROCESS:
-                    logger.info(f"   🚨 Ассистент говорит - перенаправляю на interrupt_or_cancel")
-                    self.console.print("[bold red]🚨 Ассистент говорит - прерываю речь![/bold red]")
-                    await self.handle_interrupt_or_cancel()
-                    return
                 
                 # Проверяем флаг прерывания - если есть, игнорируем start_recording
                 if hasattr(self.input_handler, 'interrupting') and self.input_handler.interrupting:
@@ -721,36 +758,19 @@ class StateManager:
             self.console.print("[blue]🔄 Сброшен флаг отмены для новой команды[/blue]")
             
             # 🚨 КРИТИЧНО: Проверяем и восстанавливаем gRPC соединение!
-            if not self.grpc_client.stub:
+            if not self.grpc_client.stub or not self.grpc_client.channel:
                 self.console.print("[yellow]⚠️ gRPC соединение разорвано, восстанавливаю...[/yellow]")
                 logger.info("   🔌 Восстанавливаю gRPC соединение...")
                 
                 try:
-                    # Восстанавливаем соединение
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Создаем задачу для асинхронного восстановления
-                        restore_task = loop.create_task(self.grpc_client.connect())
-                        # Ждем завершения (неблокирующе)
-                        if not restore_task.done():
-                            self.console.print("[blue]⏳ Восстановление соединения в фоне...[/blue]")
-                        else:
-                            if restore_task.result():
-                                self.console.print("[green]✅ gRPC соединение восстановлено![/green]")
-                                logger.info("   ✅ gRPC соединение восстановлено")
-                            else:
-                                self.console.print("[red]❌ Не удалось восстановить gRPC соединение[/red]")
-                                logger.error("   ❌ Не удалось восстановить gRPC соединение")
-                                raise Exception("gRPC соединение не восстановлено")
+                    # ИСПРАВЛЕНИЕ: используем синхронное восстановление для надежности
+                    if self.grpc_client.connect_sync():
+                        self.console.print("[green]✅ gRPC соединение восстановлено синхронно![/green]")
+                        logger.info("   ✅ gRPC соединение восстановлено синхронно")
                     else:
-                        # Если цикл не запущен, восстанавливаем синхронно
-                        if self.grpc_client.connect_sync():
-                            self.console.print("[green]✅ gRPC соединение восстановлено синхронно![/green]")
-                            logger.info("   ✅ gRPC соединение восстановлено синхронно")
-                        else:
-                            self.console.print("[red]❌ Не удалось восстановить gRPC соединение синхронно[/red]")
-                            logger.error("   ❌ Не удалось восстановить gRPC соединение синхронно")
-                            raise Exception("gRPC соединение не восстановлено синхронно")
+                        self.console.print("[red]❌ Не удалось восстановить gRPC соединение синхронно[/red]")
+                        logger.error("   ❌ Не удалось восстановить gRPC соединение синхронно")
+                        raise Exception("gRPC соединение не восстановлено синхронно")
                 
                 except Exception as e:
                     self.console.print(f"[bold red]❌ Ошибка восстановления gRPC соединения: {e}[/bold red]")
@@ -769,6 +789,11 @@ class StateManager:
                 self.current_screen_info,
                 self.hardware_id
             )
+            
+            # ИСПРАВЛЕНИЕ: сбрасываем предыдущую задачу перед созданием новой
+            if self.streaming_task and not self.streaming_task.done():
+                self.streaming_task.cancel()
+                logger.info("   🔄 Предыдущая streaming_task отменена")
             
             # Создаем задачу для обработки стрима
             self.streaming_task = asyncio.create_task(self._consume_stream(stream_generator))
@@ -795,7 +820,16 @@ class StateManager:
             logger.info("   🚀 Начало обработки gRPC стрима")
             
             try:
+                # ДИАГНОСТИКА: добавляем периодическое логирование
+                last_diagnostic = time.time()
+                
                 async for chunk in stream_generator:
+                    # ДИАГНОСТИКА: логируем каждые 5 секунд
+                    current_time = time.time()
+                    if current_time - last_diagnostic > 5.0:
+                        logger.info(f"🔍 ДИАГНОСТИКА _consume_stream: обработано {chunk_count} чанков, состояние={self.state.name}")
+                        last_diagnostic = current_time
+                    
                     # 🚨 КРИТИЧНО: ПРОВЕРЯЕМ ПРЕРЫВАНИЕ ПЕРЕД КАЖДЫМ ЧАНКОМ
                     if self._check_interrupt_status():
                         logger.warning(f"   🚨 ОБНАРУЖЕНО ПРЕРЫВАНИЕ! Останавливаю обработку чанков")
@@ -803,17 +837,17 @@ class StateManager:
                         
                         # Принудительно очищаем аудио буферы при прерывании
                         try:
-                                if hasattr(self.audio_player, 'clear_all_audio_data'):
-                                    self.audio_player.clear_all_audio_data()
-                                    logger.info(f"   🚨 Аудио буферы очищены при прерывании")
-                                    self.console.print("[green]✅ Аудио буферы очищены при прерывании[/green]")
-                                elif hasattr(self.audio_player, 'force_stop'):
-                                    self.audio_player.force_stop(immediate=True)
-                                    logger.info(f"   🚨 Аудио принудительно остановлено при прерывании")
-                                    self.console.print("[green]✅ Аудио принудительно остановлено при прерывании[/green]")
-                                else:
-                                    logger.warning(f"   ⚠️ Не найден метод очистки аудио")
-                                    self.console.print("[yellow]⚠️ Не найден метод очистки аудио[/yellow]")
+                            if hasattr(self.audio_player, 'clear_all_audio_data'):
+                                self.audio_player.clear_all_audio_data()
+                                logger.info(f"   🚨 Аудио буферы очищены при прерывании")
+                                self.console.print("[green]✅ Аудио буферы очищены при прерывании[/green]")
+                            elif hasattr(self.audio_player, 'force_stop'):
+                                self.audio_player.force_stop(immediate=True)
+                                logger.info(f"   🚨 Аудио принудительно остановлено при прерывании")
+                                self.console.print("[green]✅ Аудио принудительно остановлено при прерывании[/green]")
+                            else:
+                                logger.warning(f"   ⚠️ Не найден метод очистки аудио")
+                                self.console.print("[yellow]⚠️ Не найден метод очистки аудио[/yellow]")
                         except Exception as e:
                             logger.error(f"   ❌ Ошибка очистки аудио при прерывании: {e}")
                             self.console.print(f"[red]❌ Ошибка очистки аудио при прерывании: {e}[/red]")
@@ -919,6 +953,11 @@ class StateManager:
             logger.error(f"   ❌ Ошибка в _consume_stream: {e}")
             self.console.print(f"[red]❌ Ошибка в _consume_stream: {e}[/red]")
         finally:
+            # ИСПРАВЛЕНИЕ: сбрасываем streaming_task в None для предотвращения повторного использования
+            if self.streaming_task:
+                self.streaming_task = None
+                logger.info("   🔄 streaming_task сброшен в None в finally")
+            
             # КРИТИЧНО: всегда сбрасываем состояние в SLEEPING после завершения
             final_time = time.time()
             logger.info(f"   🏁 _consume_stream завершен в {final_time:.3f}")
@@ -937,59 +976,36 @@ class StateManager:
                         logger.info(f"   🚨 Аудио принудительно остановлено в finally при прерывании")
                 except Exception as e:
                     logger.error(f"   ❌ Ошибка очистки аудио в finally: {e}")
-                    
-                    # При прерывании НЕ запускаем ожидание завершения аудио
-                    logger.info(f"   🚨 Прерывание обнаружено - пропускаю ожидание завершения аудио")
-                    self.console.print("[bold red]🚨 Прерывание обнаружено - пропускаю ожидание завершения аудио![/bold red]")
-                    
-                    # Сразу переходим в SLEEPING
-                    self.set_state(AppState.SLEEPING)
-                    logger.info(f"   📊 Финальное состояние при прерывании: {self.state.name}")
-                    self.console.print(f"[blue]✅ _consume_stream завершен при прерывании, переход в SLEEPING[/blue]")
-                    self.console.print(f"[green]🌙 Ассистент прерван, перешел в режим ожидания[/green]")
-                    return  # Выходим из finally
+                
+                # При прерывании НЕ запускаем ожидание завершения аудио
+                logger.info(f"   🚨 Прерывание обнаружено - пропускаю ожидание завершения аудио")
+                self.console.print("[bold red]🚨 Прерывание обнаружено - пропускаю ожидание завершения аудио![/bold red]")
+                
+                # Сразу переходим в SLEEPING
+                self.set_state(AppState.SLEEPING)
+                logger.info(f"   📊 Финальное состояние при прерывании: {self.state.name}")
+                self.console.print(f"[blue]✅ _consume_stream завершен при прерывании, переход в SLEEPING[/blue]")
+                self.console.print(f"[green]🌙 Ассистент прерван, перешел в режим ожидания[/green]")
+                return  # Выходим из finally
             
-            # УПРОЩЕННОЕ ОЖИДАНИЕ ЗАВЕРШЕНИЯ АУДИО
+            # ИСПРАВЛЕНИЕ: используем существующий НЕБЛОКИРУЮЩИЙ метод
             try:
                 if self.audio_player and hasattr(self.audio_player, 'is_playing') and self.audio_player.is_playing:
-                    logger.info(f"   🎵 Ожидаю завершения воспроизведения аудио...")
-                    self.console.print("[blue]🎵 Ожидаю завершения воспроизведения аудио...[/blue]")
-                    
-                    # Упрощенное ожидание с таймаутом
-                    max_wait_time = 90.0  # 90 секунд максимум для длинных речей
-                    wait_start = time.time()
-                    
-                    while time.time() - wait_start < max_wait_time:
-                        await asyncio.sleep(0.1)
-                        
-                        # Проверяем, завершилось ли воспроизведение
-                        if self.audio_player and self.audio_player.wait_for_queue_empty():
-                            logger.info(f"   🎵 Аудио естественно завершено")
-                            self.console.print("[green]🎵 Аудио естественно завершено[/green]")
-                            break
-                            
-                        # Проверяем, не было ли прерывания
-                        if self._check_interrupt_status():
-                            logger.info(f"   🚨 Обнаружено прерывание во время ожидания аудио")
-                            self.console.print("[bold red]🚨 Обнаружено прерывание во время ожидания аудио![/bold red]")
-                            break
+                    # Проверяем статус аудио НЕБЛОКИРУЮЩИМ способом
+                    if self.audio_player.wait_for_queue_empty():
+                        logger.info("   🎵 Аудио завершено - переход в SLEEPING")
+                        self.console.print("[green]🎵 Аудио завершено - переход в SLEEPING[/green]")
                     else:
-                        # Таймаут достигнут
-                        logger.warning(f"   ⚠️ Таймаут ожидания аудио - принудительная остановка")
-                        self.console.print("[yellow]⚠️ Таймаут ожидания аудио - принудительная остановка[/yellow]")
-                        # Принудительно останавливаем аудио
-                        if self.audio_player and hasattr(self.audio_player, 'force_stop'):
-                            self.audio_player.force_stop(immediate=True)
-                    
-                    logger.info(f"   🎵 Ожидание завершения аудио завершено")
-                    self.console.print("[green]✅ Ожидание завершения аудио завершено[/green]")
+                        # Аудио еще воспроизводится - переходим в SLEEPING, аудио в фоне
+                        logger.info("   🎵 Аудио в фоне - переход в SLEEPING")
+                        self.console.print("[blue]🎵 Аудио в фоне - переход в SLEEPING[/blue]")
                 else:
-                    logger.info(f"   ℹ️ Аудио не воспроизводится - переход в SLEEPING")
+                    logger.info("   ℹ️ Аудио не воспроизводится - переход в SLEEPING")
                     self.console.print("[blue]ℹ️ Аудио не воспроизводится - переход в SLEEPING[/blue]")
                     
             except Exception as e:
-                logger.error(f"   ❌ Ошибка ожидания завершения аудио: {e}")
-                self.console.print(f"[red]❌ Ошибка ожидания завершения аудио: {e}[/red]")
+                logger.error(f"   ❌ Ошибка проверки статуса аудио: {e}")
+                self.console.print(f"[red]❌ Ошибка проверки статуса аудио: {e}[/red]")
             
             # 🚨 ИСПРАВЛЕНИЕ: переходим в SLEEPING ТОЛЬКО после завершения аудио
             # Теперь это происходит ПОСЛЕ реального завершения воспроизведения
@@ -1155,10 +1171,28 @@ class StateManager:
             if self.streaming_task and not self.streaming_task.done():
                 self.streaming_task.cancel()
                 logger.info("   ✅ Streaming задача отменена")
+                
+                # ИСПРАВЛЕНИЕ: ждем завершения отмены и сбрасываем в None
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Создаем задачу для ожидания отмены
+                        wait_task = loop.create_task(self._wait_for_task_cancellation(self.streaming_task))
+                        # Даем немного времени на отмену
+                        import threading
+                        threading.Timer(0.1, lambda: wait_task.cancel() if not wait_task.done() else None).start()
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Ошибка ожидания отмены streaming_task: {e}")
+                
+                # Сбрасываем в None для предотвращения повторного использования
+                self.streaming_task = None
+                logger.info("   ✅ Streaming задача сброшена в None")
             
             if self.active_call and not self.active_call.done():
                 self.active_call.cancel()
                 logger.info("   ✅ Active call отменен")
+                self.active_call = None
             
             logger.info("   🎯 УНИВЕРСАЛЬНАЯ ОСТАНОВКА УСПЕШНА!")
             self.console.print("[bold green]✅ ВСЕ ПРИНУДИТЕЛЬНО ОСТАНОВЛЕНО![/bold green]")
@@ -1322,6 +1356,28 @@ class StateManager:
         except Exception as e:
             logger.error(f"   ❌ Ошибка в _force_interrupt_server: {e}")
 
+async def check_audio_completion(state_manager, audio_player):
+    """
+    Проверяет завершение аудио и переводит в SLEEPING.
+    Вызывается периодически из основного цикла.
+    """
+    try:
+        # Проверяем, нужно ли переводить в SLEEPING
+        if (state_manager.state == AppState.IN_PROCESS and 
+            audio_player and 
+            hasattr(audio_player, 'is_playing') and 
+            not audio_player.is_playing and
+            audio_player.wait_for_queue_empty()):
+            
+            logger.info("   🎵 Аудио завершено - переход в SLEEPING")
+            state_manager.console.print("[green]🎵 Аудио завершено - переход в SLEEPING[/green]")
+            state_manager.set_state(AppState.SLEEPING)
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"   ❌ Ошибка в check_audio_completion: {e}")
+        return False
+
 async def main():
     """Основная функция клиента с push-to-talk логикой, захватом экрана и Hardware ID"""
     
@@ -1360,23 +1416,7 @@ async def main():
         'cache_timeout': float(device_manager_cfg.get('cache_timeout', 5.0))
     }
                                                                       
-    # 1. Сначала инициализируем STT (до gRPC)
-    console.print("[blue]🎤 Инициализация STT...[/blue]")
-    try:
-        stt_recognizer = StreamRecognizer()
-        # Применяем настройки записи
-        if hasattr(stt_recognizer, 'config'):             
-            stt_recognizer.config = {
-                'follow_system_default': audio_follow_default,
-                'bluetooth_policy': bt_policy,
-                'settle_ms': settle_ms,
-                'retries': retries,
-                'preflush_on_switch': preflush,
-            }
-        console.print("[bold green]✅ STT инициализирован[/bold green]")
-    except Exception as e:
-        console.print(f"[bold red]❌ STT недоступен: {e}[/bold red]")
-        stt_recognizer = None
+    # 1. STT будет инициализирован после создания StateManager
     
     # 2. Инициализируем захват экрана
     console.print("[blue]📸 Инициализация захвата экрана...[/blue]")
@@ -1581,11 +1621,11 @@ async def main():
                         except Exception:
                             pass
                         # Перезапуск записи на новом устройстве, если запись активна
-                        if stt_recognizer and getattr(stt_recognizer, 'is_recording', False):
+                        if hasattr(state_manager, 'stt_recognizer') and state_manager.stt_recognizer and state_manager.is_microphone_recording():
                             target = in_idx
                             try:
-                                if hasattr(stt_recognizer, '_restart_input_stream'):
-                                    stt_recognizer._restart_input_stream(target)
+                                if hasattr(state_manager.stt_recognizer, '_restart_input_stream'):
+                                    state_manager.stt_recognizer._restart_input_stream(target)
                                     logger.info(f"🎙️ Перезапустил InputStream на новом устройстве (index={target})")
                             except Exception as e:
                                 logger.warning(f"⚠️ Не удалось перезапустить InputStream: {e}")
@@ -1605,7 +1645,7 @@ async def main():
                 # Прокинем провайдер активности, чтобы монитор работал только при активности аудио
                 try:
                     ca_listener.set_activity_provider(
-                        lambda: bool(getattr(audio_player, 'is_playing', False) or (stt_recognizer and getattr(stt_recognizer, 'is_recording', False)))
+                        lambda: bool(getattr(audio_player, 'is_playing', False) or state_manager.is_microphone_recording())
                     )
                 except Exception:
                     pass
@@ -1615,7 +1655,8 @@ async def main():
                 except Exception:
                     pass
                 try:
-                    setattr(stt_recognizer, 'default_listener', ca_listener)
+                    if hasattr(state_manager, 'stt_recognizer') and state_manager.stt_recognizer:
+                        setattr(state_manager.stt_recognizer, 'default_listener', ca_listener)
                 except Exception:
                     pass
                 ca_listener.start()
@@ -1625,10 +1666,18 @@ async def main():
             logger.info("🤖 Автоматический режим: macOS сам управляет аудио устройствами")
         # Инжектируем плеер в STT для корректной координации переключений
         try:
-            if hasattr(stt_recognizer, 'set_audio_player'):
-                stt_recognizer.set_audio_player(audio_player)
+            if hasattr(state_manager, 'stt_recognizer') and state_manager.stt_recognizer and hasattr(state_manager.stt_recognizer, 'set_audio_player'):
+                state_manager.stt_recognizer.set_audio_player(audio_player)
         except Exception:
             pass
+        
+        # Связываем компоненты для координации изменений устройств
+        try:
+            if audio_player and hasattr(state_manager, 'stt_recognizer') and state_manager.stt_recognizer:
+                audio_player.stt_recognizer = state_manager.stt_recognizer
+                logger.info("✅ Компоненты связаны для координации изменений устройств")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось связать компоненты: {e}")
     except Exception as e:
         console.print(f"[bold red]❌ Ошибка инициализации аудио плеера: {e}[/bold red]")
         console.print("[yellow]⚠️ Ассистент будет работать без звука[/yellow]")
@@ -1679,15 +1728,62 @@ async def main():
         console.print("[yellow]  • --help            - показать эту справку[/yellow]")
         console.print("[yellow]  • Без аргументов    - использовать кэш если доступен[/yellow]")
     
+    # Инициализируем централизованный AudioDeviceManager
+    console.print("[blue]🎛️ Инициализация AudioDeviceManager...[/blue]")
+    unified_system = get_global_unified_audio_system()
+    audio_device_manager = initialize_global_audio_device_manager(unified_system=unified_system)
+    if audio_device_manager:
+        console.print("[bold green]✅ AudioDeviceManager инициализирован[/bold green]")
+    else:
+        console.print("[bold red]❌ Ошибка инициализации AudioDeviceManager[/bold red]")
+    
+    # Создаем StateManager с временными None для циклических зависимостей
+    console.print("[blue]🎛️ Инициализация StateManager...[/blue]")
+    state_manager = StateManager(
+        console=console,
+        audio_player=audio_player,
+        stt_recognizer=None,  # Временно None, обновим позже
+        screen_capture=screen_capture,
+        grpc_client=grpc_client,
+        hardware_id=hardware_id,
+        input_handler=None,  # Временно None, обновим позже
+        tray_controller=None  # Временно None, обновим позже
+    )
+    console.print("[bold green]✅ StateManager создан[/bold green]")
+    
+    # Теперь создаем STT с правильным state_manager
+    console.print("[blue]🎤 Инициализация STT...[/blue]")
+    try:
+        stt_recognizer = StreamRecognizer(state_manager=state_manager)
+        # Применяем настройки записи
+        if hasattr(stt_recognizer, 'config'):             
+            stt_recognizer.config = {
+                'follow_system_default': audio_follow_default,
+                'bluetooth_policy': bt_policy,
+                'settle_ms': settle_ms,
+                'retries': retries,
+                'preflush_on_switch': preflush,
+            }
+        # Обновляем ссылку в StateManager
+        state_manager.stt_recognizer = stt_recognizer
+        console.print("[bold green]✅ STT инициализирован[/bold green]")
+    except Exception as e:
+        console.print(f"[bold red]❌ STT недоступен: {e}[/bold red]")
+        stt_recognizer = None
+        state_manager.stt_recognizer = None
+    
     # Очередь для событий от клавиатуры
     event_queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
-    input_handler = InputHandler(loop, event_queue)
+    input_handler = InputHandler(loop, event_queue, state_manager)
     
     # КРИТИЧНО: ждем инициализации InputHandler
     console.print("[blue]⏳ Инициализация InputHandler...[/blue]")
     await asyncio.sleep(0.5)  # Даем время на инициализацию
     console.print("[blue]✅ InputHandler инициализирован[/blue]")
+    
+    # Обновляем ссылку на input_handler в StateManager
+    state_manager.input_handler = input_handler
     
     # Получаем информацию об экране (с учетом возможного отсутствия screen_capture)
     try:
@@ -1720,8 +1816,10 @@ async def main():
     except Exception:
         pass
     
-    # Создаем StateManager
-    state_manager = StateManager(console, audio_player, stt_recognizer, screen_capture, grpc_client, hardware_id, input_handler, tray_controller=tray)
+    # Обновляем ссылку на tray_controller в StateManager
+    state_manager.tray_controller = tray
+    
+    # Настраиваем StateManager
     state_manager.current_screen_info = screen_info
     state_manager._write_tray_status_file(state_manager.state.name)
     
@@ -1809,12 +1907,31 @@ async def main():
     # Запускаем обновление списка устройств в фоне
     device_refresh_task = asyncio.create_task(device_refresh_monitor())
     
+    # Переменная для периодической проверки аудио
+    last_audio_check = 0
+    
     try:
         while True:
             try:
-                # Получаем событие из очереди
-                event = await event_queue.get()
-                event_time = time.time()
+                # Проверяем завершение аудио каждые 0.5 секунды
+                current_time = time.time()
+                if current_time - last_audio_check > 0.5:
+                    await check_audio_completion(state_manager, audio_player)
+                    last_audio_check = current_time
+                
+                # ДИАГНОСТИКА: логируем состояние очереди
+                queue_size = event_queue.qsize()
+                if queue_size > 0:
+                    logger.info(f"🔍 ДИАГНОСТИКА: В очереди {queue_size} событий, состояние={state_manager.state.name}")
+                
+                # Получаем событие из очереди с таймаутом
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    event_time = time.time()
+                    logger.info(f"🔍 ДИАГНОСТИКА: Получено событие {event} в {event_time:.3f}")
+                except asyncio.TimeoutError:
+                    # Таймаут - продолжаем цикл для проверки аудио
+                    continue
                 
                 # Логируем получение события
                 logger.info(f"📡 СОБЫТИЕ ПОЛУЧЕНО: {event} в {event_time:.3f}")

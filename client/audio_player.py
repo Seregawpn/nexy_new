@@ -5,8 +5,11 @@ import logging
 import queue
 import threading
 import time
-from typing import List
-from unified_audio_system import UnifiedAudioSystem, DeviceInfo, get_global_unified_audio_system
+from typing import List, Optional, Dict
+# Импорты перенесены в методы для устранения циклических зависимостей
+# from unified_audio_system import UnifiedAudioSystem, DeviceInfo, get_global_unified_audio_system
+# from audio_device_manager import get_global_audio_device_manager
+from utils.device_utils import is_headphones, is_virtual_device, get_device_type_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -38,20 +41,12 @@ class AudioPlayer:
         # Новая система управления аудио устройствами
         self.audio_manager = None
         self.current_device_info = None
+        self._device_info_lock = threading.RLock()  # Thread-safe доступ к current_device_info
         self.device_switch_threshold = 1.0  # Минимальное время между переключениями
         self._last_device_switch = 0
         
-        # Система приоритетов устройств для автоматического переключения на наушники
-        self.device_priorities = {
-            'airpods': 100,           # AirPods - высший приоритет
-            'beats': 95,              # Beats наушники
-            'bluetooth_headphones': 90, # Bluetooth наушники
-            'usb_headphones': 85,     # USB наушники
-            'bluetooth_speakers': 70, # Bluetooth колонки
-            'usb_audio': 60,          # USB аудио
-            'system_speakers': 40,    # Системные динамики
-            'other': 20               # Остальные устройства
-        }
+        # Приоритеты устройств теперь управляются через UnifiedAudioSystem
+        # Удалено дублирование - используем audio_manager.device_priorities
         
         # Настройки автоматического переключения на наушники
         self.auto_switch_to_headphones = True
@@ -190,8 +185,9 @@ class AudioPlayer:
                 'exclude_virtual_devices': True
             }
             
-            # Используем глобальный экземпляр UnifiedAudioSystem
-            self.audio_manager = get_global_unified_audio_system(config)
+            # Инициализируем и используем глобальный экземпляр UnifiedAudioSystem
+            from unified_audio_system import initialize_global_unified_audio_system
+            self.audio_manager = initialize_global_unified_audio_system(config)
             
             # Добавляем callback для уведомлений об изменениях устройств
             self.audio_manager.add_callback(self._on_device_change_callback)
@@ -242,6 +238,9 @@ class AudioPlayer:
             # Инвалидируем кэш при изменении устройств
             self._invalidate_stream_cache()
             
+            # Уведомляем STT об изменении устройств
+            self.notify_device_changed()
+            
             if event_type == 'device_added':
                 # Если добавили высокоприоритетные наушники - переключаемся
                 if device_info.get('priority', 0) >= 85:
@@ -260,22 +259,45 @@ class AudioPlayer:
             logger.error(f"❌ Ошибка в callback AudioManagerDaemon: {e}")
 
     def _update_current_device_info(self):
-        """Обновляет информацию о текущем устройстве"""
+        """Обновляет информацию о текущем устройстве (thread-safe)"""
         try:
             if self.audio_manager:
                 current_device = self.audio_manager.get_current_device()
                 if current_device:
                     device_info = self.audio_manager.get_device_info(current_device)
-                    self.current_device_info = {
-                        'name': device_info.name,
-                        'type': device_info.device_type.value,
-                        'priority': device_info.priority,
-                        'is_headphones': device_info.device_type.value in ['airpods', 'beats', 'bluetooth_headphones', 'usb_headphones'],
-                        'timestamp': time.time()
-                    }
+                    with self._device_info_lock:
+                        self.current_device_info = {
+                            'name': device_info.name,
+                            'type': device_info.device_type.value,
+                            'priority': device_info.priority,
+                            'is_headphones': device_info.device_type.value in ['airpods', 'beats', 'bluetooth_headphones', 'usb_headphones'],
+                            'timestamp': time.time()
+                        }
                     logger.info(f"📱 Обновлена информация об устройстве: {current_device}")
         except Exception as e:
             logger.error(f"❌ Ошибка обновления информации об устройстве: {e}")
+    
+    def get_device_name_safe(self) -> str:
+        """Безопасно получает имя текущего устройства (thread-safe)"""
+        with self._device_info_lock:
+            if self.current_device_info and 'name' in self.current_device_info:
+                return self.current_device_info['name']
+            return "Unknown"
+    
+    def get_device_index_safe(self) -> Optional[int]:
+        """Безопасно получает индекс текущего устройства (thread-safe)"""
+        with self._device_info_lock:
+            if self.current_device_info and 'index' in self.current_device_info:
+                return self.current_device_info['index']
+            return None
+    
+    def is_current_device_headphones(self) -> bool:
+        """Проверяет, является ли текущее устройство наушниками (thread-safe)"""
+        with self._device_info_lock:
+            if not self.current_device_info:
+                return False
+            device_name = self.current_device_info.get('name', '')
+            return is_headphones(device_name)
 
     def start_device_monitoring(self):
         """Запускает улучшенный мониторинг изменений аудио устройств."""
@@ -315,10 +337,10 @@ class AudioPlayer:
             logger.info(f"   Новое устройство: {new_device}")
             
             # Определяем, является ли новое устройство наушниками
-            if new_device and self._is_headphones(new_device['name']):
+            if new_device and is_headphones(new_device['name']):
                 logger.info(f"🎧 Обнаружены наушники: {new_device['name']}")
                 self._handle_headphones_connection(new_device)
-            elif old_device and self._is_headphones(old_device['name']):
+            elif old_device and is_headphones(old_device['name']):
                 logger.info(f"🎧 Наушники отключены: {old_device['name']}")
                 self._handle_headphones_disconnection()
             else:
@@ -337,7 +359,7 @@ class AudioPlayer:
             
             # Обрабатываем добавленные устройства
             for device_name in added_devices:
-                if self._is_headphones(device_name):
+                if is_headphones(device_name):
                     logger.info(f"🎧 Обнаружены наушники: {device_name}")
                     # Находим устройство по имени и вызываем основной метод
                     devices = self.list_available_devices()
@@ -349,7 +371,7 @@ class AudioPlayer:
             
             # Обрабатываем удаленные устройства
             for device_name in removed_devices:
-                if self._is_headphones(device_name):
+                if is_headphones(device_name):
                     logger.info(f"🎧 Наушники отключены: {device_name}")
                     self._handle_headphones_disconnection()
                     return  # Выходим, так как уже обработали
@@ -384,6 +406,9 @@ class AudioPlayer:
             
             self._last_device_switch = current_time
             
+            # Обновляем информацию об устройстве
+            self._update_current_device_info()
+            
             # Получаем информацию о новом устройстве
             new_device_info = self.get_current_device_info()
             
@@ -400,6 +425,9 @@ class AudioPlayer:
             if self.is_playing and self.stream and self.stream.active:
                 logger.info("🔄 Перезапускаю аудио поток для нового устройства...")
                 
+                # Обновляем информацию об устройстве перед перезапуском
+                self._update_current_device_info()
+                
                 # Сохраняем текущее состояние
                 was_playing = self.is_playing
                 current_queue_size = self.audio_queue.qsize()
@@ -413,7 +441,9 @@ class AudioPlayer:
                 # Перезапускаем с новыми параметрами
                 self._restart_stream_with_new_device()
                 
-                logger.info(f"✅ Поток перезапущен для устройства: {self.current_device_info['name']}")
+                # Безопасно получаем имя устройства
+                device_name = self.get_device_name_safe()
+                logger.info(f"✅ Поток перезапущен для устройства: {device_name}")
                 
                 # Восстанавливаем воспроизведение если было активно
                 if was_playing and current_queue_size > 0:
@@ -422,6 +452,8 @@ class AudioPlayer:
                 
             else:
                 logger.info("📱 Устройство изменилось, но воспроизведение не активно")
+                # Обновляем информацию об устройстве даже если воспроизведение не активно
+                self._update_current_device_info()
             
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке изменения устройства: {e}")
@@ -513,52 +545,13 @@ class AudioPlayer:
             logger.error(f"❌ Неожиданная ошибка при перезапуске потока: {e}")
 
     def get_current_device_info(self):
-        """Возвращает информацию о текущем аудио устройстве."""
-        try:
-            # Сначала пробуем получить информацию от AudioManagerDaemon
-            if self.audio_manager:
-                current_device = self.audio_manager.get_current_device()
-                if current_device:
-                    device_info = self.audio_manager.get_device_info(current_device)
-                    return {
-                        'name': device_info.name,
-                        'type': device_info.device_type.value,
-                        'priority': device_info.priority,
-                        'is_headphones': device_info.device_type.value in ['airpods', 'beats', 'bluetooth_headphones', 'usb_headphones'],
-                        'is_default': device_info.is_default,
-                        'timestamp': time.time()
-                    }
-            
-            # Fallback на старый метод
-            devices = sd.query_devices()
-            
-            # Безопасно получаем текущее устройство вывода
-            try:
-                default_device = sd.default.device
-                if isinstance(default_device, (list, tuple)):
-                    current_output = default_device[1]  # output device
-                else:
-                    current_output = default_device
-                
-                # Проверяем корректность индекса
-                if not isinstance(current_output, int) or current_output == -1 or current_output >= len(devices):
-                    return None
-                    
-            except Exception as e:
-                logger.debug(f"📱 Ошибка получения устройства по умолчанию: {e}")
-                return None
-            
-            device = devices[current_output]
-            return {
-                'index': current_output,
-                'name': device.get('name', 'Unknown'),
-                'max_channels': device.get('max_output_channels', 0),
-                'default_samplerate': device.get('default_samplerate', 0),
-                'max_samplerate': device.get('max_samplerate', 0)
-            }
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка получения информации об устройстве: {e}")
-            return None
+        """Возвращает информацию о текущем аудио устройстве (использует кэшированную информацию)."""
+        # Сначала обновляем информацию, если она устарела
+        self._update_current_device_info()
+        
+        # Возвращаем кэшированную информацию
+        with self._device_info_lock:
+            return self.current_device_info.copy() if self.current_device_info else None
 
     def force_device_refresh(self):
         """Принудительно обновляет информацию об устройствах и перезапускает поток."""
@@ -585,7 +578,24 @@ class AudioPlayer:
             device_index: Индекс устройства в системе
         """
         try:
-            logger.info(f"🔄 Принудительное переключение на устройство: {device_name or device_index}")
+            logger.info(f"🔄 [AudioPlayer] Переключение на устройство: {device_name or device_index}")
+            
+            # Сначала пробуем использовать централизованный AudioDeviceManager
+            from audio_device_manager import get_global_audio_device_manager
+            audio_manager = get_global_audio_device_manager()
+            if audio_manager and device_name:
+                logger.info("🎛️ [AudioPlayer] Используем централизованный AudioDeviceManager")
+                success = audio_manager.switch_to_device(device_name)
+                if success:
+                    # Обновляем информацию об устройстве
+                    self._update_current_device_info()
+                    logger.info("✅ [AudioPlayer] Переключение через AudioDeviceManager успешно")
+                    return True
+                else:
+                    logger.warning("⚠️ [AudioPlayer] AudioDeviceManager не смог переключиться, используем fallback")
+            
+            # Fallback на старый метод если AudioDeviceManager недоступен или не сработал
+            logger.info("🔄 [AudioPlayer] Используем fallback метод переключения")
             
             devices = sd.query_devices()
             
@@ -595,17 +605,17 @@ class AudioPlayer:
                 for i, dev in enumerate(devices):
                     if device_name.lower() in dev.get('name', '').lower():
                         target_device = i
-                    break
+                        break
             elif device_index is not None:
                 if 0 <= device_index < len(devices):
                     target_device = device_index
             
             if target_device is None or target_device >= len(devices):
-                logger.warning(f"⚠️ Устройство не найдено: {device_name or device_index}")
+                logger.warning(f"⚠️ [AudioPlayer] Устройство не найдено: {device_name or device_index}")
                 return False
             
             device_info = devices[target_device]
-            logger.info(f"📱 Переключаюсь на: {device_info.get('name', 'Unknown')} (индекс: {target_device})")
+            logger.info(f"📱 [AudioPlayer] Fallback переключение на: {device_info.get('name', 'Unknown')} (индекс: {target_device})")
             
             # Если воспроизведение активно, перезапускаем поток
             if self.is_playing and self.stream and self.stream.active:
@@ -624,25 +634,28 @@ class AudioPlayer:
                 
                 # Восстанавливаем воспроизведение если было активно
                 if was_playing and current_queue_size > 0:
-                    logger.info("🔄 Восстанавливаю воспроизведение...")
+                    logger.info("🔄 [AudioPlayer] Восстанавливаю воспроизведение...")
                     self._set_playing_state(True, "восстановление после переключения устройства")
                 
-                logger.info(f"✅ Переключение на {device_info.get('name', 'Unknown')} завершено")
+                logger.info(f"✅ [AudioPlayer] Переключение на {device_info.get('name', 'Unknown')} завершено")
+                # Обновляем информацию об устройстве после успешного переключения
+                self._update_current_device_info()
                 return True
             else:
-                logger.info("📱 Воспроизведение не активно, обновляю информацию об устройстве")
-                self.current_device_info = {
-                    'index': target_device,
-                    'name': device_info.get('name', 'Unknown'),
-                    'max_channels': device_info.get('max_output_channels', 0),
-                    'default_samplerate': device_info.get('default_samplerate', 0),
-                    'max_samplerate': device_info.get('max_samplerate', 0),
-                    'timestamp': time.time()
-                }
+                logger.info("📱 [AudioPlayer] Воспроизведение не активно, обновляю информацию об устройстве")
+                with self._device_info_lock:
+                    self.current_device_info = {
+                        'index': target_device,
+                        'name': device_info.get('name', 'Unknown'),
+                        'max_channels': device_info.get('max_output_channels', 0),
+                        'default_samplerate': device_info.get('default_samplerate', 0),
+                        'max_samplerate': device_info.get('max_samplerate', 0),
+                        'timestamp': time.time()
+                    }
                 return True
             
         except Exception as e:
-            logger.error(f"❌ Ошибка при переключении устройства: {e}")
+            logger.error(f"❌ [AudioPlayer] Ошибка при переключении устройства: {e}")
             return False
 
     def _restart_stream_with_specific_device(self, device_index):
@@ -731,7 +744,7 @@ class AudioPlayer:
                         'default_samplerate': dev.get('default_samplerate', 0),
                         'max_samplerate': dev.get('max_samplerate', 0),
                         'is_default': i == current_default,
-                        'is_headphones': self._is_headphones(dev.get('name', '')),
+                        'is_headphones': is_headphones(dev.get('name', '')),
                         'priority': self._get_device_priority(dev)
                     }
                     available_devices.append(device_info)
@@ -1225,20 +1238,10 @@ class AudioPlayer:
                     # Есть данные для воспроизведения
                     time.sleep(0.001)  # 1ms
                 else:
-                    # Нет данных - проверяем, завершилось ли воспроизведение
-                    # Проверяем активность звукового потока
-                    stream_active = (self.stream and 
-                                   hasattr(self.stream, 'active') and 
-                                   self.stream.active)
-                    
-                    if not stream_active:
-                        # Звуковой поток неактивен - воспроизведение завершено
-                        logger.info("🎵 Естественное завершение воспроизведения - нет активного потока")
-                        self._set_playing_state(False, "естественное завершение - нет активного потока")
-                        break
-                    else:
-                        # Поток активен, но нет данных - ждем
-                        time.sleep(0.01)  # 10ms
+                    # Нет данных - воспроизведение завершено
+                    logger.info("🎵 Естественное завершение воспроизведения - нет данных")
+                    self._set_playing_state(False, "естественное завершение - нет данных")
+                    break
                     
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновом потоке воспроизведения: {e}")
@@ -1477,9 +1480,9 @@ class AudioPlayer:
                                         self._safe_start_stream(stream, timeout=2.0)
                                     
                                     logger.info(f"✅ Успех после сброса: ch={config['channels']}, sr={config['samplerate']}")
-                                    self.channels = config['channels'],
-                                    self.sample_rate = config['samplerate'],
-                                    self.dtype = config['dtype'],
+                                    self.channels = config['channels']
+                                    self.sample_rate = config['samplerate']
+                                    self.dtype = config['dtype']
                                     
                                     # Сохраняем информацию об устройстве для мониторинга
                                     self._last_device_info = {
@@ -1540,27 +1543,7 @@ class AudioPlayer:
             logger.error(f"❌ Критическая ошибка инициализации аудио: {e}")
             raise
 
-    def _is_headphones(self, device_name: str) -> bool:
-        """Определяет, является ли устройство наушниками."""
-        try:
-            device_lower = device_name.lower()
-            
-            # Ключевые слова для наушников
-            headphones_keywords = [
-                'airpods', 'beats', 'sony', 'bose', 'sennheiser',
-                'headphones', 'earbuds', 'earphones', 'headset'
-            ]
-            
-            # Проверяем наличие ключевых слов
-            for keyword in headphones_keywords:
-                if keyword in device_lower:
-                    return True
-                    
-            return False
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка определения типа устройства: {e}")
-            return False
+    # _is_headphones удален - используется из utils.device_utils
     
     def _get_device_priority(self, device_info: dict) -> int:
         """Вычисляет приоритет устройства."""
@@ -1569,35 +1552,35 @@ class AudioPlayer:
             
             # AirPods - высший приоритет
             if 'airpods' in device_name:
-                return self.device_priorities['airpods']
+                return self.audio_manager.device_priorities['airpods'] if self.audio_manager else 100
                 
             # Beats наушники
             elif 'beats' in device_name:
-                return self.device_priorities['beats']
+                return self.audio_manager.device_priorities['beats'] if self.audio_manager else 95
                 
             # Bluetooth наушники
-            elif 'bluetooth' in device_name and self._is_headphones(device_name):
-                return self.device_priorities['bluetooth_headphones']
+            elif 'bluetooth' in device_name and is_headphones(device_name):
+                return self.audio_manager.device_priorities['bluetooth_headphones'] if self.audio_manager else 90
                 
             # USB наушники
-            elif 'usb' in device_name and self._is_headphones(device_name):
-                return self.device_priorities['usb_headphones']
+            elif 'usb' in device_name and is_headphones(device_name):
+                return self.audio_manager.device_priorities['usb_headphones'] if self.audio_manager else 85
                 
             # Bluetooth колонки
             elif 'bluetooth' in device_name:
-                return self.device_priorities['bluetooth_speakers']
+                return self.audio_manager.device_priorities['bluetooth_speakers'] if self.audio_manager else 70
                 
             # USB аудио
             elif 'usb' in device_name:
-                return self.device_priorities['usb_audio']
+                return self.audio_manager.device_priorities['usb_audio'] if self.audio_manager else 60
                 
             # Системные динамики
             elif any(tag in device_name for tag in ['macbook', 'built-in', 'internal', 'speakers']):
-                return self.device_priorities['system_speakers']
+                return self.audio_manager.device_priorities['speakers'] if self.audio_manager else 40
                 
             # Остальные устройства
             else:
-                return self.device_priorities['other']
+                return self.audio_manager.device_priorities['unknown'] if self.audio_manager else 10
                 
         except Exception as e:
             logger.warning(f"⚠️ Ошибка вычисления приоритета: {e}")
@@ -1610,7 +1593,7 @@ class AudioPlayer:
                 return False
                 
             # Если новое устройство - наушники, переключаемся
-            if new_device_info and self._is_headphones(new_device_info['name']):
+            if new_device_info and is_headphones(new_device_info['name']):
                 logger.info("🎧 Обнаружены наушники - автоматическое переключение!")
                 return True
                 
@@ -1653,9 +1636,9 @@ class AudioPlayer:
             logger.error(f"❌ Ошибка обработки подключения наушников: {e}")
 
     def _handle_headphones_disconnection(self):
-        """Обрабатывает отключение наушников."""
+        """Обрабатывает отключение наушников - УПРОЩЕННАЯ ЛОГИКА."""
         try:
-            logger.info(" НАУШНИКИ ОТКЛЮЧЕНЫ")
+            logger.info("🎧 НАУШНИКИ ОТКЛЮЧЕНЫ - УПРОЩЕННАЯ ОБРАБОТКА")
             
             # Пауза воспроизведения
             if self.pause_on_disconnect and self.is_playing:
@@ -1663,54 +1646,37 @@ class AudioPlayer:
                 self._was_paused_for_disconnect = True
                 logger.info("⏸️ Воспроизведение приостановлено")
             
-            # ИСПРАВЛЕНИЕ: Не переключаемся вручную - доверяем AudioManagerDaemon
-            if self.audio_manager:
-                logger.info("🔄 AudioManagerDaemon автоматически переключит устройство")
-                # AudioManagerDaemon сам переключится на лучшее доступное устройство
-            else:
-                # Fallback только если AudioManagerDaemon недоступен
-                logger.warning("⚠️ AudioManagerDaemon недоступен, используем fallback")
-                self.switch_to_system_device()
+            # УПРОЩЕНИЕ: Доверяем AudioDeviceManager для переключения
+            # Не делаем никаких проверок и переключений - это делает AudioDeviceManager
+            logger.info("🔄 Доверяем AudioDeviceManager для автоматического переключения")
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки отключения наушников: {e}")
 
     def _was_headphones_disconnected(self) -> bool:
-        """Проверяет, были ли отключены наушники."""
+        """Проверяет, были ли отключены наушники - УПРОЩЕННАЯ ЛОГИКА."""
         try:
-            if not self.current_device_info:
-                return False
+            # УПРОЩЕНИЕ: Простая проверка - если текущее устройство наушники
+            # и они не найдены в списке доступных устройств
+            with self._device_info_lock:
+                if not self.current_device_info:
+                    return False
                 
-            # Если текущее устройство - наушники, проверяем несколько условий
-            if self._is_headphones(self.current_device_info['name']):
-                # 1. Проверяем, есть ли наушники в списке доступных устройств
+            # Если текущее устройство - наушники, проверяем только одно условие
+            if self.is_current_device_headphones():
+                current_device_name = self.get_device_name_safe()
+                
+                # Простая проверка: есть ли наушники в списке доступных устройств
                 available_devices = self.list_available_devices()
                 headphones_found = False
                 for device in available_devices:
-                    if device['name'] == self.current_device_info['name']:
+                    if device['name'] == current_device_name:
                         headphones_found = True
                         break
                 
-                # 2. Проверяем, изменился ли системный default output
-                try:
-                    import sounddevice as sd
-                    current_default = sd.default.device
-                    if isinstance(current_default, (list, tuple)) and len(current_default) >= 2:
-                        current_default_out = current_default[1]
-                    else:
-                        current_default_out = current_default
-                    
-                    # Если системный default изменился и больше не указывает на наушники
-                    if current_default_out != self.current_device_info['index']:
-                        logger.info(f"🔄 Системный default изменился: {current_default_out} != {self.current_device_info['index']}")
-                        return True
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка проверки системного default: {e}")
-                
-                # 3. Если наушники не найдены в списке, считаем их отключенными
+                # Если наушники не найдены в списке, считаем их отключенными
                 if not headphones_found:
-                    logger.info(f"🎧 Наушники {self.current_device_info['name']} не найдены в списке устройств")
+                    logger.info(f"🎧 Наушники {current_device_name} не найдены в списке устройств")
                     return True
                 
                 return False
@@ -1722,9 +1688,26 @@ class AudioPlayer:
             return False
 
     def switch_to_system_device(self) -> bool:
-        """Переключается на системное устройство."""
+        """Wrapper метод для переключения на системное устройство через централизованный AudioDeviceManager"""
         try:
-            logger.info("🔄 Переключение на системное устройство")
+            logger.info("🔄 [AudioPlayer] Переключение на системное устройство")
+            
+            # Сначала пробуем использовать централизованный AudioDeviceManager
+            from audio_device_manager import get_global_audio_device_manager
+            audio_manager = get_global_audio_device_manager()
+            if audio_manager:
+                logger.info("🎛️ [AudioPlayer] Используем централизованный AudioDeviceManager")
+                success = audio_manager.switch_to_system_device()
+                if success:
+                    # Обновляем информацию об устройстве
+                    self._update_current_device_info()
+                    logger.info("✅ [AudioPlayer] Переключение на системное устройство через AudioDeviceManager успешно")
+                    return True
+                else:
+                    logger.warning("⚠️ [AudioPlayer] AudioDeviceManager не смог переключиться, используем fallback")
+            
+            # Fallback на старый метод если AudioDeviceManager недоступен или не сработал
+            logger.info("🔄 [AudioPlayer] Используем fallback метод переключения на системное устройство")
             
             # Используем AudioManagerDaemon если доступен
             if self.audio_manager:
@@ -1741,13 +1724,13 @@ class AudioPlayer:
                     success = self.audio_manager.switch_to_device(system_device.name)
                     if success:
                         self._update_current_device_info()
-                        logger.info(f"✅ Переключились на системное устройство: {system_device.name}")
+                        logger.info(f"✅ [AudioPlayer] Переключились на системное устройство: {system_device.name}")
                         return True
                     else:
-                        logger.warning(f"⚠️ Не удалось переключиться на системное устройство: {system_device.name}")
+                        logger.warning(f"⚠️ [AudioPlayer] Не удалось переключиться на системное устройство: {system_device.name}")
                         return False
                 else:
-                    logger.warning("⚠️ Системное устройство не найдено")
+                    logger.warning("⚠️ [AudioPlayer] Системное устройство не найдено")
                     return False
             
             # Fallback на старый метод
@@ -1755,7 +1738,7 @@ class AudioPlayer:
             system_device = None
             
             for device in devices:
-                if device['priority'] == self.device_priorities['system_speakers']:
+                if device['priority'] == (self.audio_manager.device_priorities['speakers'] if self.audio_manager else 40):
                     system_device = device
                     break
             
@@ -2046,11 +2029,15 @@ class AudioPlayer:
         except Exception as e:
             logger.warning(f"⚠️ Ошибка при очистке очереди: {e}")
         
-        # Сбрасываем счетчик join() для корректной работы
+        # ИСПРАВЛЕНИЕ: убираем блокирующий join() - он блокирует поток
+        # Вместо этого просто очищаем счетчики задач
         try:
-            self.audio_queue.join()
-        except Exception:
-            pass
+            # Сбрасываем счетчики задач без блокировки
+            with self.audio_queue.mutex:
+                self.audio_queue.unfinished_tasks = 0
+                self.audio_queue.all_tasks_done.notify_all()
+        except Exception as e:
+            logger.debug(f"Очистка счетчиков задач: {e}")
 
     def wait_for_queue_empty(self):
         """
@@ -2064,16 +2051,12 @@ class AudioPlayer:
         with self.buffer_lock:
             buffer_size = len(self.internal_buffer)
             
-        # ИСПРАВЛЕНИЕ: Проверяем не только очередь и буфер, но и активность воспроизведения
-        is_actively_playing = (self.is_playing and 
-                              self.stream is not None and 
-                              not self.stop_event.is_set())
-        
-        if queue_size == 0 and buffer_size == 0 and not is_actively_playing:
-            logger.info("✅ Аудио уже завершено")
+        # Простая логика: если нет данных - аудио завершено
+        if queue_size == 0 and buffer_size == 0:
+            logger.info("✅ Аудио завершено - нет данных в очереди и буфере")
             return True
         else:
-            logger.info(f"📊 Аудио еще воспроизводится: очередь={queue_size}, буфер={buffer_size}, активно={is_actively_playing}")
+            logger.info(f"📊 Аудио воспроизводится: очередь={queue_size}, буфер={buffer_size}")
             return False
 
     def play_beep(self, frequency: float = 1000.0, duration_sec: float = 0.12, volume: float = 0.4):
@@ -2396,7 +2379,7 @@ class AudioPlayer:
             logger.error(f"❌ Ошибка автоматического переключения: {e}")
             return False
     
-    def get_available_devices_via_manager(self) -> List[DeviceInfo]:
+    def get_available_devices_via_manager(self) -> List[Dict]:
         """Получает список доступных устройств через AudioManagerDaemon"""
         try:
             if self.audio_manager:
@@ -2445,5 +2428,17 @@ class AudioPlayer:
             
         except Exception as e:
             logger.error(f"❌ Ошибка в clear_all_audio_data: {e}")
+    
+    def notify_device_changed(self):
+        """Уведомляет STT об изменении устройств"""
+        try:
+            if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
+                logger.info("🔄 AudioPlayer: Уведомляю STT об изменении устройств...")
+                self.stt_recognizer.invalidate_device_cache()
+                logger.info("✅ AudioPlayer: STT уведомлен об изменении устройств")
+            else:
+                logger.debug("ℹ️ AudioPlayer: STT recognizer не подключен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка уведомления STT об изменении устройств: {e}")
 
                    

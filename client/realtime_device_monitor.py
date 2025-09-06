@@ -12,7 +12,9 @@ import logging
 from typing import Set, Dict, List, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
+from utils.device_utils import is_virtual_device
 import queue
+from audio_device_manager import get_global_audio_device_manager
 
 logger = logging.getLogger(__name__)
 
@@ -215,12 +217,16 @@ class RealtimeDeviceMonitor:
             if self._is_high_priority_device(event.device_name):
                 logger.info(f"🎯 Обнаружено высокоприоритетное устройство: {event.device_name}")
                 
-                # Переключаемся на новое устройство
-                success = self._switch_to_device(event.device_name)
-                if success:
-                    logger.info(f"✅ Успешно переключились на: {event.device_name}")
+                # Используем централизованный AudioDeviceManager
+                audio_manager = get_global_audio_device_manager()
+                if audio_manager:
+                    success = audio_manager.switch_to_device(event.device_name)
+                    if success:
+                        logger.info(f"✅ Успешно переключились на: {event.device_name}")
+                    else:
+                        logger.error(f"❌ Не удалось переключиться на: {event.device_name}")
                 else:
-                    logger.error(f"❌ Не удалось переключиться на: {event.device_name}")
+                    logger.error("❌ AudioDeviceManager недоступен")
             else:
                 logger.info(f"ℹ️ Устройство {event.device_name} имеет низкий приоритет, не переключаемся")
                 
@@ -228,30 +234,32 @@ class RealtimeDeviceMonitor:
             logger.error(f"❌ Ошибка обработки добавления устройства: {e}")
     
     def _handle_device_removed(self, event: DeviceEvent):
-        """Обрабатывает удаление устройства"""
+        """Обрабатывает удаление устройства - УПРОЩЕННАЯ ЛОГИКА"""
         try:
             logger.info(f"➖ Обработка удаления устройства: {event.device_name}")
             
-            # Получаем текущее устройство
-            current_device = self._get_current_device()
+            # НЕ проверяем, было ли устройство "текущим" - это источник десинхронизации
+            # Просто переключаемся на лучшее доступное устройство
+            logger.info(f"🔄 Переключаемся на лучшее доступное устройство...")
             
-            if current_device == event.device_name:
-                logger.info(f"🔄 Текущее устройство отключено: {event.device_name}")
+            # Находим лучшее доступное устройство
+            best_device = self._find_best_available_device(event.current_devices)
+            
+            if best_device:
+                logger.info(f"🎯 Переключаемся на лучшее доступное устройство: {best_device}")
                 
-                # Находим лучшее доступное устройство
-                best_device = self._find_best_available_device(event.current_devices)
-                
-                if best_device:
-                    logger.info(f"🎯 Переключаемся на лучшее доступное устройство: {best_device}")
-                    success = self._switch_to_device(best_device)
+                # Используем централизованный AudioDeviceManager
+                audio_manager = get_global_audio_device_manager()
+                if audio_manager:
+                    success = audio_manager.switch_to_device(best_device)
                     if success:
                         logger.info(f"✅ Успешно переключились на: {best_device}")
                     else:
                         logger.error(f"❌ Не удалось переключиться на: {best_device}")
                 else:
-                    logger.warning("⚠️ Нет доступных устройств для переключения")
+                    logger.error("❌ AudioDeviceManager недоступен")
             else:
-                logger.info(f"ℹ️ Отключенное устройство {event.device_name} не было текущим")
+                logger.warning("⚠️ Нет доступных устройств для переключения")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки удаления устройства: {e}")
@@ -289,56 +297,39 @@ class RealtimeDeviceMonitor:
             logger.error(f"❌ Ошибка выполнения SwitchAudioSource: {e}")
             return None
     
-    def _is_high_priority_device(self, device_name: str) -> bool:
-        """Проверяет, является ли устройство высокоприоритетным"""
-        name_lower = device_name.lower()
-        
-        # Высокоприоритетные устройства
-        high_priority_keywords = [
-            'airpods', 'beats', 'bluetooth', 'wireless', 'bt'
-        ]
-        
-        return any(keyword in name_lower for keyword in high_priority_keywords)
+    # _is_high_priority_device удален - не используется
     
     def _find_best_available_device(self, available_devices: Set[str]) -> Optional[str]:
         """Находит лучшее доступное устройство"""
         try:
             # Исключаем виртуальные устройства и микрофоны
             real_devices = [name for name in available_devices 
-                          if not self._is_virtual_device(name) 
+                          if not is_virtual_device(name) 
                           and 'microphone' not in name.lower()]
             
             if not real_devices:
                 logger.warning("⚠️ Нет реальных аудио устройств")
                 return None
             
-            # Приоритеты устройств
-            device_priorities = {
-                'airpods': 95,
-                'beats': 90,
-                'bluetooth': 85,
-                'wireless': 85,
-                'bt': 85,
-                'usb': 80,
-                'speakers': 70
-            }
-            
-            # Находим устройство с наивысшим приоритетом
-            best_device = None
-            best_priority = 0
-            
-            for device in real_devices:
-                device_lower = device.lower()
-                priority = 50  # Приоритет по умолчанию
+            # Используем AudioDeviceManager для получения лучшего устройства
+            # Это делегирует логику выбора в UnifiedAudioSystem
+            try:
+                from audio_device_manager import get_global_audio_device_manager
+                audio_device_manager = get_global_audio_device_manager()
                 
-                for keyword, device_priority in device_priorities.items():
-                    if keyword in device_lower:
-                        priority = device_priority
-                        break
+                if audio_device_manager:
+                    # Делегируем выбор лучшего устройства в AudioDeviceManager
+                    best_device = audio_device_manager.find_best_available_device(real_devices)
+                    if best_device:
+                        logger.info(f"🎯 AudioDeviceManager выбрал лучшее устройство: {best_device}")
+                        return best_device
                 
-                if priority > best_priority:
-                    best_priority = priority
-                    best_device = device
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка получения лучшего устройства через AudioDeviceManager: {e}")
+            
+            # Fallback: простое правило - первое доступное устройство
+            logger.warning("⚠️ Используем fallback: первое доступное устройство")
+            best_device = real_devices[0] if real_devices else None
             
             return best_device
             
@@ -346,47 +337,8 @@ class RealtimeDeviceMonitor:
             logger.error(f"❌ Ошибка поиска лучшего устройства: {e}")
             return None
     
-    def _is_virtual_device(self, device_name: str) -> bool:
-        """Проверяет, является ли устройство виртуальным"""
-        name_lower = device_name.lower()
-        virtual_keywords = ['blackhole', 'loopback', 'virtual']
-        return any(keyword in name_lower for keyword in virtual_keywords)
+    # _is_headphones и _is_virtual_device удалены - используются из utils.device_utils
     
-    def _switch_to_device(self, device_name: str) -> bool:
-        """Переключается на указанное устройство"""
-        try:
-            logger.info(f"🔄 Переключение на устройство: {device_name}")
-            
-            # Переключаем OUTPUT
-            result_output = subprocess.run([self.switch_audio_path, '-s', device_name],
-                                         capture_output=True, text=True, timeout=5)
-            
-            if result_output.returncode != 0:
-                logger.error(f"❌ Ошибка переключения OUTPUT: {result_output.stderr}")
-                return False
-            
-            # Переключаем INPUT (только если устройство поддерживает)
-            result_input = subprocess.run([self.switch_audio_path, '-i', device_name],
-                                        capture_output=True, text=True, timeout=5)
-            
-            if result_input.returncode != 0:
-                # Это нормально для некоторых устройств (например, AirPods)
-                if 'airpods' in device_name.lower():
-                    logger.info(f"ℹ️ AirPods не поддерживают INPUT переключение через SwitchAudioSource")
-                else:
-                    logger.warning(f"⚠️ Не удалось переключить INPUT: {result_input.stderr}")
-            else:
-                logger.info(f"✅ INPUT переключен на: {device_name}")
-            
-            # Стабилизация
-            time.sleep(1.0)
-            
-            logger.info(f"✅ Успешно переключились на: {device_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка переключения устройства: {e}")
-            return False
     
     def add_callback(self, callback: Callable):
         """Добавляет callback для уведомлений"""

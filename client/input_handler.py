@@ -13,9 +13,10 @@ class InputHandler:
     Отправляет события в очередь, не управляет состоянием.
     """
     
-    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, state_manager=None):
         self.loop = loop
         self.queue = queue
+        self.state_manager = state_manager
         self.press_time = None
         self.short_press_threshold = 0.1   # Порог для коротких нажатий (100ms) - быстрая реакция
         self.space_pressed = False
@@ -78,6 +79,11 @@ class InputHandler:
             def start_if_still_pressed():
                 try:
                     if self.space_pressed and not self.recording_started:
+                        # ПРОВЕРЯЕМ состояние через StateManager
+                        if self.state_manager and hasattr(self.state_manager, 'can_start_recording') and not self.state_manager.can_start_recording():
+                            console.print(f"[yellow]⚠️ Запись невозможна - микрофон уже активен или неподходящее состояние[/yellow]")
+                            return
+                            
                         # СБРАСЫВАЕМ флаг прерывания перед отправкой start_recording
                         self.interrupting = False
                         console.print(f"[dim]🔄 Флаг interrupting сброшен перед start_recording[/dim]")
@@ -126,15 +132,14 @@ class InputHandler:
                 self.loop.call_soon_threadsafe(self.queue.put_nowait, "deactivate_microphone")
                 console.print(f"[dim]📤 Событие deactivate_microphone отправлено в очередь[/dim]")
             else:
-                # Короткое нажатие → прерывание + активация микрофона
-                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - прерывание + активация микрофона")
+                # Короткое нажатие → ТОЛЬКО прерывание (без автоматической активации микрофона)
+                console.print(f"🔇 Короткое нажатие ({duration:.2f}s) - только прерывание")
                 console.print(f"[dim]🔍 Длительность {duration:.3f}s < {self.short_press_threshold}s - короткое нажатие[/dim]")
-                # Отправляем interrupt_or_cancel для прерывания
+                # Отправляем ТОЛЬКО interrupt_or_cancel для прерывания
                 self.loop.call_soon_threadsafe(self.queue.put_nowait, "interrupt_or_cancel")
                 console.print(f"[dim]📤 Событие interrupt_or_cancel отправлено в очередь[/dim]")
-                # И сразу start_recording для активации микрофона
-                self.loop.call_soon_threadsafe(self.queue.put_nowait, "start_recording")
-                console.print(f"[dim]📤 Событие start_recording отправлено в очередь[/dim]")
+                # УБИРАЕМ автоматическую отправку start_recording
+                # Пользователь должен нажать пробел еще раз для активации микрофона
             
             # СБРАСЫВАЕМ ФЛАГ ПРЕРЫВАНИЯ
             console.print(f"[dim]🔍 Флаг interrupting ДО сброса: {self.interrupting}[/dim]")
@@ -181,10 +186,9 @@ class InputHandler:
 async def main_test():
     """Функция для тестирования InputHandler"""
     print("🧪 Тест упрощенного InputHandler:")
-    print("• Зажмите пробел → СРАЗУ прерывание + автоматическая активация микрофона")
-    print("• Удерживайте пробел → продолжается запись")
+    print("• Короткое нажатие пробела → только прерывание речи ассистента")
+    print("• Удерживайте пробел → активация микрофона + запись")
     print("• Отпустите пробел → останавливается запись + отправка команды")
-    print("• Короткое нажатие → только прерывание речи ассистента")
     print("• Нажмите Ctrl+C для выхода")
     
     event_queue = asyncio.Queue()

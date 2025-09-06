@@ -4,12 +4,14 @@ import speech_recognition as sr
 import threading
 import time
 import os
+import logging
 from rich.console import Console
 
 # Настройка FLAC для Apple Silicon
 os.environ['FLAC_PATH'] = '/opt/homebrew/bin/flac'
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 class StreamRecognizer:
     """
@@ -17,11 +19,12 @@ class StreamRecognizer:
     Записывает аудио только при удержании пробела.
     """
     
-    def __init__(self, sample_rate=16000, chunk_size=1024, channels=1):
+    def __init__(self, sample_rate=16000, chunk_size=1024, channels=1, state_manager=None):
         self.sample_rate = sample_rate  # 16kHz - оптимально для распознавания речи
         self.chunk_size = chunk_size
         self.channels = channels
         self.dtype = 'int16'
+        self.state_manager = state_manager
         
         self.stream = None
         self.is_recording = False
@@ -72,6 +75,33 @@ class StreamRecognizer:
             self._stream_cache_valid = False
             self._cached_stream_config = None
     
+    def invalidate_device_cache(self):
+        """Инвалидирует кэш устройств при их изменении"""
+        try:
+            logger.info("🔄 STT: Инвалидация кэша устройств...")
+            
+            # Инвалидируем кэш конфигурации
+            self._invalidate_stream_cache()
+            
+            # Сбрасываем текущее устройство
+            self.current_input_device = None
+            
+            # Останавливаем текущий поток если он активен
+            if self.stream and self.is_recording:
+                try:
+                    with self.stream_lock:
+                        if self.stream:
+                            self.stream.stop()
+                            self.stream.close()
+                            self.stream = None
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка остановки потока при инвалидации: {e}")
+            
+            logger.info("✅ STT: Кэш устройств инвалидирован")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка инвалидации кэша STT: {e}")
+    
     def _start_recording_with_config(self, config):
         """Быстрый запуск записи с закэшированной конфигурацией"""
         try:
@@ -116,7 +146,11 @@ class StreamRecognizer:
             # Небольшая задержка для стабилизации
             time.sleep(0.05)
             
-        self.is_recording = True
+        # Устанавливаем состояние через централизованную систему
+        if self.state_manager:
+            self.state_manager.set_microphone_recording(True)
+        else:
+            self.is_recording = True
         self.audio_chunks = []
         
         # Проверяем кэш для быстрого перезапуска
@@ -381,7 +415,11 @@ class StreamRecognizer:
         if not self.is_recording:
             return None
             
-        self.is_recording = False
+        # Сбрасываем состояние через централизованную систему
+        if self.state_manager:
+            self.state_manager.set_microphone_recording(False)
+        else:
+            self.is_recording = False
         
         # Мониторинг входного устройства не запускаем — ничего останавливать не нужно
         
@@ -483,7 +521,11 @@ class StreamRecognizer:
             return
             
         console.print("[bold red]🚨 ПРИНУДИТЕЛЬНАЯ остановка записи![/bold red]")
-        self.is_recording = False
+        # Сбрасываем состояние через централизованную систему
+        if self.state_manager:
+            self.state_manager.set_microphone_recording(False)
+        else:
+            self.is_recording = False
         
         # Останавливаем аудио поток
         if self.stream:
