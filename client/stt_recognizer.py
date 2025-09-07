@@ -148,10 +148,30 @@ class StreamRecognizer:
             
         # Устанавливаем состояние через централизованную систему
         if self.state_manager:
-            self.state_manager.set_microphone_recording(True)
+            if not self.state_manager.activate_microphone():
+                raise Exception("Не удалось активировать микрофон")
         else:
             self.is_recording = True
         self.audio_chunks = []
+        
+        self._start_recording_implementation()
+    
+    def start_recording_without_activation(self):
+        """Запуск записи БЕЗ активации микрофона (микрофон уже активен)"""
+        # Проверяем, что микрофон уже активен через StateManager
+        if self.state_manager and not self.state_manager.is_microphone_recording():
+            raise Exception("Микрофон не активирован")
+        
+        # Синхронизируем локальное состояние
+        self.is_recording = True
+        
+        # Очищаем предыдущие данные
+        self.audio_chunks = []
+        
+        self._start_recording_implementation()
+    
+    def _start_recording_implementation(self):
+        """Общая реализация запуска записи"""
         
         # Проверяем кэш для быстрого перезапуска
         cached_config = self._get_cached_stream_config()
@@ -417,7 +437,7 @@ class StreamRecognizer:
             
         # Сбрасываем состояние через централизованную систему
         if self.state_manager:
-            self.state_manager.set_microphone_recording(False)
+            self.state_manager.deactivate_microphone()
         else:
             self.is_recording = False
         
@@ -523,7 +543,7 @@ class StreamRecognizer:
         console.print("[bold red]🚨 ПРИНУДИТЕЛЬНАЯ остановка записи![/bold red]")
         # Сбрасываем состояние через централизованную систему
         if self.state_manager:
-            self.state_manager.set_microphone_recording(False)
+            self.state_manager.deactivate_microphone()
         else:
             self.is_recording = False
         

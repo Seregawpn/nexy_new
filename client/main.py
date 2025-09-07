@@ -252,22 +252,55 @@ class StateManager:
             else:
                 self._microphone_state['last_stop_time'] = current_time
             
-            # Синхронизируем с STT recognizer
-            if hasattr(self.stt_recognizer, 'is_recording'):
-                self.stt_recognizer.is_recording = is_recording
+            # Обратная синхронизация убрана - STT recognizer управляется через activate_microphone/deactivate_microphone
+    
+    def activate_microphone(self) -> bool:
+        """ПРОСТОЙ метод: активация микрофона с проверками"""
+        if not self.can_start_recording():
+            current_state = self.get_microphone_state()
+            logger.warning(f"   ⚠️ Невозможно активировать микрофон: состояние={self.state.name}, микрофон={current_state['is_recording']}")
+            return False
+        
+        self.set_microphone_recording(True)
+        logger.info(f"   🎤 Микрофон активирован в состоянии {self.state.name}")
+        return True
+    
+    def deactivate_microphone(self) -> bool:
+        """ПРОСТОЙ метод: деактивация микрофона"""
+        self.set_microphone_recording(False)
+        logger.info(f"   🔇 Микрофон деактивирован в состоянии {self.state.name}")
+        return True
+    
+    def _sync_microphone_with_state(self, old_state: AppState, new_state: AppState):
+        """ИДЕАЛЬНАЯ СИНХРОНИЗАЦИЯ: автоматически синхронизирует состояние микрофона с состоянием приложения"""
+        
+        # Правила синхронизации микрофона с состоянием приложения
+        if new_state == AppState.SLEEPING:
+            # SLEEPING = микрофон всегда выключен
+            self.set_microphone_recording(False)
+            logger.info(f"   🔇 Микрофон выключен при переходе в SLEEPING")
+            
+        elif new_state == AppState.IN_PROCESS:
+            # IN_PROCESS = микрофон всегда выключен
+            self.set_microphone_recording(False)
+            logger.info(f"   🔇 Микрофон выключен при переходе в IN_PROCESS")
+            
+        elif new_state == AppState.LISTENING:
+            # LISTENING = микрофон включается только при явной активации
+            # НЕ включаем автоматически - только при вызове start_recording
+            logger.info(f"   🎤 LISTENING: микрофон будет включен при активации")
     
     def can_start_recording(self) -> bool:
-        """Проверяет, можно ли начать запись"""
-        with self._microphone_state['state_lock']:
-            # Нельзя начать запись если уже записываем
-            if self._microphone_state['is_recording']:
-                return False
+        """Проверка возможности активации микрофона"""
+        # Микрофон можно активировать в SLEEPING (новая запись) или LISTENING (перезапуск)
+        if self.state not in [AppState.SLEEPING, AppState.LISTENING]:
+            return False
+        
+        # Нельзя активировать уже активный микрофон
+        if self.is_microphone_recording():
+            return False
             
-            # Нельзя начать запись если приложение не в SLEEPING
-            if self.state != AppState.SLEEPING:
-                return False
-                
-            return True
+        return True
     
     def is_microphone_recording(self) -> bool:
         """Проверяет, активна ли запись микрофона"""
@@ -288,9 +321,12 @@ class StateManager:
             return False
     
     def set_state(self, new_state: AppState):
-        """Установка состояния приложения с синхронизацией в трей."""
+        """ИДЕАЛЬНЫЙ метод: установка состояния с автоматической синхронизацией микрофона"""
         old_state = self.state
         self.state = new_state
+        
+        # 🔥 АВТОМАТИЧЕСКАЯ СИНХРОНИЗАЦИЯ МИКРОФОНА
+        self._sync_microphone_with_state(old_state, new_state)
         
         # Синхронизируем с треем
         try:
@@ -321,7 +357,11 @@ class StateManager:
             # Начинаем запись через централизованную систему
             logger.info("   🎤 Активация микрофона из состояния SLEEPING")
             self.set_state(AppState.LISTENING)
-            self.set_microphone_recording(True)
+            # Используем централизованную активацию микрофона
+            if not self.activate_microphone():
+                logger.error("   ❌ Не удалось активировать микрофон")
+                self.set_state(AppState.SLEEPING)
+                return
             
             # Подготовка устройств: выставляем системные дефолты и переключаем вывод ДО бипа
             try:
@@ -341,10 +381,13 @@ class StateManager:
             
             # Запускаем запись сразу - beep воспроизводится в отдельном потоке
             try:
-                self._start_recording_delayed()
+                # Микрофон уже активирован, запускаем STT без повторной активации
+                self.stt_recognizer.start_recording_without_activation()
                 logger.info("   ⚡ Запись запущена мгновенно")
             except Exception as e:
                 logger.error(f"   ❌ Ошибка запуска записи: {e}")
+                # При ошибке переходим в SLEEPING (микрофон автоматически выключится)
+                self.set_state(AppState.SLEEPING)
             
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из состояния SLEEPING")
@@ -356,6 +399,12 @@ class StateManager:
             
             # Переходим в LISTENING
             self.set_state(AppState.LISTENING)
+            
+            # Активируем микрофон для LISTENING
+            if not self.activate_microphone():
+                logger.error("   ❌ Не удалось активировать микрофон")
+                self.set_state(AppState.SLEEPING)
+                return
             
             # Подготовка устройств
             try:
@@ -374,7 +423,8 @@ class StateManager:
             
             # Запускаем запись
             try:
-                self._start_recording_delayed()
+                # Микрофон уже активирован, запускаем STT без повторной активации
+                self.stt_recognizer.start_recording_without_activation()
                 logger.info("   ⚡ Запись запущена мгновенно")
             except Exception as e:
                 logger.error(f"   ❌ Ошибка запуска записи: {e}")
@@ -393,6 +443,11 @@ class StateManager:
                 logger.info("   ℹ️ Микрофон уже активен - дублирование активации предотвращено")
                 self.console.print("[blue]ℹ️ Микрофон уже активен - дублирование предотвращено[/blue]")
                 return  # Выходим без повторной активации
+            
+            # Активируем микрофон для LISTENING
+            if not self.activate_microphone():
+                logger.warning("   ⚠️ Микрофон уже активен или недоступен")
+                return
             
             # Останавливаем текущую запись и начинаем новую
             try:
@@ -420,6 +475,13 @@ class StateManager:
             # Неизвестное состояние → переходим в LISTENING
             self.console.print(f"[yellow]⚠️ Неизвестное состояние {self.state.name}, перехожу в LISTENING[/yellow]")
             self.set_state(AppState.LISTENING)
+            
+            # Активируем микрофон
+            if not self.activate_microphone():
+                logger.error("   ❌ Не удалось активировать микрофон")
+                self.set_state(AppState.SLEEPING)
+                return
+            
             try:
                 if hasattr(self.audio_player, 'play_beep'):
                     self.audio_player.play_beep()
@@ -427,25 +489,16 @@ class StateManager:
                 pass
             
             try:
-                self._start_recording_delayed()
+                # Микрофон уже активирован, запускаем STT без повторной активации
+                self.stt_recognizer.start_recording_without_activation()
                 logger.info("   ⚡ Запись запущена мгновенно")
             except Exception as e:
                 logger.error(f"   ❌ Ошибка запуска записи: {e}")
+                self.set_state(AppState.SLEEPING)
             
             self.console.print("[green]🎤 Микрофон включен - говорите команду[/green]")
             logger.info("   🎤 Микрофон активирован из неизвестного состояния")
     
-    def _start_recording_delayed(self):
-        """Запуск записи (мгновенный)"""
-        try:
-            logger.info("   🎤 Запуск записи (мгновенный)")
-            self.stt_recognizer.start_recording()
-            logger.info("   ✅ Запись успешно запущена")
-        except Exception as e:
-            logger.error(f"   ❌ Ошибка запуска записи: {e}")
-            # При ошибке сбрасываем состояние микрофона и переходим в SLEEPING
-            self.set_microphone_recording(False)
-            self.set_state(AppState.SLEEPING)
     
     def handle_stop_recording(self):
         """ПРОБЕЛ ОТПУЩЕН - выключаем микрофон и обрабатываем команду"""
@@ -520,12 +573,10 @@ class StateManager:
                 if hasattr(self, 'stt_recognizer') and self.stt_recognizer:
                     command = self.stt_recognizer.stop_recording_and_recognize()
                     logger.info("   ✅ Запись остановлена")
-                    # Сбрасываем состояние микрофона через централизованную систему
-                    self.set_microphone_recording(False)
+                    # Состояние микрофона будет сброшено автоматически при переходе в SLEEPING
             except Exception as e:
                 logger.warning(f"   ⚠️ Ошибка остановки записи: {e}")
-                # При ошибке все равно сбрасываем состояние микрофона
-                self.set_microphone_recording(False)
+                # Состояние микрофона будет сброшено автоматически при переходе в SLEEPING
             
             # Если команда распознана - ОБРАБАТЫВАЕМ ЕЕ
             if command and command.strip():
