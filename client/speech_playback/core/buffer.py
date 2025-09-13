@@ -217,8 +217,18 @@ class ChunkBuffer:
                 logger.debug(f"🎵 Воспроизведено: {frames} сэмплов (осталось: {len(self._playback_buffer)})")
                 return data
             else:
-                logger.warning(f"⚠️ Недостаточно данных: {len(self._playback_buffer)} < {frames}")
-                return np.zeros(frames, dtype=np.int16)
+                # Если данных недостаточно, возвращаем то что есть + тишина
+                if len(self._playback_buffer) > 0:
+                    data = self._playback_buffer.copy()
+                    self._playback_buffer = np.array([], dtype=np.int16)
+                    # Дополняем тишиной до нужного размера
+                    silence = np.zeros(frames - len(data), dtype=np.int16)
+                    result = np.concatenate([data, silence])
+                    logger.debug(f"🎵 Воспроизведено: {len(data)} сэмплов + {len(silence)} тишины")
+                    return result
+                else:
+                    logger.debug(f"🎵 Нет данных, воспроизводим тишину: {frames} сэмплов")
+                    return np.zeros(frames, dtype=np.int16)
     
     def mark_chunk_completed(self, chunk_info: ChunkInfo):
         """Отметить чанк как завершенный"""

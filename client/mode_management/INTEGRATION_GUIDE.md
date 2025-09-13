@@ -86,7 +86,7 @@ await grpc_client.process_command("command")  # Обход mode_management
 #### ✅ Правильная интеграция:
 ```python
 from mode_management import ModeController, AppMode
-from state_management import StateManager
+# state_management удален - используйте основной StateManager из main.py
 
 # Создание компонентов
 state_manager = StateManager()

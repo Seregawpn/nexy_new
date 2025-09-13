@@ -206,7 +206,7 @@ logger = logging.getLogger('grpc_client')
 
 ```python
 from grpc_client import create_default_grpc_client
-from state_management import create_default_state_manager
+# state_management удален - используйте основной StateManager из main.py
 
 # Создание клиента
 grpc_client = create_default_grpc_client()

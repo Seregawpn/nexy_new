@@ -89,7 +89,7 @@ class MainApplication:
         print(f"❌ Ошибка распознавания: {event.error_message}")
 ```
 
-### 2. **State Management** (`client/state_management/`)
+### 2. **State Management** (основной StateManager в `main.py`)
 
 ```python
 from input_processing import KeyboardMonitor, KeyboardConfig, SpeechRecognizer, SpeechConfig
@@ -764,7 +764,7 @@ async def safe_input_processing():
 ## 🚀 Следующие шаги
 
 1. **Интегрировать в main.py** - добавить инициализацию
-2. **Подключить к state_management** - для управления состоянием
+2. **Подключить к основному StateManager** - для управления состоянием
 3. **Связать с audio_device_manager** - для аудио записи
 4. **Настроить в module_coordinator** - для общего управления
 5. **Добавить в упаковку** - включить в macOS bundle

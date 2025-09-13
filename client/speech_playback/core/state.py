@@ -18,8 +18,12 @@ class PlaybackState(Enum):
 class ChunkState(Enum):
     """Состояния чанков"""
     PENDING = "pending"
+    QUEUED = "queued"
+    BUFFERED = "buffered"
     PLAYING = "playing"
     COMPLETED = "completed"
+    CLEANED = "cleaned"
+    ERROR = "error"
     FAILED = "failed"
 
 @dataclass

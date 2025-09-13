@@ -67,7 +67,7 @@ cp -r client/mode_management "${APP_NAME}.app/Contents/Resources/"
 
 # Копирование других модулей
 cp -r client/grpc_client "${APP_NAME}.app/Contents/Resources/"
-cp -r client/state_management "${APP_NAME}.app/Contents/Resources/"
+# state_management удален - не требуется
 cp -r client/audio_device_manager "${APP_NAME}.app/Contents/Resources/"
 ```
 
@@ -123,7 +123,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Resources'))
 
 from mode_management import ModeController, AppMode, ModeConfig
 from grpc_client import GrpcClient
-from state_management import StateManager
+# state_management удален - используйте основной StateManager из main.py
 from audio_device_manager import AudioDeviceManager
 
 class NexyApp:

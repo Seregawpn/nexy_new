@@ -99,7 +99,7 @@ class SequentialSpeechPlayer:
             
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации плеера: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             return False
     
     def add_audio_data(self, audio_data: np.ndarray, priority: int = 0, metadata: Optional[Dict[str, Any]] = None) -> str:
@@ -132,25 +132,25 @@ class SequentialSpeechPlayer:
             
         except Exception as e:
             logger.error(f"❌ Ошибка добавления аудио данных: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             raise
     
     def start_playback(self) -> bool:
         """Запуск воспроизведения"""
         try:
-            if not self.state_manager.can_transition_to(PlaybackState.STARTING):
+            # Проверяем, что можем запустить воспроизведение
+            if self.state_manager.current_state not in [PlaybackState.IDLE, PlaybackState.PAUSED]:
                 logger.warning("⚠️ Невозможно запустить воспроизведение в текущем состоянии")
                 return False
             
-            # Переходим в состояние STARTING
-            self.state_manager.transition_to(PlaybackState.STARTING)
+            # Переходим в состояние PLAYING
+            self.state_manager.set_state(PlaybackState.PLAYING)
             
-            # Очищаем предыдущие данные
-            self.chunk_buffer.clear_all()
+            # НЕ очищаем данные - они уже добавлены в буфер
             
             # Запускаем аудио поток
             if not self._start_audio_stream():
-                self.state_manager.transition_to(PlaybackState.ERROR, "Ошибка запуска аудио потока")
+                self.state_manager.set_state(PlaybackState.ERROR)
                 return False
             
             # Запускаем поток воспроизведения
@@ -160,26 +160,24 @@ class SequentialSpeechPlayer:
             self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
             self._playback_thread.start()
             
-            # Переходим в состояние PLAYING
-            self.state_manager.transition_to(PlaybackState.PLAYING)
-            
             logger.info("🎵 Воспроизведение запущено")
             return True
             
         except Exception as e:
             logger.error(f"❌ Ошибка запуска воспроизведения: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             return False
     
     def stop_playback(self) -> bool:
         """Остановка воспроизведения"""
         try:
-            if not self.state_manager.can_transition_to(PlaybackState.STOPPING):
+            # Проверяем, что можем остановить воспроизведение
+            if self.state_manager.current_state not in [PlaybackState.PLAYING, PlaybackState.PAUSED]:
                 logger.warning("⚠️ Невозможно остановить воспроизведение в текущем состоянии")
                 return False
             
             # Переходим в состояние STOPPING
-            self.state_manager.transition_to(PlaybackState.STOPPING)
+            self.state_manager.set_state(PlaybackState.STOPPING)
             
             # Останавливаем поток воспроизведения
             self._stop_event.set()
@@ -195,50 +193,52 @@ class SequentialSpeechPlayer:
             self.chunk_buffer.clear_all()
             
             # Переходим в состояние STOPPED
-            self.state_manager.transition_to(PlaybackState.STOPPED)
+            self.state_manager.set_state(PlaybackState.IDLE)
             
             logger.info("🛑 Воспроизведение остановлено")
             return True
             
         except Exception as e:
             logger.error(f"❌ Ошибка остановки воспроизведения: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             return False
     
     def pause_playback(self) -> bool:
         """Приостановка воспроизведения"""
         try:
-            if not self.state_manager.can_transition_to(PlaybackState.PAUSED):
+            # Проверяем, что можем поставить на паузу
+            if self.state_manager.current_state != PlaybackState.PLAYING:
                 logger.warning("⚠️ Невозможно приостановить воспроизведение в текущем состоянии")
                 return False
             
             self._pause_event.clear()
-            self.state_manager.transition_to(PlaybackState.PAUSED)
+            self.state_manager.set_state(PlaybackState.PAUSED)
             
             logger.info("⏸️ Воспроизведение приостановлено")
             return True
             
         except Exception as e:
             logger.error(f"❌ Ошибка приостановки воспроизведения: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             return False
     
     def resume_playback(self) -> bool:
         """Возобновление воспроизведения"""
         try:
-            if not self.state_manager.can_transition_to(PlaybackState.PLAYING):
+            # Проверяем, что можем возобновить воспроизведение
+            if self.state_manager.current_state != PlaybackState.PAUSED:
                 logger.warning("⚠️ Невозможно возобновить воспроизведение в текущем состоянии")
                 return False
             
             self._pause_event.set()
-            self.state_manager.transition_to(PlaybackState.PLAYING)
+            self.state_manager.set_state(PlaybackState.PLAYING)
             
             logger.info("▶️ Воспроизведение возобновлено")
             return True
             
         except Exception as e:
             logger.error(f"❌ Ошибка возобновления воспроизведения: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
+            self.state_manager.set_state(PlaybackState.ERROR)
             return False
     
     def _start_audio_stream(self) -> bool:
@@ -313,7 +313,7 @@ class SequentialSpeechPlayer:
             outdata[:] = np.zeros((frames, self.config.channels), dtype=self.config.dtype)
     
     def _playback_loop(self):
-        """Основной цикл воспроизведения"""
+        """Основной цикл воспроизведения - упрощенная версия"""
         try:
             logger.info("🔄 Playback loop запущен")
             
@@ -325,8 +325,30 @@ class SequentialSpeechPlayer:
                 chunk_info = self.chunk_buffer.get_next_chunk(timeout=0.1)
                 
                 if chunk_info is not None:
-                    # Обрабатываем чанк последовательно
-                    self._process_chunk(chunk_info)
+                    # Отмечаем начало обработки
+                    chunk_info.state = ChunkState.PLAYING
+                    
+                    # Callback начала чанка
+                    if self._on_chunk_started:
+                        self._on_chunk_started(chunk_info)
+                    
+                    # Добавляем в буфер воспроизведения
+                    if not self.chunk_buffer.add_to_playback_buffer(chunk_info):
+                        logger.error(f"❌ Ошибка добавления чанка {chunk_info.id} в буфер воспроизведения")
+                        chunk_info.state = ChunkState.ERROR
+                        continue
+                    
+                    # Ждем завершения воспроизведения этого чанка
+                    self._wait_for_chunk_completion(chunk_info)
+                    
+                    # Отмечаем завершение
+                    self.chunk_buffer.mark_chunk_completed(chunk_info)
+                    
+                    # Callback завершения чанка
+                    if self._on_chunk_completed:
+                        self._on_chunk_completed(chunk_info)
+                    
+                    logger.info(f"✅ Чанк обработан: {chunk_info.id}")
                 else:
                     # Нет чанков - небольшая задержка
                     time.sleep(0.01)
@@ -335,46 +357,15 @@ class SequentialSpeechPlayer:
             
         except Exception as e:
             logger.error(f"❌ Ошибка в playback loop: {e}")
-            self.state_manager.transition_to(PlaybackState.ERROR, str(e))
-    
-    def _process_chunk(self, chunk_info: ChunkInfo):
-        """Обработка одного чанка"""
-        try:
-            # Отмечаем начало обработки
-            chunk_info.state = ChunkState.PLAYING
-            
-            # Callback начала чанка
-            if self._on_chunk_started:
-                self._on_chunk_started(chunk_info)
-            
-            # Добавляем в буфер воспроизведения
-            if not self.chunk_buffer.add_to_playback_buffer(chunk_info):
-                raise Exception("Ошибка добавления в буфер воспроизведения")
-            
-            # Ждем завершения воспроизведения этого чанка
-            self._wait_for_chunk_completion(chunk_info)
-            
-            # Отмечаем завершение
-            self.chunk_buffer.mark_chunk_completed(chunk_info)
-            
-            # Callback завершения чанка
-            if self._on_chunk_completed:
-                self._on_chunk_completed(chunk_info)
-            
-            logger.info(f"✅ Чанк обработан: {chunk_info.id}")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка обработки чанка {chunk_info.id}: {e}")
-            chunk_info.state = ChunkState.ERROR
-            if self._on_error:
-                self._on_error(e)
+            self.state_manager.set_state(PlaybackState.ERROR)
     
     def _wait_for_chunk_completion(self, chunk_info: ChunkInfo, timeout: float = 30.0):
         """Ждать завершения воспроизведения чанка"""
         start_time = time.time()
         
+        # Ожидаем, пока буфер воспроизведения не будет пустым
+        # Это означает, что весь чанк был воспроизведен
         while time.time() - start_time < timeout:
-            # Проверяем, есть ли данные в буфере воспроизведения
             if not self.chunk_buffer.has_data:
                 logger.info(f"✅ Чанк {chunk_info.id} полностью воспроизведен")
                 return
@@ -468,3 +459,21 @@ class SequentialSpeechPlayer:
 
 
 
+
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Получает статус плеера
+        
+        Returns:
+            Dict с информацией о статусе
+        """
+        return {
+            "state": self.state_manager.current_state.value,
+            "chunk_count": self.chunk_buffer.queue_size,
+            "buffer_size": self.chunk_buffer.buffer_size,
+            "is_playing": self.state_manager.current_state == PlaybackState.PLAYING,
+            "is_paused": self.state_manager.current_state == PlaybackState.PAUSED,
+            "device_id": self.config.device_id,
+            "sample_rate": self.config.sample_rate,
+            "channels": self.config.channels
+        }

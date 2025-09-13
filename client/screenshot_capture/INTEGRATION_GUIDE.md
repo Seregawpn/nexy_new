@@ -102,16 +102,14 @@ await grpc_client.process_command("screenshot", result.data)  # Неправил
 - **Проблема**: Неправильный формат данных
 - **Решение**: Используйте `to_dict()` для конвертации
 
-### 3. Интеграция с state_manager
+### 3. Интеграция с основным приложением
 
 #### ✅ Правильная интеграция:
 ```python
 from screenshot_capture import ScreenshotCapture
-from state_management import StateManager
 
 # Создание компонентов
 screenshot_capture = ScreenshotCapture()
-state_manager = StateManager()
 
 # Синхронизация состояния
 async def capture_and_update_state():

@@ -16,7 +16,7 @@ Speech Playback Module - Модуль воспроизведения речи
 """
 
 from .core.player import SequentialSpeechPlayer, PlayerConfig
-from .core.buffer import ChunkBuffer
+from .core.buffer import ChunkBuffer, ChunkInfo
 from .core.state import PlaybackState, ChunkState
 from .utils.audio_utils import resample_audio, convert_channels
 from .utils.device_utils import get_best_audio_device
@@ -31,7 +31,8 @@ __author__ = "Nexy AI Voice Assistant Team"
 __all__ = [
     'SequentialSpeechPlayer',
     'PlayerConfig',
-    'ChunkBuffer', 
+    'ChunkBuffer',
+    'ChunkInfo',
     'PlaybackState',
     'ChunkState',
     'resample_audio',
