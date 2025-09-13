@@ -1,0 +1,87 @@
+{
+  "apple_id": "your-apple-id@example.com",
+  "team_id": "YOUR_TEAM_ID",
+  "keychain_profile": "notarytool-profile",
+  "bundle_id": "com.nexy.state.management",
+  "app_name": "State Management",
+  "version": "1.0.0",
+  "build_number": "1",
+  "minimum_os_version": "10.15",
+  "architectures": ["arm64", "x86_64"],
+  "entitlements": {
+    "com.apple.security.app-sandbox": true,
+    "com.apple.security.network.client": true,
+    "com.apple.security.network.server": true,
+    "com.apple.security.files.user-selected.read-write": true,
+    "com.apple.security.files.downloads.read-write": true,
+    "com.apple.security.device.audio-input": true,
+    "com.apple.security.device.audio-unit": true,
+    "com.apple.security.device.microphone": true,
+    "com.apple.security.device.camera": true,
+    "com.apple.security.device.screen-capture": true,
+    "com.apple.security.device.usb": true,
+    "com.apple.security.automation.apple-events": true,
+    "com.apple.security.temporary-exception.apple-events": true,
+    "com.apple.security.temporary-exception.system-information": true,
+    "com.apple.security.device.hardware": true,
+    "com.apple.security.cs.allow-jit": true,
+    "com.apple.security.cs.allow-unsigned-executable-memory": true,
+    "com.apple.security.cs.disable-library-validation": true,
+    "com.apple.security.cs.allow-dyld-environment-variables": true,
+    "com.apple.security.cs.disable-executable-page-protection": true
+  },
+  "info_plist": {
+    "CFBundleIdentifier": "com.nexy.state.management",
+    "CFBundleVersion": "1.0.0",
+    "CFBundleShortVersionString": "1.0.0",
+    "CFBundleName": "Nexy State Management",
+    "CFBundleDisplayName": "Nexy State Management",
+    "CFBundlePackageType": "FMWK",
+    "LSMinimumSystemVersion": "10.15",
+    "NSHighResolutionCapable": true,
+    "NSSupportsAutomaticGraphicsSwitching": true,
+    "NSMicrophoneUsageDescription": "This app needs access to the microphone for voice recognition and state management.",
+    "NSCameraUsageDescription": "This app needs access to the camera for screen capture functionality.",
+    "NSScreenCaptureUsageDescription": "This app needs access to screen capture for screenshot functionality.",
+    "NSAppleEventsUsageDescription": "This app needs access to Apple Events for system state management."
+  },
+  "build_settings": {
+    "development_team": "YOUR_TEAM_ID",
+    "code_sign_identity": "Developer ID Application: Your Name (YOUR_TEAM_ID)",
+    "provisioning_profile": "StateManagement_Development",
+    "configuration": "Release",
+    "sdk": "macosx",
+    "arch": "arm64 x86_64"
+  },
+  "notarization": {
+    "provider": "YOUR_TEAM_ID",
+    "asc_provider": "YOUR_TEAM_ID",
+    "primary_bundle_id": "com.nexy.state.management",
+    "staple": true,
+    "timeout": 3600
+  },
+  "distribution": {
+    "app_store": false,
+    "ad_hoc": false,
+    "enterprise": false,
+    "developer_id": true,
+    "mac_app_store": false
+  },
+  "testing": {
+    "test_flight": false,
+    "internal_testing": true,
+    "external_testing": false,
+    "beta_groups": []
+  },
+  "metadata": {
+    "description": "State Management module for Nexy AI Voice Assistant",
+    "keywords": ["state", "management", "ai", "voice", "assistant"],
+    "category": "Developer Tools",
+    "copyright": "Copyright © 2024 Nexy AI. All rights reserved.",
+    "license": "Proprietary",
+    "website": "https://nexy.ai",
+    "support": "https://support.nexy.ai",
+    "privacy_policy": "https://nexy.ai/privacy",
+    "terms_of_service": "https://nexy.ai/terms"
+  }
+}

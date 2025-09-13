@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Bundle Information -->
+    <key>CFBundleIdentifier</key>
+    <string>com.nexy.hardware.id</string>
+    
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    
+    <key>CFBundleName</key>
+    <string>NexyHardwareID</string>
+    
+    <key>CFBundleDisplayName</key>
+    <string>Nexy Hardware ID</string>
+    
+    <!-- System Requirements -->
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    
+    <key>LSArchitectureFlags</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+    
+    <!-- Application Type -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    
+    <!-- Usage Descriptions -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>This app needs access to Apple Events for hardware information retrieval and system profiling.</string>
+    
+    <key>NSSystemAdministrationUsageDescription</key>
+    <string>This app needs access to system information for hardware identification and device management.</string>
+    
+    <!-- Network Security -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    
+    <!-- Background Modes -->
+    <key>LSBackgroundOnly</key>
+    <true/>
+    
+    <!-- Supported File Types -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Hardware ID Cache</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.json</string>
+            </array>
+        </dict>
+    </array>
+    
+    <!-- Application Category -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    
+    <!-- Copyright -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2024 Nexy. All rights reserved.</string>
+</dict>
+</plist>

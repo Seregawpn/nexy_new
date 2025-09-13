@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Sandbox -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    
+    <!-- Network Access -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- File System Access -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Audio Access -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.audio-unit</key>
+    <true/>
+    
+    <!-- Microphone Access -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    
+    <!-- Screen Capture -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.screen-capture</key>
+    <true/>
+    
+    <!-- USB Access -->
+    <key>com.apple.security.device.usb</key>
+    <true/>
+    
+    <!-- Apple Events -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- Temporary Exceptions -->
+    <key>com.apple.security.temporary-exception.apple-events</key>
+    <true/>
+    <key>com.apple.security.temporary-exception.system-information</key>
+    <true/>
+    
+    <!-- Hardware Access -->
+    <key>com.apple.security.device.hardware</key>
+    <true/>
+    
+    <!-- Process Management -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Debugging -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+</dict>
+</plist>

@@ -128,4 +128,18 @@ security:
   require_microphone_permission: true
   require_screen_permission: true
 
+# Sparkle auto-update settings
+sparkle:
+  enabled: true
+  appcast_url: "http://localhost:8080/appcast.xml"  # Локальный тестовый сервер
+  auto_install: true
+  check_interval: 3600  # Проверка каждые 60 минут
+  update_check_on_startup: true
+  update_check_in_background: true
+  accessibility:
+    announce_updates: true
+    announce_installation: true
+    auto_install: true
+
+
 

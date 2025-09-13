@@ -1,0 +1,65 @@
+# Требования для screenshot_capture модуля на macOS
+# Версия: 1.0.0
+
+# Основные зависимости
+PyInstaller>=5.0.0
+pyobjc-framework-Cocoa>=9.0
+pyobjc-framework-CoreGraphics>=9.0
+pyobjc-framework-Foundation>=9.0
+pyobjc-framework-Quartz>=9.0
+Pillow>=9.0.0
+PyYAML>=6.0
+
+# macOS специфичные зависимости
+pyobjc-framework-AppKit>=9.0
+pyobjc-framework-CoreGraphics>=9.0
+pyobjc-framework-Foundation>=9.0
+pyobjc-framework-Quartz>=9.0
+pyobjc-framework-ApplicationServices>=9.0
+
+# Дополнительные зависимости
+asyncio>=3.4.3
+logging>=0.4.9.6
+pathlib>=1.0.1
+typing>=3.7.4
+dataclasses>=0.6
+enum34>=1.1.10
+time>=3.0.0
+threading>=3.0.0
+
+# Зависимости для разработки
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.991
+
+# Зависимости для упаковки
+py2app>=0.28.0
+pyinstaller-hooks-contrib>=2022.0
+altgraph>=0.17
+macholib>=1.16.0
+
+# Зависимости для тестирования
+pytest-cov>=4.0.0
+pytest-mock>=3.8.0
+pytest-timeout>=2.1.0
+
+# Зависимости для логирования
+loguru>=0.6.0
+colorama>=0.4.5
+
+# Зависимости для конфигурации
+python-dotenv>=0.20.0
+
+# Зависимости для безопасности
+cryptography>=38.0.0
+keyring>=23.0.0
+
+# Зависимости для производительности
+psutil>=5.9.0
+memory-profiler>=0.60.0
+
+# Зависимости для отладки
+pdb-attach>=3.2.0
+ipdb>=0.13.0

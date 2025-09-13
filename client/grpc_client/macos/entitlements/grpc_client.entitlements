@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Сетевые разрешения для gRPC -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Разрешения для исходящих соединений -->
+    <key>com.apple.security.network.server</key>
+    <false/>
+    
+    <!-- Разрешения для TLS/SSL соединений -->
+    <key>com.apple.security.tls.client</key>
+    <true/>
+    
+    <!-- Разрешения для работы с сокетами -->
+    <key>com.apple.security.socket.client</key>
+    <true/>
+    
+    <!-- Разрешения для работы с файловой системой (логи, кэш) -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    
+    <!-- Разрешения для работы с пользовательскими файлами -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Разрешения для работы с временными файлами -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/tmp/</string>
+        <string>/var/tmp/</string>
+    </array>
+    
+    <!-- Разрешения для работы с сетевыми интерфейсами -->
+    <key>com.apple.security.network.client.tcp</key>
+    <true/>
+    
+    <!-- Разрешения для работы с UDP (если нужно) -->
+    <key>com.apple.security.network.client.udp</key>
+    <true/>
+    
+    <!-- Разрешения для работы с системными настройками -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- Разрешения для работы с динамическими библиотеками -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Разрешения для работы с отладкой -->
+    <key>com.apple.security.cs.debugger</key>
+    <true/>
+    
+    <!-- Разрешения для работы с системными вызовами -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Основная информация о приложении -->
+    <key>CFBundleName</key>
+    <string>Nexy Screenshot Capture</string>
+    
+    <key>CFBundleDisplayName</key>
+    <string>Nexy Screenshot Capture</string>
+    
+    <key>CFBundleIdentifier</key>
+    <string>com.nexy.screenshot.capture</string>
+    
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    
+    <key>CFBundleExecutable</key>
+    <string>screenshot_capture</string>
+    
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    
+    <!-- Минимальная версия macOS -->
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    
+    <!-- Поддерживаемые архитектуры -->
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+    
+    <!-- Права на захват экрана -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>This app needs access to screen capture for screenshot functionality and visual analysis.</string>
+    
+    <!-- Права на камеру (для Screen Recording) -->
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs access to screen recording for screenshot functionality.</string>
+    
+    <!-- Права на системные события -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>This app needs access to system events for screenshot coordination and management.</string>
+    
+    <!-- Категория приложения -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    
+    <!-- Поддержка темной темы -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    
+    <!-- Поддержка высокого разрешения -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    
+    <!-- Поддержка Retina -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    
+    <!-- Поддержка полноэкранного режима -->
+    <key>LSUIElement</key>
+    <true/>
+    
+    <!-- Поддержка фонового режима -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>background-processing</string>
+    </array>
+    
+    <!-- Поддержка многопоточности -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    
+    <!-- Поддержка автоматического обновления -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    
+    <!-- Поддержка Sparkle -->
+    <key>SUFeedURL</key>
+    <string>https://your-update-server.com/appcast.xml</string>
+    
+    <!-- Поддержка подписи -->
+    <key>SUPublicEDKey</key>
+    <string>YOUR_PUBLIC_ED_KEY</string>
+    
+    <!-- Поддержка проверки подписи -->
+    <key>SUEnableSystemProfiling</key>
+    <true/>
+    
+    <!-- Поддержка логирования -->
+    <key>NSLoggingLevel</key>
+    <string>Debug</string>
+    
+    <!-- Поддержка отладки -->
+    <key>NSDebugEnabled</key>
+    <true/>
+    
+    <!-- Поддержка Accessibility -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>This app needs accessibility access for screenshot analysis and visual assistance.</string>
+    
+    <!-- Поддержка Full Disk Access -->
+    <key>NSFullDiskAccessUsageDescription</key>
+    <string>This app does not need full disk access.</string>
+    
+    <!-- Поддержка Bluetooth -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>This app does not need Bluetooth access.</string>
+    
+    <!-- Поддержка Wi-Fi -->
+    <key>NSWiFiUsageDescription</key>
+    <string>This app does not need Wi-Fi access.</string>
+</dict>
+</plist>
