@@ -8,9 +8,9 @@ from typing import Optional, Dict, Any, Tuple
 import base64
 
 class ScreenshotFormat(Enum):
-    """Поддерживаемые форматы скриншотов"""
+    """Поддерживаемые форматы скриншотов (только JPEG для production)"""
     JPEG = "jpeg"
-    PNG = "png"
+    PNG = "png"  # Не поддерживается в текущей реализации
 
 class ScreenshotQuality(Enum):
     """Уровни качества скриншотов"""
