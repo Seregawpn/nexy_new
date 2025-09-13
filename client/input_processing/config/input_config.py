@@ -11,8 +11,15 @@ from ..speech.types import SpeechConfig
 @dataclass
 class InputConfig:
     """Общая конфигурация модулей ввода"""
-    keyboard: KeyboardConfig
-    speech: SpeechConfig
+    keyboard: KeyboardConfig = None
+    speech: SpeechConfig = None
+    
+    def __post_init__(self):
+        """Инициализация конфигурации по умолчанию"""
+        if self.keyboard is None:
+            self.keyboard = KeyboardConfig()
+        if self.speech is None:
+            self.speech = SpeechConfig()
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'InputConfig':
@@ -29,18 +36,21 @@ class InputConfig:
         """Преобразует конфигурацию в словарь"""
         return {
             'keyboard': {
-                'key_to_monitor': self.keyboard.key_to_monitor,
-                'short_press_threshold': self.keyboard.short_press_threshold,
-                'long_press_threshold': self.keyboard.long_press_threshold,
+                'enabled': self.keyboard.enabled,
+                'monitor_spacebar': self.keyboard.monitor_spacebar,
+                'spacebar_short_press_duration': self.keyboard.spacebar_short_press_duration,
+                'spacebar_long_press_duration': self.keyboard.spacebar_long_press_duration,
+                'monitor_escape': self.keyboard.monitor_escape,
+                'monitor_enter': self.keyboard.monitor_enter,
                 'event_cooldown': self.keyboard.event_cooldown,
                 'hold_check_interval': self.keyboard.hold_check_interval,
                 'debounce_time': self.keyboard.debounce_time,
             },
             'speech': {
-                'sample_rate': self.speech.sample_rate,
-                'chunk_size': self.speech.chunk_size,
-                'channels': self.speech.channels,
-                'dtype': self.speech.dtype,
+                'enabled': self.speech.enabled,
+                'language': self.speech.language,
+                'timeout': self.speech.timeout,
+                'phrase_timeout': self.speech.phrase_timeout,
                 'energy_threshold': self.speech.energy_threshold,
                 'dynamic_energy_threshold': self.speech.dynamic_energy_threshold,
                 'pause_threshold': self.speech.pause_threshold,
@@ -52,6 +62,8 @@ class InputConfig:
         }
 
 # Конфигурация по умолчанию
+DEFAULT_INPUT_CONFIG = InputConfig()
+
 DEFAULT_INPUT_CONFIG = InputConfig(
     keyboard=KeyboardConfig(
         key_to_monitor="space",

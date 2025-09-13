@@ -295,12 +295,29 @@ class KeyboardMonitor:
                 
                 # Запускаем callback в отдельном потоке
                 threading.Thread(
-                    target=lambda: asyncio.run(callback(event)),
+                    target=lambda: self._run_callback(callback, event),
                     daemon=True
                 ).start()
                 
         except Exception as e:
             logger.error(f"❌ Ошибка запуска события: {e}")
+    
+    def _run_callback(self, callback, event):
+        """Запуск callback с правильной обработкой async/sync функций"""
+        try:
+            import asyncio
+            import inspect
+            
+            # Проверяем, является ли callback корутиной
+            if inspect.iscoroutinefunction(callback):
+                # Если это корутина, запускаем в event loop
+                asyncio.run(callback(event))
+            else:
+                # Если это обычная функция, вызываем напрямую
+                callback(event)
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка выполнения callback: {e}")
     
     def get_status(self) -> Dict[str, Any]:
         """Возвращает статус мониторинга"""

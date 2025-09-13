@@ -188,7 +188,7 @@ class LiveAudioDeviceTester:
         print("\n🛑 Останавливаем мониторинг...")
         
         try:
-            if self.manager and self.running:
+        if self.manager and self.running:
                 await self.manager.stop()
                 self.running = False
                 print("✅ Мониторинг остановлен")
@@ -199,8 +199,8 @@ class LiveAudioDeviceTester:
             print(f"   Изменений устройств: {len(self.device_changes)}")
             print(f"   Переключений: {len(self.device_switches)}")
             
-        except Exception as e:
-            print(f"❌ Ошибка остановки: {e}")
+            except Exception as e:
+                print(f"❌ Ошибка остановки: {e}")
     
     async def run_live_test(self):
         """Запуск живого теста"""
@@ -217,7 +217,7 @@ class LiveAudioDeviceTester:
         # Настройка обработчика сигналов
         def signal_handler(signum, frame):
             print(f"\n🛑 Получен сигнал {signum}, завершаем тест...")
-            asyncio.create_task(self.stop_monitoring())
+        asyncio.create_task(self.stop_monitoring())
         
         signal.signal(signal.SIGINT, signal_handler)
         

@@ -63,27 +63,35 @@ class InterruptCoordinator:
         
     async def trigger_interrupt(self, event: InterruptEvent) -> bool:
         """Запускает прерывание"""
+        # Проверяем лимит активных прерываний (без блокировки)
+        if len(self.active_interrupts) >= self.config.max_concurrent_interrupts:
+            logger.warning(f"⚠️ Достигнут лимит активных прерываний: {self.config.max_concurrent_interrupts}")
+            return False
+        
+        # Блокируем только для добавления в активные прерывания
         async with self._lock:
-            try:
-                # Проверяем лимит активных прерываний
-                if len(self.active_interrupts) >= self.config.max_concurrent_interrupts:
-                    logger.warning(f"⚠️ Достигнут лимит активных прерываний: {self.config.max_concurrent_interrupts}")
-                    return False
-                
-                # Добавляем в активные прерывания
-                event.status = InterruptStatus.PROCESSING
-                self.active_interrupts.append(event)
-                
-                # Обновляем метрики
-                self.metrics.total_interrupts += 1
-                self.metrics.interrupts_by_type[event.type] += 1
-                self.metrics.interrupts_by_priority[event.priority] += 1
-                
-                logger.info(f"🔄 Запуск прерывания {event.type.value} (приоритет: {event.priority.value})")
-                
-                # Выполняем прерывание
-                result = await self._execute_interrupt(event)
-                
+            # Повторно проверяем лимит (race condition protection)
+            if len(self.active_interrupts) >= self.config.max_concurrent_interrupts:
+                logger.warning(f"⚠️ Достигнут лимит активных прерываний: {self.config.max_concurrent_interrupts}")
+                return False
+            
+            # Добавляем в активные прерывания
+            event.status = InterruptStatus.PROCESSING
+            self.active_interrupts.append(event)
+            
+            # Обновляем метрики
+            self.metrics.total_interrupts += 1
+            self.metrics.interrupts_by_type[event.type] += 1
+            self.metrics.interrupts_by_priority[event.priority] += 1
+            
+            logger.info(f"🔄 Запуск прерывания {event.type.value} (приоритет: {event.priority.value})")
+        
+        try:
+            # Выполняем прерывание БЕЗ блокировки (параллельно)
+            result = await self._execute_interrupt(event)
+            
+            # Блокируем только для обновления статуса и перемещения в историю
+            async with self._lock:
                 # Обновляем статус
                 if result:
                     event.status = InterruptStatus.COMPLETED
@@ -101,15 +109,21 @@ class InterruptCoordinator:
                 # Очищаем старую историю (оставляем последние 100)
                 if len(self.interrupt_history) > 100:
                     self.interrupt_history = self.interrupt_history[-100:]
-                
-                return result
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка выполнения прерывания {event.type.value}: {e}")
-                event.status = InterruptStatus.FAILED
-                event.error = str(e)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка выполнения прерывания {event.type.value}: {e}")
+            event.status = InterruptStatus.FAILED
+            event.error = str(e)
+            
+            # Блокируем для обновления статуса и перемещения в историю
+            async with self._lock:
                 self.metrics.failed_interrupts += 1
-                return False
+                self.interrupt_history.append(event)
+                self.active_interrupts.remove(event)
+            
+            return False
                 
     async def _execute_interrupt(self, event: InterruptEvent) -> bool:
         """Выполняет прерывание"""

@@ -8,26 +8,21 @@ from typing import Optional, Dict, Any, List, Callable
 
 class AppMode(Enum):
     """Режимы приложения"""
-    IDLE = "idle"                 # Ожидание
+    SLEEPING = "sleeping"         # Спящий режим
     LISTENING = "listening"       # Прослушивание
-    SPEAKING = "speaking"         # Воспроизведение речи
-    RECORDING = "recording"       # Запись речи
     PROCESSING = "processing"     # Обработка команды
-    ERROR = "error"              # Ошибка
 
 class ModeTransitionType(Enum):
     """Типы переходов между режимами"""
     AUTOMATIC = "automatic"       # Автоматический переход
     MANUAL = "manual"            # Ручной переход
     INTERRUPT = "interrupt"      # Переход по прерыванию
-    ERROR = "error"              # Переход по ошибке
 
 class ModeStatus(Enum):
     """Статусы режима"""
     ACTIVE = "active"
     INACTIVE = "inactive"
     TRANSITIONING = "transitioning"
-    ERROR = "error"
 
 @dataclass
 class ModeTransition:
@@ -54,9 +49,8 @@ class ModeEvent:
 @dataclass
 class ModeConfig:
     """Конфигурация режимов"""
-    default_mode: AppMode = AppMode.IDLE
+    default_mode: AppMode = AppMode.SLEEPING
     enable_automatic_transitions: bool = True
-    enable_error_recovery: bool = True
     transition_timeout: float = 5.0
     max_transition_attempts: int = 3
     enable_logging: bool = True

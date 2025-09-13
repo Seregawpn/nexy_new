@@ -7,8 +7,9 @@ from .core.types import (
     AppMode, ModeTransition, ModeTransitionType, ModeStatus, ModeEvent,
     ModeConfig, ModeMetrics
 )
-from .modes.speaking_mode import SpeakingMode
-from .modes.recording_mode import RecordingMode
+from .modes.sleeping_mode import SleepingMode
+from .modes.processing_mode import ProcessingMode
+from .modes.listening_mode import ListeningMode
 
 __all__ = [
     'ModeController',
@@ -19,8 +20,9 @@ __all__ = [
     'ModeEvent',
     'ModeConfig',
     'ModeMetrics',
-    'SpeakingMode',
-    'RecordingMode'
+    'SleepingMode',
+    'ProcessingMode',
+    'ListeningMode'
 ]
 
 __version__ = "1.0.0"
