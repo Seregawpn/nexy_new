@@ -22,6 +22,7 @@ from integrations.update_manager_integration import UpdateManagerIntegration, Up
 from integrations.network_manager_integration import NetworkManagerIntegration, NetworkManagerIntegrationConfig
 from integrations.audio_device_integration import AudioDeviceIntegration, AudioDeviceIntegrationConfig
 from integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
+from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
@@ -227,7 +228,29 @@ class SimpleModuleCoordinator:
                 config=interrupt_config
             )
             
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt")
+            # Voice Recognition Integration
+            voice_config = VoiceRecognitionIntegrationConfig(
+                enabled=True,
+                simulation_mode=True,  # Включаем симуляцию для тестирования
+                simulation_delay=1.5,  # 1.5 секунды задержки
+                simulation_success_rate=0.8,  # 80% успешных распознаваний
+                language="en-US",
+                timeout=3.0,
+                phrase_timeout=0.3,
+                energy_threshold=100,
+                sample_rate=16000,
+                chunk_size=1024,
+                channels=1
+            )
+            
+            self.integrations['voice_recognition'] = VoiceRecognitionIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=voice_config
+            )
+            
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

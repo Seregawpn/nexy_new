@@ -13,9 +13,9 @@ from modules.permissions import PermissionManager, PermissionType, PermissionSta
 from modules.permissions.core.types import PermissionEvent
 
 # Импорты интеграции
-from core.event_bus import EventBus, EventPriority
-from core.state_manager import ApplicationStateManager, AppMode
-from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 

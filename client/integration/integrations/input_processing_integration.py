@@ -13,9 +13,9 @@ from modules.input_processing.keyboard.keyboard_monitor import KeyboardMonitor
 from modules.input_processing.keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
 
 # Импорты интеграции
-from core.event_bus import EventBus, EventPriority
-from core.state_manager import ApplicationStateManager, AppMode
-from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -278,17 +278,19 @@ class InputProcessingIntegration:
                 }
             )
 
-            # Мгновенное решение на отпускании: используем флаг распознавания текущей сессии
-            recognized = bool(self._session_recognized)
+            # Ждем результат распознавания с таймаутом
+            recognized = await self._wait_for_recognition_result()
 
             # Переключаем состояние в зависимости от результата
             if hasattr(self.state_manager, 'set_mode'):
                 if recognized:
+                    logger.info("✅ Распознавание успешно - переключаем в PROCESSING")
                     if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                         await self.state_manager.set_mode(AppMode.PROCESSING)
                     else:
                         self.state_manager.set_mode(AppMode.PROCESSING)
                 else:
+                    logger.info("❌ Распознавание неуспешно - переключаем в SLEEPING")
                     if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                         await self.state_manager.set_mode(AppMode.SLEEPING)
                     else:
@@ -306,6 +308,34 @@ class InputProcessingIntegration:
                 context={"where": "input_processing_integration.handle_key_release"}
             )
             
+            
+    async def _wait_for_recognition_result(self) -> bool:
+        """Ждем результат распознавания с таймаутом"""
+        try:
+            if not self._current_session_id:
+                logger.warning("Нет активной сессии для ожидания распознавания")
+                return False
+            
+            logger.info(f"🎤 Ожидание распознавания для сессии {self._current_session_id}")
+            
+            # Ждем с таймаутом 3 секунды
+            timeout = 3.0
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout:
+                if self._session_recognized:
+                    logger.info("✅ Получен результат распознавания")
+                    return True
+                
+                # Небольшая задержка чтобы не нагружать CPU
+                await asyncio.sleep(0.1)
+            
+            logger.warning(f"⏰ Таймаут ожидания распознавания ({timeout}с)")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Ошибка ожидания распознавания: {e}")
+            return False
             
     # Обработчики внешних событий
     async def _handle_mode_switch(self, event):
