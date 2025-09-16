@@ -2,11 +2,10 @@
 Integration - Модуль интеграции всех модулей
 """
 
-from .core.module_coordinator import ModuleCoordinator, ModuleDependencies
+from .core.simple_module_coordinator import SimpleModuleCoordinator
 
 __all__ = [
-    'ModuleCoordinator',
-    'ModuleDependencies'
+    'SimpleModuleCoordinator'
 ]
 
 __version__ = "1.0.0"

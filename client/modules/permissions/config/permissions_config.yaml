@@ -1,0 +1,9 @@
+auto_open_preferences: true
+check_interval: 30.0
+required_permissions:
+- microphone
+- screen_capture
+- network
+retry_attempts: 3
+retry_delay: 5.0
+show_instructions: true

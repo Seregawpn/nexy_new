@@ -48,7 +48,6 @@ pystray
 # =====================================================
 pyobjc-core
 pyobjc-framework-CoreAudio
-pyobjc-framework-CoreFoundation
 pyobjc-framework-AVFoundation
 pyobjc-framework-Quartz
 pyobjc-framework-ApplicationServices

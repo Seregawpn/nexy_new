@@ -5,8 +5,8 @@ Input Processing - Модуль обработки ввода
 
 from .keyboard.keyboard_monitor import KeyboardMonitor
 from .keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
-from .speech.speech_recognizer import SpeechRecognizer
-from .speech.types import SpeechEvent, SpeechEventType, SpeechState, SpeechConfig
+# from .speech.speech_recognizer import SpeechRecognizer  # Временно отключено
+# from .speech.types import SpeechEvent, SpeechEventType, SpeechState, SpeechConfig  # Временно отключено
 from .config.input_config import InputConfig, DEFAULT_INPUT_CONFIG
 
 __all__ = [
@@ -14,11 +14,11 @@ __all__ = [
     'KeyEvent',
     'KeyEventType', 
     'KeyboardConfig',
-    'SpeechRecognizer',
-    'SpeechEvent',
-    'SpeechEventType',
-    'SpeechState',
-    'SpeechConfig',
+    # 'SpeechRecognizer',  # Временно отключено
+    # 'SpeechEvent',  # Временно отключено
+    # 'SpeechEventType',  # Временно отключено
+    # 'SpeechState',  # Временно отключено
+    # 'SpeechConfig',  # Временно отключено
     'InputConfig',
     'DEFAULT_INPUT_CONFIG'
 ]

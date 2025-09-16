@@ -1,0 +1,12 @@
+check_interval: 30.0
+max_retries: 3
+ping_hosts:
+- 8.8.8.8
+- 1.1.1.1
+- 208.67.222.222
+ping_timeout: 5.0
+retry_delay: 5.0
+test_urls:
+- https://www.google.com
+- https://www.apple.com
+- https://www.cloudflare.com
