@@ -1,100 +1,71 @@
-# =====================================================
-# КОНФИГУРАЦИЯ ЛОГИРОВАНИЯ ДЛЯ macOS ПРИЛОЖЕНИЯ
-# =====================================================
-
-version: 1
 disable_existing_loggers: false
-
-# Форматы логов
 formatters:
-  standard:
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    datefmt: "%Y-%m-%d %H:%M:%S"
-  
   detailed:
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
-    datefmt: "%Y-%m-%d %H:%M:%S"
-  
+    datefmt: '%Y-%m-%d %H:%M:%S'
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
   simple:
-    format: "%(levelname)s - %(message)s"
-
-# Обработчики логов
+    format: '%(levelname)s - %(message)s'
+  standard:
+    datefmt: '%Y-%m-%d %H:%M:%S'
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 handlers:
-  # Файл логов
-  file_handler:
-    class: logging.handlers.RotatingFileHandler
-    level: INFO
-    formatter: detailed
-    filename: "~/Library/Logs/VoiceAssistant/app.log"
-    maxBytes: 10485760  # 10MB
-    backupCount: 5
-    encoding: utf8
-    
-  # Консоль (для отладки)
   console_handler:
     class: logging.StreamHandler
-    level: INFO
     formatter: standard
+    level: INFO
     stream: ext://sys.stdout
-    
-  # Системный журнал macOS
-  system_handler:
-    class: logging.handlers.SysLogHandler
-    level: WARNING
-    formatter: simple
-    address: "/var/run/syslog"
-    
-  # Ошибки в отдельный файл
   error_file_handler:
-    class: logging.handlers.RotatingFileHandler
-    level: ERROR
-    formatter: detailed
-    filename: "~/Library/Logs/VoiceAssistant/errors.log"
-    maxBytes: 5242880  # 5MB
     backupCount: 3
+    class: logging.handlers.RotatingFileHandler
     encoding: utf8
-
-# Логгеры
+    filename: ~/Library/Logs/Nexy/errors.log
+    formatter: detailed
+    level: ERROR
+    maxBytes: 5242880
+  file_handler:
+    backupCount: 5
+    class: logging.handlers.RotatingFileHandler
+    encoding: utf8
+    filename: ~/Library/Logs/Nexy/app.log
+    formatter: detailed
+    level: INFO
+    maxBytes: 10485760
 loggers:
-  # Основной логгер приложения
-  VoiceAssistant:
+  Nexy:
+    handlers:
+    - file_handler
+    - console_handler
+    - error_file_handler
     level: INFO
-    handlers: [file_handler, console_handler, error_file_handler]
     propagate: false
-    
-  # Логгер для аудио
-  audio:
+  nexy.accessibility:
+    handlers:
+    - file_handler
+    - console_handler
     level: INFO
-    handlers: [file_handler]
     propagate: false
-    
-  # Логгер для STT
-  stt:
+  nexy.audio:
+    handlers:
+    - file_handler
     level: INFO
-    handlers: [file_handler]
     propagate: false
-    
-  # Логгер для gRPC
-  grpc:
+  nexy.grpc:
+    handlers:
+    - file_handler
     level: INFO
-    handlers: [file_handler]
     propagate: false
-    
-  # Логгер для захвата экрана
-  screen_capture:
+  nexy.screen_capture:
+    handlers:
+    - file_handler
     level: INFO
-    handlers: [file_handler]
     propagate: false
-    
-  # Логгер для доступности
-  accessibility:
+  nexy.stt:
+    handlers:
+    - file_handler
     level: INFO
-    handlers: [file_handler, console_handler]
     propagate: false
-
-# Корневой логгер
 root:
+  handlers:
+  - system_handler
   level: WARNING
-  handlers: [system_handler]
-
-
+version: 1

@@ -76,7 +76,7 @@ async def test_update_manager_standalone():
         auto_install=True,
         announce_updates=False,  # Тихий режим
         check_on_startup=True,
-        appcast_url="https://your-server.com/appcast.xml",
+        appcast_url="https://api.nexy.ai/updates/appcast.xml",
         retry_attempts=3,
         retry_delay=300,
         silent_mode=True,  # Полностью тихий режим
