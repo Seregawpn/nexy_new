@@ -38,6 +38,9 @@ class KeyboardMonitor:
         # Callbacks
         self.event_callbacks: Dict[KeyEventType, Callable] = {}
         
+        # Event loop для async колбэков
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        
         # Fallback режим
         self.fallback_mode = False
         self.keyboard_available = True
@@ -132,6 +135,11 @@ class KeyboardMonitor:
                 
         self.event_callbacks[event_type] = callback
         logger.debug(f"📝 Зарегистрирован callback для {event_type.value}")
+    
+    def set_loop(self, loop: asyncio.AbstractEventLoop):
+        """Устанавливает event loop для async колбэков"""
+        self._loop = loop
+        logger.debug("🔄 Event loop установлен для KeyboardMonitor")
     
     def _run_keyboard_listener(self):
         """Запускает listener клавиатуры"""
@@ -305,13 +313,16 @@ class KeyboardMonitor:
     def _run_callback(self, callback, event):
         """Запуск callback с правильной обработкой async/sync функций"""
         try:
-            import asyncio
             import inspect
             
             # Проверяем, является ли callback корутиной
             if inspect.iscoroutinefunction(callback):
-                # Если это корутина, запускаем в event loop
-                asyncio.run(callback(event))
+                # Если это корутина, планируем в основной event loop
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(callback(event), self._loop)
+                else:
+                    # Fallback - создаем новый event loop
+                    asyncio.run(callback(event))
             else:
                 # Если это обычная функция, вызываем напрямую
                 callback(event)

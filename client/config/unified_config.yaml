@@ -124,11 +124,11 @@ stt:
   sample_rate: 16000
 update_manager:
   announce_updates: false
-  auto_install: true
+  auto_install: false
   check_interval: 24
-  check_on_startup: true
+  check_on_startup: false
   check_time: 02:00
-  enabled: true
+  enabled: false
   log_updates: true
   retry_attempts: 3
   retry_delay: 300

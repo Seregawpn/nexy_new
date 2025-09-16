@@ -73,7 +73,7 @@ class AudioDeviceIntegration:
             self._manager = AudioDeviceManager(audio_config)
             
             # Настраиваем callbacks
-            self._manager.set_device_changed_callback(self._on_device_changed)
+            self._manager.set_device_changed_callback(self._sync_device_changed_wrapper)
             self._manager.set_device_switched_callback(self._on_device_switched)
             self._manager.set_error_callback(self._on_audio_error)
             
@@ -397,6 +397,18 @@ class AudioDeviceIntegration:
             
         except Exception as e:
             logger.error(f"Error handling audio error: {e}")
+    
+    def _sync_device_changed_wrapper(self, change):
+        """Sync wrapper для async _on_device_changed"""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._on_device_changed(change), loop)
+            else:
+                asyncio.run(self._on_device_changed(change))
+        except Exception as e:
+            logger.error(f"❌ Ошибка в sync wrapper device_changed: {e}")
     
     def get_status(self) -> Dict[str, Any]:
         """Получить статус AudioDeviceIntegration"""

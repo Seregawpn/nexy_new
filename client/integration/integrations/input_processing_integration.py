@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+import time
 
 # Импорты модулей input_processing
 from modules.input_processing.keyboard.keyboard_monitor import KeyboardMonitor
@@ -41,6 +42,8 @@ class InputProcessingIntegration:
         # Состояние
         self.is_initialized = False
         self.is_running = False
+        self._current_session_id: Optional[float] = None
+        self._session_recognized: bool = False
         
     async def initialize(self) -> bool:
         """Инициализация input_processing (клавиатура)"""
@@ -50,6 +53,9 @@ class InputProcessingIntegration:
             # Инициализация клавиатуры
             if self.config.enable_keyboard_monitoring:
                 await self._initialize_keyboard_monitor()
+            
+            # Настраиваем обработчики событий
+            await self._setup_event_handlers()
             
             self.is_initialized = True
             logger.info("✅ input_processing инициализирован")
@@ -70,6 +76,10 @@ class InputProcessingIntegration:
             self.keyboard_monitor = KeyboardMonitor(self.config.keyboard_config)
             
             # Регистрация обработчиков
+            self.keyboard_monitor.register_callback(
+                KeyEventType.PRESS,
+                self._handle_press
+            )
             self.keyboard_monitor.register_callback(
                 KeyEventType.SHORT_PRESS, 
                 self._handle_short_press
@@ -93,12 +103,58 @@ class InputProcessingIntegration:
                 context={"where": "input_processing_integration.initialize_keyboard_monitor"}
             )
             raise
+    async def _handle_press(self, event: KeyEvent):
+        """Начало удержания: включаем запись и переводим в LISTENING"""
+        try:
+            # Создаем сессию и сбрасываем флаг распознавания
+            self._current_session_id = event.timestamp or time.monotonic()
+            self._session_recognized = False
+            # Публикуем старт записи
+            await self.event_bus.publish(
+                "voice.recording_start",
+                {
+                    "source": "keyboard",
+                    "timestamp": event.timestamp,
+                    "session_id": self._current_session_id,
+                }
+            )
+            
+            # Переключаем режим в LISTENING
+            if hasattr(self.state_manager, 'set_mode'):
+                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                    await self.state_manager.set_mode(AppMode.LISTENING)
+                else:
+                    self.state_manager.set_mode(AppMode.LISTENING)
+        except Exception as e:
+            await self.error_handler.handle_error(
+                severity=ErrorSeverity.MEDIUM,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки press: {e}",
+                context={"where": "input_processing_integration.handle_press"}
+            )
             
             
     async def _setup_event_handlers(self):
         """Настройка обработчиков событий (только клавиатура)"""
         # Подписка на события смены режима
-        self.event_bus.subscribe("mode.switch", self._handle_mode_switch, EventPriority.HIGH)
+        await self.event_bus.subscribe("mode.switch", self._handle_mode_switch, EventPriority.HIGH)
+        # Подписка на завершение распознавания (для мгновенного решения)
+        await self.event_bus.subscribe("voice.recognition_completed", self._on_recognition_completed, EventPriority.HIGH)
+
+    async def _on_recognition_completed(self, event):
+        """Фиксируем факт распознавания для текущей сессии"""
+        try:
+            data = event.get("data") or {}
+            session_id = data.get("session_id")
+            if self._current_session_id is not None and session_id == self._current_session_id:
+                self._session_recognized = True
+        except Exception as e:
+            await self.error_handler.handle_error(
+                severity=ErrorSeverity.LOW,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки recognition_completed: {e}",
+                context={"where": "input_processing_integration.on_recognition_completed"}
+            )
         
     async def start(self) -> bool:
         """Запуск input_processing"""
@@ -109,6 +165,9 @@ class InputProcessingIntegration:
                 
             # Запуск мониторинга клавиатуры
             if self.keyboard_monitor:
+                # Передаем основной event loop для корректной работы async колбэков
+                import asyncio
+                self.keyboard_monitor.set_loop(asyncio.get_running_loop())
                 self.keyboard_monitor.start_monitoring()
                 logger.info("🎹 Мониторинг клавиатуры запущен")
                 
@@ -154,14 +213,12 @@ class InputProcessingIntegration:
             
             # Публикация события
             await self.event_bus.publish(
-                "keyboard.short_press", 
+                "keyboard.short_press",
                 {
                     "event": event,
                     "timestamp": event.timestamp,
                     "duration": event.duration
-                },
-                EventPriority.HIGH,
-                "input_processing_integration"
+                }
             )
             
         except Exception as e:
@@ -179,14 +236,12 @@ class InputProcessingIntegration:
             
             # Публикация события
             await self.event_bus.publish(
-                "keyboard.long_press", 
+                "keyboard.long_press",
                 {
                     "event": event,
                     "timestamp": event.timestamp,
                     "duration": event.duration
-                },
-                EventPriority.HIGH,
-                "input_processing_integration"
+                }
             )
             
         except Exception as e:
@@ -204,15 +259,44 @@ class InputProcessingIntegration:
             
             # Публикация события
             await self.event_bus.publish(
-                "keyboard.release", 
+                "keyboard.release",
                 {
                     "event": event,
                     "timestamp": event.timestamp,
                     "duration": event.duration
-                },
-                EventPriority.HIGH,
-                "input_processing_integration"
+                }
             )
+            
+            # Останавливаем запись
+            await self.event_bus.publish(
+                "voice.recording_stop",
+                {
+                    "source": "keyboard",
+                    "timestamp": event.timestamp,
+                    "duration": event.duration,
+                    "session_id": self._current_session_id,
+                }
+            )
+
+            # Мгновенное решение на отпускании: используем флаг распознавания текущей сессии
+            recognized = bool(self._session_recognized)
+
+            # Переключаем состояние в зависимости от результата
+            if hasattr(self.state_manager, 'set_mode'):
+                if recognized:
+                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                        await self.state_manager.set_mode(AppMode.PROCESSING)
+                    else:
+                        self.state_manager.set_mode(AppMode.PROCESSING)
+                else:
+                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                        await self.state_manager.set_mode(AppMode.SLEEPING)
+                    else:
+                        self.state_manager.set_mode(AppMode.SLEEPING)
+
+            # Сбрасываем сессию
+            self._current_session_id = None
+            self._session_recognized = False
             
         except Exception as e:
             await self.error_handler.handle_error(

@@ -191,7 +191,7 @@ class TrayControllerIntegration:
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""
         try:
-            new_mode = event.data.get("mode")
+            new_mode = (event.get("data") or {}).get("mode")
             if new_mode in self.mode_to_status:
                 target_status = self.mode_to_status[new_mode]
                 await self._update_tray_status(target_status)
@@ -211,16 +211,11 @@ class TrayControllerIntegration:
     async def _on_keyboard_event(self, event):
         """Обработка событий клавиатуры"""
         try:
-            event_type = event.event_type
+            event_type = event.get("type")
             logger.info(f"⌨️ Обработка события клавиатуры в TrayControllerIntegration: {event_type}")
             
-            # Обновляем режим приложения в зависимости от события клавиатуры
-            if event_type == "keyboard.long_press":
-                self.state_manager.set_mode(AppMode.LISTENING)
-            elif event_type == "keyboard.release":
-                self.state_manager.set_mode(AppMode.PROCESSING)
-            elif event_type == "keyboard.short_press":
-                self.state_manager.set_mode(AppMode.SLEEPING)
+            # Push-to-talk: режимы меняются в InputProcessingIntegration
+            # Здесь только логируем/можно обновлять UI, если нужно
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки события клавиатуры: {e}")

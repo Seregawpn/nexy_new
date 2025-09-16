@@ -120,7 +120,7 @@ class SimpleModuleCoordinator:
             keyboard_config = KeyboardConfig(
                 key_to_monitor="space",
                 short_press_threshold=0.6,
-                long_press_threshold=2.0,
+                long_press_threshold=1.0,
                 event_cooldown=0.1,
                 hold_check_interval=0.05,
                 debounce_time=0.1
