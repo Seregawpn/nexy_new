@@ -25,9 +25,9 @@ from integrations.interrupt_management_integration import InterruptManagementInt
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
-from .event_bus import EventBus, EventPriority
-from .state_manager import ApplicationStateManager, AppMode
-from .error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 

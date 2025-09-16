@@ -153,7 +153,7 @@ class InputProcessingIntegration:
             logger.debug(f"🔑 Короткое нажатие: {event.duration:.3f}с")
             
             # Публикация события
-            await self.event_bus.publish_async(
+            await self.event_bus.publish(
                 "keyboard.short_press", 
                 {
                     "event": event,
@@ -178,7 +178,7 @@ class InputProcessingIntegration:
             logger.debug(f"🔑 Длинное нажатие: {event.duration:.3f}с")
             
             # Публикация события
-            await self.event_bus.publish_async(
+            await self.event_bus.publish(
                 "keyboard.long_press", 
                 {
                     "event": event,
@@ -203,7 +203,7 @@ class InputProcessingIntegration:
             logger.debug(f"🔑 Отпускание: {event.duration:.3f}с")
             
             # Публикация события
-            await self.event_bus.publish_async(
+            await self.event_bus.publish(
                 "keyboard.release", 
                 {
                     "event": event,

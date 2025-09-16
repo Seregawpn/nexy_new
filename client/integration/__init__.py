@@ -2,11 +2,10 @@
 Integration - Модуль интеграции всех модулей
 """
 
-from .core.simple_module_coordinator import SimpleModuleCoordinator
+# Убираем импорт SimpleModuleCoordinator чтобы избежать циклических импортов
+# SimpleModuleCoordinator импортируется напрямую в main.py
 
-__all__ = [
-    'SimpleModuleCoordinator'
-]
+__all__ = []
 
 __version__ = "1.0.0"
 __author__ = "Nexy Team"
