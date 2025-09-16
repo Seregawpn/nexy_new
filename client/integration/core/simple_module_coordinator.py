@@ -17,7 +17,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 # Импорты интеграций (НЕ модулей напрямую!)
 from integrations.tray_controller_integration import TrayControllerIntegration, TrayControllerConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
-from input_processing.keyboard.types import KeyboardConfig
+from integrations.permissions_integration import PermissionsIntegration, PermissionsIntegrationConfig
+from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
 from event_bus import EventBus, EventPriority
@@ -134,7 +135,23 @@ class SimpleModuleCoordinator:
                 config=input_config
             )
             
-            print("✅ Интеграции созданы: tray, input")
+            # Permissions Integration
+            permissions_config = PermissionsIntegrationConfig(
+                check_interval=30,
+                auto_request_required=True,
+                show_instructions=True,
+                open_preferences=True,
+                debug_mode=True
+            )
+            
+            self.integrations['permissions'] = PermissionsIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=permissions_config
+            )
+            
+            print("✅ Интеграции созданы: tray, input, permissions")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

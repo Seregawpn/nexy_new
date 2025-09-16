@@ -8,8 +8,8 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 # Импорты модулей input_processing
-from input_processing.keyboard.keyboard_monitor import KeyboardMonitor
-from input_processing.keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
+from modules.input_processing.keyboard.keyboard_monitor import KeyboardMonitor
+from modules.input_processing.keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
 
 # Импорты интеграции
 from core.event_bus import EventBus, EventPriority
