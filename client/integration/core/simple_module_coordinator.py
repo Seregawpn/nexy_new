@@ -19,12 +19,13 @@ from integrations.tray_controller_integration import TrayControllerIntegration, 
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
 from integrations.permissions_integration import PermissionsIntegration, PermissionsIntegrationConfig
 from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
+from integrations.network_manager_integration import NetworkManagerIntegration, NetworkManagerIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
-from event_bus import EventBus, EventPriority
-from state_manager import ApplicationStateManager, AppMode
-from error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from .event_bus import EventBus, EventPriority
+from .state_manager import ApplicationStateManager, AppMode
+from .error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,21 @@ class SimpleModuleCoordinator:
                 config=update_config
             )
             
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager")
+            # Network Manager Integration
+            network_config = NetworkManagerIntegrationConfig(
+                check_interval=30.0,
+                ping_timeout=5.0,
+                ping_hosts=["8.8.8.8", "1.1.1.1", "google.com"]
+            )
+            
+            self.integrations['network'] = NetworkManagerIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=network_config
+            )
+            
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

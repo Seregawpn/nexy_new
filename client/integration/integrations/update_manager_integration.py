@@ -68,11 +68,11 @@ class UpdateManagerIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации UpdateManagerIntegration: {e}")
-            self.error_handler.handle_error(
-                error=e,
+            await self.error_handler.handle_error(
                 severity=ErrorSeverity.WARNING,
                 category=ErrorCategory.INTEGRATION,
-                context="UpdateManagerIntegration.initialize"
+                message=f"Ошибка инициализации UpdateManagerIntegration: {e}",
+                context={"where": "UpdateManagerIntegration.initialize"}
             )
             return False
     
@@ -94,11 +94,11 @@ class UpdateManagerIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка запуска UpdateManagerIntegration: {e}")
-            self.error_handler.handle_error(
-                error=e,
+            await self.error_handler.handle_error(
                 severity=ErrorSeverity.ERROR,
                 category=ErrorCategory.INTEGRATION,
-                context="UpdateManagerIntegration.start"
+                message=f"Ошибка запуска UpdateManagerIntegration: {e}",
+                context={"where": "UpdateManagerIntegration.start"}
             )
             return False
     
@@ -119,24 +119,24 @@ class UpdateManagerIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка остановки UpdateManagerIntegration: {e}")
-            self.error_handler.handle_error(
-                error=e,
+            await self.error_handler.handle_error(
                 severity=ErrorSeverity.ERROR,
                 category=ErrorCategory.INTEGRATION,
-                context="UpdateManagerIntegration.stop"
+                message=f"Ошибка остановки UpdateManagerIntegration: {e}",
+                context={"where": "UpdateManagerIntegration.stop"}
             )
             return False
     
     async def _setup_event_handlers(self):
         """Настройка обработчиков событий"""
         # Подписываемся на события обновлений
-        self.event_bus.subscribe("update.available", self._on_update_available, EventPriority.HIGH)
-        self.event_bus.subscribe("update.status_changed", self._on_update_status_changed, EventPriority.MEDIUM)
-        self.event_bus.subscribe("update.restarting", self._on_update_restarting, EventPriority.HIGH)
+        await self.event_bus.subscribe("update.available", self._on_update_available, EventPriority.HIGH)
+        await self.event_bus.subscribe("update.status_changed", self._on_update_status_changed, EventPriority.MEDIUM)
+        await self.event_bus.subscribe("update.restarting", self._on_update_restarting, EventPriority.HIGH)
         
         # Подписываемся на события приложения
-        self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.MEDIUM)
-        self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
+        await self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.MEDIUM)
+        await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
         
     async def _on_update_available(self, event_data):
         """Обработка события доступности обновления"""
@@ -147,7 +147,7 @@ class UpdateManagerIntegration:
             logger.info(f"📢 Доступно обновление версии {version} (build {build_number})")
             
             # Публикуем событие для других компонентов
-            self.event_bus.publish("integration.update_available", {
+            await self.event_bus.publish("integration.update_available", {
                 "version": version,
                 "build_number": build_number,
                 "integration": "update_manager"
@@ -165,7 +165,7 @@ class UpdateManagerIntegration:
             logger.info(f"🔄 Статус обновления: {old_status} → {new_status}")
             
             # Публикуем событие для других компонентов
-            self.event_bus.publish("integration.update_status_changed", {
+            await self.event_bus.publish("integration.update_status_changed", {
                 "old_status": old_status,
                 "new_status": new_status,
                 "integration": "update_manager"
@@ -183,7 +183,7 @@ class UpdateManagerIntegration:
             logger.info(f"🔄 Перезапуск приложения с версией {version} (build {build_number})")
             
             # Публикуем событие для других компонентов
-            self.event_bus.publish("integration.update_restarting", {
+            await self.event_bus.publish("integration.update_restarting", {
                 "version": version,
                 "build_number": build_number,
                 "integration": "update_manager"
@@ -198,7 +198,7 @@ class UpdateManagerIntegration:
             logger.info("🚀 Обработка запуска приложения в UpdateManagerIntegration")
             
             # Публикуем событие для других компонентов
-            self.event_bus.publish("integration.app_startup", {
+            await self.event_bus.publish("integration.app_startup", {
                 "integration": "update_manager"
             })
             
@@ -214,7 +214,7 @@ class UpdateManagerIntegration:
             await self.stop()
             
             # Публикуем событие для других компонентов
-            self.event_bus.publish("integration.app_shutdown", {
+            await self.event_bus.publish("integration.app_shutdown", {
                 "integration": "update_manager"
             })
             

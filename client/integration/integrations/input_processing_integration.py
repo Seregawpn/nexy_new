@@ -57,8 +57,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "initialize", "input_processing_integration",
-                ErrorSeverity.HIGH, ErrorCategory.INITIALIZATION
+                severity=ErrorSeverity.HIGH,
+                category=ErrorCategory.INITIALIZATION,
+                message=f"Ошибка инициализации InputProcessingIntegration: {e}",
+                context={"where": "input_processing_integration.initialize"}
             )
             return False
             
@@ -85,8 +87,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "initialize_keyboard_monitor", "input_processing_integration",
-                ErrorSeverity.HIGH, ErrorCategory.INITIALIZATION
+                severity=ErrorSeverity.HIGH,
+                category=ErrorCategory.INITIALIZATION,
+                message=f"Ошибка инициализации keyboard monitor: {e}",
+                context={"where": "input_processing_integration.initialize_keyboard_monitor"}
             )
             raise
             
@@ -114,8 +118,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "start", "input_processing_integration",
-                ErrorSeverity.HIGH, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.HIGH,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка запуска InputProcessingIntegration: {e}",
+                context={"where": "input_processing_integration.start"}
             )
             return False
             
@@ -133,8 +139,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "stop", "input_processing_integration",
-                ErrorSeverity.MEDIUM, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.MEDIUM,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка остановки InputProcessingIntegration: {e}",
+                context={"where": "input_processing_integration.stop"}
             )
             return False
             
@@ -158,8 +166,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "handle_short_press", "input_processing_integration",
-                ErrorSeverity.MEDIUM, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.MEDIUM,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки short press: {e}",
+                context={"where": "input_processing_integration.handle_short_press"}
             )
             
     async def _handle_long_press(self, event: KeyEvent):
@@ -181,8 +191,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "handle_long_press", "input_processing_integration",
-                ErrorSeverity.MEDIUM, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.MEDIUM,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки long press: {e}",
+                context={"where": "input_processing_integration.handle_long_press"}
             )
             
     async def _handle_key_release(self, event: KeyEvent):
@@ -204,8 +216,10 @@ class InputProcessingIntegration:
             
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "handle_key_release", "input_processing_integration",
-                ErrorSeverity.MEDIUM, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.MEDIUM,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки key release: {e}",
+                context={"where": "input_processing_integration.handle_key_release"}
             )
             
             
@@ -225,8 +239,10 @@ class InputProcessingIntegration:
                     
         except Exception as e:
             await self.error_handler.handle_error(
-                e, "handle_mode_switch", "input_processing_integration",
-                ErrorSeverity.LOW, ErrorCategory.RUNTIME
+                severity=ErrorSeverity.LOW,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки mode switch: {e}",
+                context={"where": "input_processing_integration.handle_mode_switch"}
             )
             
             

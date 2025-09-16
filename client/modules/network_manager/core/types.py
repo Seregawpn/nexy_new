@@ -155,7 +155,7 @@ class NetworkManagerState:
             old_status = self.current_status
             self.current_status = new_status
             return old_status
-        return None
+        return self.current_status  # Возвращаем текущий статус вместо None
     
     def update_quality(self, new_quality: NetworkQuality):
         """Обновить качество"""

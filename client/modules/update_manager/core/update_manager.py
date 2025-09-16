@@ -57,8 +57,8 @@ class UpdateManager:
     async def _setup_event_listeners(self):
         """Настройка слушателей событий"""
         # Подписываемся на события состояния приложения
-        self.event_bus.subscribe("app.state_changed", self._on_app_state_changed)
-        self.event_bus.subscribe("app.shutdown", self._on_app_shutdown)
+        await self.event_bus.subscribe("app.state_changed", self._on_app_state_changed)
+        await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown)
         
     async def _start_periodic_check(self):
         """Запуск периодической проверки"""
