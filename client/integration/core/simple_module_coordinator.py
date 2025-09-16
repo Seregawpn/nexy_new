@@ -18,6 +18,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from integrations.tray_controller_integration import TrayControllerIntegration, TrayControllerConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
 from integrations.permissions_integration import PermissionsIntegration, PermissionsIntegrationConfig
+from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
@@ -151,7 +152,29 @@ class SimpleModuleCoordinator:
                 config=permissions_config
             )
             
-            print("✅ Интеграции созданы: tray, input, permissions")
+            # Update Manager Integration
+            update_config = UpdateManagerIntegrationConfig(
+                enabled=True,
+                check_interval=24,
+                check_time="02:00",
+                auto_install=True,
+                announce_updates=False,  # Тихий режим
+                check_on_startup=True,
+                appcast_url="https://your-server.com/appcast.xml",
+                retry_attempts=3,
+                retry_delay=300,
+                silent_mode=True,  # Полностью тихий режим
+                log_updates=True
+            )
+            
+            self.integrations['update_manager'] = UpdateManagerIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=update_config
+            )
+            
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

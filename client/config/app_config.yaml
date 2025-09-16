@@ -128,7 +128,21 @@ security:
   require_microphone_permission: true
   require_screen_permission: true
 
-# Sparkle auto-update settings
+# Update Manager settings (автоматические обновления)
+update_manager:
+  enabled: true
+  check_interval: 24  # часов
+  check_time: "02:00"  # время проверки (когда пользователь спит)
+  auto_install: true
+  announce_updates: false  # Отключаем уведомления - полностью тихо
+  check_on_startup: true
+  appcast_url: "https://your-server.com/appcast.xml"  # URL сервера обновлений
+  retry_attempts: 3
+  retry_delay: 300  # секунд
+  silent_mode: true  # Полностью тихий режим
+  log_updates: true  # Только в логах
+
+# Sparkle auto-update settings (legacy)
 sparkle:
   enabled: true
   appcast_url: "http://localhost:8080/appcast.xml"  # Локальный тестовый сервер
@@ -137,8 +151,8 @@ sparkle:
   update_check_on_startup: true
   update_check_in_background: true
   accessibility:
-    announce_updates: true
-    announce_installation: true
+    announce_updates: false  # Отключаем уведомления
+    announce_installation: false  # Отключаем уведомления
     auto_install: true
 
 
