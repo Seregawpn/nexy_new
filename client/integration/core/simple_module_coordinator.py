@@ -20,6 +20,7 @@ from integrations.input_processing_integration import InputProcessingIntegration
 from integrations.permissions_integration import PermissionsIntegration, PermissionsIntegrationConfig
 from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
 from integrations.network_manager_integration import NetworkManagerIntegration, NetworkManagerIntegrationConfig
+from integrations.audio_device_integration import AudioDeviceIntegration, AudioDeviceIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
@@ -189,7 +190,24 @@ class SimpleModuleCoordinator:
                 config=network_config
             )
             
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network")
+            # Audio Device Integration
+            audio_config = AudioDeviceIntegrationConfig(
+                auto_switch_enabled=True,
+                monitoring_interval=3.0,
+                switch_delay=0.5,
+                enable_microphone_on_listening=True,
+                disable_microphone_on_sleeping=True,
+                disable_microphone_on_processing=True
+            )
+            
+            self.integrations['audio'] = AudioDeviceIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=audio_config
+            )
+            
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

@@ -4,7 +4,7 @@
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Импорты core компонентов
 from core.event_bus import EventBus, EventPriority
@@ -236,6 +236,16 @@ class UpdateManagerIntegration:
     def is_running(self) -> bool:
         """Проверка, запущен ли менеджер обновлений"""
         return self.is_running
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Получить статус UpdateManagerIntegration"""
+        return {
+            "initialized": self.is_initialized,
+            "running": self.is_running,
+            "enabled": self.is_enabled(),
+            "current_status": self.get_current_status().value if self.get_current_status() else "unknown",
+            "available_update": self.get_available_update() is not None
+        }
 
 class UpdateManagerIntegrationConfig:
     """Конфигурация интеграции обновлений"""
