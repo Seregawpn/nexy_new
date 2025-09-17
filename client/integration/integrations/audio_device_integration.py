@@ -97,16 +97,14 @@ class AudioDeviceIntegration:
             self._manager.set_device_switched_callback(self._on_device_switched)
             self._manager.set_error_callback(self._on_audio_error)
             
-            # Инициализируем AudioDeviceManager
-            success = await self._manager.start()
-            if not success:
-                logger.error("Failed to initialize AudioDeviceManager")
-                return False
+            # Не запускаем AudioDeviceManager на этапе initialize;
+            # запуск выполняется в методе start()
             
             # Подписываемся на события приложения
             await self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.MEDIUM)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.MEDIUM)
             await self.event_bus.subscribe("app.state_changed", self._on_app_state_changed, EventPriority.HIGH)
+            await self.event_bus.subscribe("app.mode_changed", self._on_app_mode_changed, EventPriority.HIGH)
             
             self._initialized = True
             logger.info("AudioDeviceIntegration initialized successfully")
@@ -264,18 +262,41 @@ class AudioDeviceIntegration:
                 )
             else:
                 logger.error(f"Error in AudioDeviceIntegration.state_changed: {e}")
+
+    async def _on_app_mode_changed(self, event):
+        """Обработка современного события смены режима (app.mode_changed)"""
+        try:
+            data = (event or {}).get("data", {})
+            new_mode = data.get("mode")
+            logger.info(f"AudioIntegration: app.mode_changed received mode={getattr(new_mode,'value',new_mode)}")
+            logger.debug(f"AudioIntegration: app.mode_changed received data={data}, parsed new_mode={new_mode}")
+            if new_mode is not None:
+                await self._handle_mode_change(self._current_mode, new_mode)
+        except Exception as e:
+            if hasattr(self.error_handler, 'handle_error'):
+                await self.error_handler.handle_error(
+                    severity="warning",
+                    category="audio",
+                    message=f"Ошибка обработки app.mode_changed: {e}",
+                    context={"where": "audio.mode_changed"}
+                )
+            else:
+                logger.error(f"Error in AudioDeviceIntegration.mode_changed: {e}")
     
     async def _handle_mode_change(self, old_mode: Optional[AppMode], new_mode: AppMode):
         """Обработка смены режима приложения"""
         try:
             logger.info(f"Audio mode change: {old_mode} -> {new_mode}")
+            logger.debug(f"AudioIntegration: current_mode(before)={self._current_mode}")
             
             self._current_mode = new_mode
             
             if new_mode == AppMode.LISTENING:
+                logger.debug("AudioIntegration: enabling microphone due to LISTENING")
                 # В режиме прослушивания - включаем микрофон
                 await self._enable_microphone()
             elif new_mode in [AppMode.SLEEPING, AppMode.PROCESSING]:
+                logger.debug("AudioIntegration: disabling microphone due to SLEEPING/PROCESSING")
                 # В режиме сна или обработки - выключаем микрофон
                 await self._disable_microphone()
             
@@ -298,29 +319,20 @@ class AudioDeviceIntegration:
             
             logger.info("Enabling microphone...")
             
-            # Получаем лучшее устройство ввода
-            input_device = await self._manager.get_best_device(DeviceType.INPUT)
+            # ЛОГИЧЕСКОЕ включение микрофона - НЕ переключаем физические устройства
+            # Просто публикуем событие что микрофон "включен" для записи
+            logger.info("✅ Microphone logically enabled for recording")
             
-            if input_device:
-                # Переключаемся на устройство ввода
-                await self._manager.switch_to_device(input_device)
-                
-                # Публикуем событие включения микрофона
-                await self.event_bus.publish("audio.microphone_enabled", {
-                    "device": input_device.name,
-                    "device_type": input_device.type.value,
-                    "is_available": input_device.is_available
-                })
-                
-                logger.info(f"Microphone enabled: {input_device.name}")
-            else:
-                logger.warning("No input device available for microphone")
-                
-                # Публикуем событие ошибки
-                await self.event_bus.publish("audio.microphone_error", {
-                    "error": "No input device available",
-                    "context": "enable_microphone"
-                })
+            # Публикуем событие включения микрофона (без физического переключения)
+            await self.event_bus.publish("audio.microphone_enabled", {
+                "device": "current_system_device",  # Используем текущее системное устройство
+                "device_type": "input", 
+                "is_available": True,
+                "mode": "logical_enable"  # Указываем что это логическое включение
+            })
+            
+            logger.info("🎤 Microphone enabled for voice recording (logical mode)")
+            # НЕ проверяем физические устройства - просто логически включаем
             
         except Exception as e:
             logger.error(f"Error enabling microphone: {e}")
@@ -337,13 +349,17 @@ class AudioDeviceIntegration:
             
             logger.info("Disabling microphone...")
             
+            # ЛОГИЧЕСКОЕ выключение микрофона
+            logger.info("✅ Microphone logically disabled")
+            
             # Публикуем событие выключения микрофона
             await self.event_bus.publish("audio.microphone_disabled", {
                 "reason": "mode_change",
-                "mode": self._current_mode.value if self._current_mode else "unknown"
+                "mode": self._current_mode.value if self._current_mode else "unknown",
+                "logical_disable": True
             })
             
-            logger.info("Microphone disabled")
+            logger.info("🔇 Microphone disabled (logical mode)")
             
         except Exception as e:
             logger.error(f"Error disabling microphone: {e}")

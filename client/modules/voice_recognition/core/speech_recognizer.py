@@ -154,7 +154,6 @@ class SpeechRecognizer:
                 blocksize=self.config.chunk_size,
                 callback=self._audio_callback
             ) as stream:
-                
                 self.listen_start_time = time.time()
                 
                 while self.is_listening and not self.stop_event.is_set():
@@ -258,13 +257,6 @@ class SpeechRecognizer:
         else:
             self.metrics.failed_recognitions += 1
             
-        # Обновляем среднюю длительность
-        if result.duration > 0:
-            if self.metrics.total_recognitions > 0:
-                self.metrics.average_duration = (
-                    (self.metrics.average_duration * (self.metrics.total_recognitions - 1) + result.duration) 
-                    / self.metrics.total_recognitions
-                )
                 
     def register_callback(self, state: RecognitionState, callback: Callable):
         """Регистрирует callback для состояния"""

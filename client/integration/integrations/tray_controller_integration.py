@@ -17,9 +17,9 @@ from modules.tray_controller.core.tray_types import TrayEvent
 from config.unified_config_loader import UnifiedConfigLoader
 
 # Импорты интеграции
-from core.event_bus import EventBus, EventPriority
-from core.state_manager import ApplicationStateManager, AppMode
-from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,10 @@ class TrayControllerIntegration:
             await self.event_bus.subscribe("keyboard.long_press", self._on_keyboard_event, EventPriority.MEDIUM)
             await self.event_bus.subscribe("keyboard.release", self._on_keyboard_event, EventPriority.MEDIUM)
             await self.event_bus.subscribe("keyboard.short_press", self._on_keyboard_event, EventPriority.MEDIUM)
+
+            # Подписываемся на события микрофона/распознавания для точной индикации
+            await self.event_bus.subscribe("voice.mic_opened", self._on_voice_mic_opened, EventPriority.HIGH)
+            await self.event_bus.subscribe("voice.mic_closed", self._on_voice_mic_closed, EventPriority.HIGH)
             
             logger.info("✅ Обработчики событий TrayControllerIntegration настроены")
             
@@ -207,9 +211,13 @@ class TrayControllerIntegration:
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""
         try:
-            new_mode = (event.get("data") or {}).get("mode")
+            data = (event.get("data") or {})
+            new_mode = data.get("mode")
+            logger.info(f"TrayIntegration: app.mode_changed received mode={getattr(new_mode,'value',new_mode)}")
+            logger.debug(f"TrayIntegration: app.mode_changed received data={data}, parsed new_mode={new_mode}")
             if new_mode in self.mode_to_status:
                 target_status = self.mode_to_status[new_mode]
+                logger.debug(f"TrayIntegration: mapping mode -> status: {new_mode} -> {target_status}")
                 await self._update_tray_status(target_status)
                 
                 # Публикуем событие обновления статуса
@@ -242,6 +250,33 @@ class TrayControllerIntegration:
             logger.error(f"❌ Ошибка обработки события клавиатуры: {e}")
             import traceback
             logger.debug(f"Стектрейс: {traceback.format_exc()}")
+
+    async def _on_voice_mic_opened(self, event):
+        """Иконка LISTENING при открытии микрофона"""
+        try:
+            await self._update_tray_status(TrayStatus.LISTENING)
+            await self.event_bus.publish("tray.status_updated", {
+                "status": TrayStatus.LISTENING.value,
+                "reason": "voice.mic_opened",
+                "integration": "tray_controller"
+            })
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки voice.mic_opened: {e}")
+
+    async def _on_voice_mic_closed(self, event):
+        """Иконка PROCESSING/SLEEPING в зависимости от режима после закрытия микрофона"""
+        try:
+            mode = self.state_manager.get_current_mode()
+            target = self.mode_to_status.get(mode, TrayStatus.SLEEPING)
+            await self._update_tray_status(target)
+            await self.event_bus.publish("tray.status_updated", {
+                "status": target.value,
+                "mode": getattr(mode, 'value', str(mode)),
+                "reason": "voice.mic_closed",
+                "integration": "tray_controller"
+            })
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки voice.mic_closed: {e}")
     
     async def _on_app_startup(self, event):
         """Обработка запуска приложения"""

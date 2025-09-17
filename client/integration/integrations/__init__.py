@@ -5,12 +5,14 @@ Integrations Module
 """
 
 from .input_processing_integration import InputProcessingIntegration
+from .voice_recognition_integration import VoiceRecognitionIntegration
 from .tray_controller_integration import TrayControllerIntegration
 # from .permissions_integration import PermissionsIntegration  # Временно отключено
 # from .network_manager_integration import NetworkManagerIntegration  # Временно отключено
 
 __all__ = [
     'InputProcessingIntegration',
+    'VoiceRecognitionIntegration',
     'TrayControllerIntegration',
     # 'PermissionsIntegration',  # Временно отключено
     # 'NetworkManagerIntegration'  # Временно отключено

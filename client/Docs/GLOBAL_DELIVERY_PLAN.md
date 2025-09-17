@@ -22,7 +22,7 @@
 **Цель**: стабильный UX и полный пользовательский цикл S→L→P→S.
 
 - 1.1 Tray стабилизация
-  - Действия: подписка на `app.mode_changed`; индикация S/L/P; текст статуса; позже — `network.status_changed`.
+  - Действия: подписка на `app.mode_changed` и `voice.mic_opened/closed`; индикация S/L/P; текст статуса; позже — `network.status_changed`.
   - Тест‑гейт: смена режима мгновенно меняет статус в трее.
 
 - 1.2 Permissions стабилизация
@@ -42,16 +42,16 @@
   - Тест‑гейт: off/on сети → события `network.status_changed`, tray отражает.
 
 - 1.6 AudioDeviceIntegration
-  - Действия: включение/выбор микрофона в LISTENING; выключение в SLEEPING/по завершении PROCESSING.
-  - Тест‑гейт: S→L включает микрофон; L→S выключает; без утечек.
+  - Действия: выбор/мониторинг устройств (без открытия записи). Физический захват микрофона выполняет VoiceRecognitionIntegration.
+  - Тест‑гейт: корректный снапшот/переключения устройств; отсутствие «already running».
 
 - 1.7 InterruptManagementIntegration
   - Действия: `short_press`/ошибка/timeout → безопасный возврат в SLEEPING; останов активных потоков.
   - Тест‑гейт: прерывание из LISTENING/PROCESSING всегда завершает корректно.
 
 - 1.8 VoiceRecognitionIntegration (LISTENING)
-  - Действия: старт распознавания при входе в LISTENING; публикация текста/ошибки/timeout.
-  - Тест‑гейт: есть распознанный текст или корректный timeout/ошибка.
+  - Действия: PRESS → `voice.recording_start` → реальное `start_listening()`; RELEASE → мгновенный `voice.mic_closed` (UI), затем результат (`voice.recognition_completed/failed`).
+  - Тест‑гейт: реальное распознавание работает; события приходят в правильном порядке; нет дублей.
 
 - 1.9 ScreenshotCaptureIntegration (PROCESSING)
   - Действия: захват скриншота при входе в PROCESSING; обработка ошибок разрешения.

@@ -199,6 +199,14 @@ class UnifiedConfigLoader:
         """Получает настройки распознавания речи"""
         config = self._load_config()
         return config['stt']
+
+    def get_stt_language(self, default: str = "en-US") -> str:
+        """Получает язык распознавания речи (централизованно)"""
+        try:
+            stt = self.get_stt_config()
+            return stt.get('language', default) or default
+        except Exception:
+            return default
     
     def get_screen_capture_config(self) -> Dict[str, Any]:
         """Получает настройки захвата экрана"""

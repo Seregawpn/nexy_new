@@ -13,9 +13,9 @@ from modules.input_processing.keyboard.keyboard_monitor import KeyboardMonitor
 from modules.input_processing.keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
 
 # Импорты интеграции
-from core.event_bus import EventBus, EventPriority
-from core.state_manager import ApplicationStateManager, AppMode
-from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +152,7 @@ class InputProcessingIntegration:
                     self.state_manager.set_mode(AppMode.LISTENING)
                 logger.info("PRESS: режим установлен LISTENING")
 
-            # Публикуем событие смены режима для интеграций (трей и т.д.)
-            try:
-                await self.event_bus.publish("app.mode_changed", {"mode": AppMode.LISTENING})
-            except Exception as e:
-                logger.debug(f"PRESS: не удалось опубликовать app.mode_changed: {e}")
+            # Смена режима публикуется централизованно через ApplicationStateManager
         except Exception as e:
             await self.error_handler.handle_error(
                 severity=ErrorSeverity.MEDIUM,
@@ -200,11 +196,13 @@ class InputProcessingIntegration:
             if self.keyboard_monitor:
                 # Передаем основной event loop для корректной работы async колбэков
                 import asyncio
-                # В идеале сюда пробрасывается общий background loop
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
+                # Используем loop из EventBus (фоновый), если доступен
+                loop = getattr(self.event_bus, "_loop", None)
+                if not loop:
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
                 if loop:
                     self.keyboard_monitor.set_loop(loop)
                 self.keyboard_monitor.start_monitoring()
@@ -269,18 +267,6 @@ class InputProcessingIntegration:
             )
             logger.debug("SHORT_PRESS: опубликовано")
 
-            # Короткое нажатие считается прерыванием: останавливаем запись и возвращаемся в SLEEPING
-            logger.debug("SHORT_PRESS: останавливаем запись (voice.recording_stop)")
-            await self.event_bus.publish(
-                "voice.recording_stop",
-                {
-                    "source": "keyboard",
-                    "timestamp": event.timestamp,
-                    "duration": event.duration,
-                    "session_id": self._current_session_id,
-                }
-            )
-
             # Переключаем режим в SLEEPING
             if hasattr(self.state_manager, 'set_mode'):
                 if asyncio.iscoroutinefunction(self.state_manager.set_mode):
@@ -289,11 +275,7 @@ class InputProcessingIntegration:
                     self.state_manager.set_mode(AppMode.SLEEPING)
                 logger.info("SHORT_PRESS: режим установлен SLEEPING")
 
-            # Публикуем смену режима для UI
-            try:
-                await self.event_bus.publish("app.mode_changed", {"mode": AppMode.SLEEPING})
-            except Exception as e:
-                logger.debug(f"SHORT_PRESS: не удалось опубликовать app.mode_changed: {e}")
+            # Смена режима публикуется централизованно через ApplicationStateManager
 
             # Сбрасываем текущую сессию
             self._current_session_id = None
@@ -365,34 +347,16 @@ class InputProcessingIntegration:
             )
             logger.debug("RELEASE: voice.recording_stop опубликовано")
 
-            # Мгновенное решение на отпускании: используем флаг распознавания текущей сессии
-            recognized = bool(self._session_recognized)
-            logger.info(f"RELEASE: recognized={recognized}")
-
-            # Переключаем состояние в зависимости от результата
+            # На отпускании всегда переходим в PROCESSING (иконка жёлтая, "думает")
             if hasattr(self.state_manager, 'set_mode'):
-                logger.debug("RELEASE: вызываем state_manager.set_mode")
-                if recognized:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.PROCESSING)
-                    else:
-                        self.state_manager.set_mode(AppMode.PROCESSING)
-                    logger.info("RELEASE: режим установлен PROCESSING")
+                logger.debug("RELEASE: вызываем state_manager.set_mode(PROCESSING)")
+                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                    await self.state_manager.set_mode(AppMode.PROCESSING)
                 else:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.SLEEPING)
-                    else:
-                        self.state_manager.set_mode(AppMode.SLEEPING)
-                    logger.info("RELEASE: режим установлен SLEEPING")
+                    self.state_manager.set_mode(AppMode.PROCESSING)
+                logger.info("RELEASE: режим установлен PROCESSING")
 
-            # Публикуем событие смены режима, чтобы обновить UI
-            try:
-                await self.event_bus.publish(
-                    "app.mode_changed",
-                    {"mode": AppMode.PROCESSING if recognized else AppMode.SLEEPING}
-                )
-            except Exception as e:
-                logger.debug(f"RELEASE: не удалось опубликовать app.mode_changed: {e}")
+            # Смена режима публикуется централизованно через ApplicationStateManager
 
             # Сбрасываем сессию
             self._current_session_id = None

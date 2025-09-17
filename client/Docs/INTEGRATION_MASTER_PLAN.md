@@ -3,14 +3,24 @@
 ## 📊 ОБЩАЯ ИНФОРМАЦИЯ
 
 **Дата создания:** 15 сентября 2025  
-**Дата обновления:** 16 сентября 2025 (обновлено после PTT/Network/Audio/Interrupt/Status)  
-**Версия:** 2.4.0  
-**Статус:** В процессе (10 ИНТЕГРАЦИЙ ЗАВЕРШЕНЫ)  
+**Дата обновления:** 17 сентября 2025 (PTT завершён, VoiceRecognition интегрирован, устранены дубли)  
+**Версия:** 2.4.1  
+**Статус:** В процессе (11 ИНТЕГРАЦИЙ ЗАВЕРШЕНЫ)  
 **Автор:** Nexy Team  
 
 > Примечание: Концепция продукта вынесена в отдельный документ: `client/Docs/PRODUCT_CONCEPT.md`. Данный файл сфокусирован на плане интеграции и реализации.
 
-### Δ Addendum 2025‑09‑16 (PTT, события, приоритеты, статус)
+### Δ Addendum 2025‑09‑17 (PTT завершён, события, анти‑дубли)
+
+- VoiceRecognitionIntegration реализован (реальный захват; simulate=false):
+  - PRESS → `voice.recording_start` → `voice.recognition_started` + `voice.mic_opened` → запись
+  - RELEASE → немедленный `voice.mic_closed` (UI), в фоне `stop_listening()` → `voice.recognition_completed/failed`
+- TrayControllerIntegration подписан на `voice.mic_opened/closed` для точной индикации LISTENING/PROCESSING/SLEEPING.
+- Убраны дубли публикации `app.mode_changed` из InputProcessing — теперь только через `ApplicationStateManager.set_mode`.
+- InputProcessing SHORT_PRESS больше не публикует `voice.recording_stop` — отмена идёт через `keyboard.short_press`.
+- AudioDeviceIntegration не стартует менеджер в `initialize()` (только в `start()`), убрано «already running».
+- PermissionsIntegration: анти‑спам (разблокировка публикуется только при смене состояния).
+- Конфиг: `integrations.voice_recognition.simulate: false` активирован.
 
 - Push‑to‑Talk (PTT) реализован в `InputProcessingIntegration`:
   - PRESS (≥1.0s) → режим LISTENING + событие `voice.recording_start(session_id)`
@@ -56,7 +66,7 @@ client/
 │   │   ├── update_manager_integration.py     # ✅ Готов и работает (НОВЫЙ!)
 │   │   ├── network_manager_integration.py    ✅ Готов и работает
 │   │   ├── audio_device_integration.py       ✅ Готов и работает
-│   │   ├── voice_recognition_integration.py  ← СОЗДАТЬ (КРИТИЧЕСКИЙ ПРИОРИТЕТ)
+│   │   ├── voice_recognition_integration.py  ✅ Готов и работает (PTT завершён)
 │   │   ├── grpc_client_integration.py        ← СОЗДАТЬ (ПРИОРИТЕТ 3)
 │   │   ├── speech_playback_integration.py    ← СОЗДАТЬ (ПРИОРИТЕТ 4)
 │   │   ├── interrupt_management_integration.py ✅ Готов и работает
@@ -130,10 +140,10 @@ client/
 6. **Объединение модулей** ✅ - все модули в единой структуре `/client/modules/`
 
 ### ❌ **ЧТО ОТСУТСТВУЕТ (следующие приоритеты):**
-1. **`network_manager_integration.py`** ❌ - нужно создать
-2. **`audio_device_integration.py`** ❌ - нужно создать
-3. **`voice_recognition_integration.py`** ❌ - нужно создать
-4. **Workflows** ❌ - только `sleeping_workflow.py`
+1. **Workflows** ❌ - формализовать `listening_workflow.py`/`processing_workflow.py`
+2. **ScreenshotCaptureIntegration** ❌ - реализовать
+3. **GrpcClientIntegration** ❌ - реализовать
+4. **SpeechPlaybackIntegration** ❌ - реализовать
 
 ### ✅ **ЧТО РАБОТАЕТ ПРАВИЛЬНО:**
 1. **`SimpleModuleCoordinator`** - работает только с интеграциями

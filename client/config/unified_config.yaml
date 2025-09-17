@@ -176,6 +176,13 @@ integrations:
     disable_microphone_on_sleeping: true
     disable_microphone_on_processing: true
   
+  voice_recognition:
+    simulate: false
+    timeout_sec: 10.0
+    simulate_success_rate: 0.7
+    simulate_min_delay_sec: 1.0
+    simulate_max_delay_sec: 3.0
+  
   interrupt_management:
     max_concurrent_interrupts: 5
     interrupt_timeout: 10.0

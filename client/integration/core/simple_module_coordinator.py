@@ -18,6 +18,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from integrations.tray_controller_integration import TrayControllerIntegration
 from modules.tray_controller.core.tray_types import TrayConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
+from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
 from integrations.permissions_integration import PermissionsIntegration
 from modules.permissions.core.types import PermissionConfig
 from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
@@ -59,6 +60,9 @@ class SimpleModuleCoordinator:
         # Состояние
         self.is_initialized = False
         self.is_running = False
+        # Фоновый asyncio loop и поток для асинхронных интеграций
+        self._bg_loop = None
+        self._bg_thread = None
         
     async def initialize(self) -> bool:
         """Инициализация всех компонентов и интеграций"""
@@ -76,8 +80,18 @@ class SimpleModuleCoordinator:
             self.error_handler = ErrorHandler(self.event_bus)
             print("✅ Core компоненты созданы")
             
+            # 1.1 Запускаем фоновый asyncio loop (для EventBus/интеграций)
+            self._start_background_loop()
+
             # 2. Создаем интеграции
             print("🔧 Создание интеграций...")
+            # Прикрепляем EventBus к StateManager, чтобы централизованно публиковать смену режимов
+            try:
+                self.state_manager.attach_event_bus(self.event_bus)
+                # Фиксируем основной loop в EventBus
+                self.event_bus.attach_loop(self._bg_loop)
+            except Exception:
+                pass
             await self._create_integrations()
             print("✅ Интеграции созданы")
             
@@ -227,7 +241,31 @@ class SimpleModuleCoordinator:
                 config=interrupt_config
             )
             
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt")
+            # Voice Recognition Integration - конфигурация по умолчанию/из unified_config
+            try:
+                vrec_cfg_raw = config_data['integrations'].get('voice_recognition', {})
+                # Централизованный язык: берем из STT
+                language = self.config.get_stt_language("en-US")
+                vrec_config = VoiceRecognitionConfig(
+                    timeout_sec=vrec_cfg_raw.get('timeout_sec', 10.0),
+                    simulate=vrec_cfg_raw.get('simulate', True),
+                    simulate_success_rate=vrec_cfg_raw.get('simulate_success_rate', 0.7),
+                    simulate_min_delay_sec=vrec_cfg_raw.get('simulate_min_delay_sec', 1.0),
+                    simulate_max_delay_sec=vrec_cfg_raw.get('simulate_max_delay_sec', 3.0),
+                    language=language,
+                )
+            except Exception:
+                # Fallback с централизованным языком
+                vrec_config = VoiceRecognitionConfig(language=self.config.get_stt_language("en-US"))
+
+            self.integrations['voice_recognition'] = VoiceRecognitionIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=vrec_config,
+            )
+
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")
@@ -329,6 +367,14 @@ class SimpleModuleCoordinator:
             
             self.is_running = False
             print("✅ Все интеграции остановлены")
+            # Останавливаем фоновый loop
+            try:
+                if self._bg_loop and self._bg_loop.is_running():
+                    self._bg_loop.call_soon_threadsafe(self._bg_loop.stop)
+                if self._bg_thread:
+                    self._bg_thread.join(timeout=1.0)
+            except Exception:
+                pass
             return True
             
         except Exception as e:
@@ -408,15 +454,9 @@ class SimpleModuleCoordinator:
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""
         try:
-            # EventBus передает события как dict: {"type", "data", "timestamp"}
-            if isinstance(event, dict):
-                data = event.get("data") or {}
-                new_mode = data.get("mode", None)
-            else:
-                # fallback на объектный стиль (на всякий случай)
-                data = getattr(event, "data", {}) or {}
-                new_mode = data.get("mode", None)
-
+            from integration.core.event_utils import event_data
+            data = event_data(event)
+            new_mode = data.get("mode", None)
             printable_mode = getattr(new_mode, "value", None) or str(new_mode) if new_mode is not None else "unknown"
             print(f"🔄 Координация смены режима: {printable_mode}")
             
@@ -429,11 +469,8 @@ class SimpleModuleCoordinator:
     async def _on_keyboard_event(self, event):
         """Обработка событий клавиатуры"""
         try:
-            # EventBus передает dict с ключом "type"
-            if isinstance(event, dict):
-                event_type = event.get("type", "unknown")
-            else:
-                event_type = getattr(event, "event_type", "unknown")
+            from integration.core.event_utils import event_type as _etype
+            event_type = _etype(event, "unknown")
             print(f"⌨️ Координация события клавиатуры: {event_type}")
             
             # Делегируем обработку интеграциям
@@ -457,3 +494,19 @@ class SimpleModuleCoordinator:
                 for name, integration in self.integrations.items()
             }
         }
+
+    def _start_background_loop(self):
+        """Запускает отдельный поток с asyncio loop, чтобы не блокироваться на app.run()."""
+        import asyncio, threading
+        if self._bg_loop and self._bg_thread:
+            return
+        self._bg_loop = asyncio.new_event_loop()
+        def _runner():
+            asyncio.set_event_loop(self._bg_loop)
+            try:
+                self._bg_loop.run_forever()
+            finally:
+                self._bg_loop.close()
+        self._bg_thread = threading.Thread(target=_runner, name="nexy-bg-loop", daemon=True)
+        self._bg_thread.start()
+        print("🧵 Фоновый asyncio loop запущен для EventBus/интеграций")

@@ -4,6 +4,7 @@ ApplicationStateManager - Управление состоянием прилож
 
 import logging
 from typing import Dict, Any, Optional
+import threading
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,20 @@ class ApplicationStateManager:
         self.previous_mode = None
         self.mode_history = []
         self.state_data = {}
+        # EventBus (необязателен). Устанавливается координатором.
+        self._event_bus = None
+        self._loop = None  # основной asyncio loop, на который публикуем события
+
+    def attach_event_bus(self, event_bus):
+        """Прикрепить EventBus для публикации событий смены режима"""
+        self._event_bus = event_bus
+        try:
+            import asyncio
+            # Сохраняем текущий running loop как основной для публикаций
+            self._loop = asyncio.get_running_loop()
+            logger.debug(f"StateManager: attached EventBus with loop={id(self._loop)} running={self._loop.is_running() if self._loop else False}")
+        except Exception:
+            self._loop = None
         
     def set_mode(self, mode: AppMode):
         """Установить режим приложения"""
@@ -43,6 +58,28 @@ class ApplicationStateManager:
                     self.mode_history.pop(0)
                 
                 logger.info(f"🔄 Режим изменен: {self.previous_mode.value} → {mode.value}")
+
+                # Публикуем централизованные события (если EventBus подключен)
+                if self._event_bus is not None:
+                    try:
+                        import asyncio
+                        logger.debug(f"StateManager: publishing mode events via EventBus (loop_main={id(self._loop) if self._loop else None})")
+                        async def _publish_changes():
+                            logger.debug(f"StateManager: -> publish app.mode_changed: {mode}")
+                            await self._event_bus.publish("app.mode_changed", {"mode": mode})
+                            logger.debug(f"StateManager: -> publish app.state_changed: {self.previous_mode} -> {mode}")
+                            await self._event_bus.publish("app.state_changed", {
+                                "old_mode": self.previous_mode,
+                                "new_mode": mode
+                            })
+                        # Публикуем всегда на сохранённый основной loop, если он есть и живой
+                        if self._loop is not None and self._loop.is_running():
+                            asyncio.run_coroutine_threadsafe(_publish_changes(), self._loop)
+                        else:
+                            # Fallback: синхронно в текущем потоке
+                            asyncio.run(_publish_changes())
+                    except Exception as e:
+                        logger.debug(f"Не удалось опубликовать события смены режима: {e}")
             
         except Exception as e:
             logger.error(f"❌ Ошибка установки режима: {e}")

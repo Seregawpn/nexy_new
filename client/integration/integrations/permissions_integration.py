@@ -16,9 +16,9 @@ from modules.permissions.core.types import PermissionEvent, PermissionConfig
 from config.unified_config_loader import UnifiedConfigLoader
 
 # Импорты интеграции
-from core.event_bus import EventBus, EventPriority
-from core.state_manager import ApplicationStateManager, AppMode
-from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from integration.core.event_bus import EventBus, EventPriority
+from integration.core.state_manager import ApplicationStateManager, AppMode
+from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,8 @@ class PermissionsIntegration:
             PermissionType.SCREEN_CAPTURE,
             PermissionType.NETWORK
         }
+        # Текущее состояние блокировки приложения (для устранения дублей событий)
+        self._app_blocked: Optional[bool] = None
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
@@ -253,11 +255,15 @@ class PermissionsIntegration:
                 }
             })
             
-            # Если критичные разрешения не предоставлены, блокируем приложение
+            # Избегаем дублей: вызываем блокировку/разблокировку только при смене состояния
             if not critical_granted:
-                await self._block_application()
+                if self._app_blocked is not True:
+                    await self._block_application()
+                    self._app_blocked = True
             else:
-                await self._unblock_application()
+                if self._app_blocked is not False:
+                    await self._unblock_application()
+                    self._app_blocked = False
             
         except Exception as e:
             logger.error(f"❌ Ошибка проверки критичных разрешений: {e}")
