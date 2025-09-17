@@ -63,23 +63,30 @@ class ApplicationStateManager:
                 if self._event_bus is not None:
                     try:
                         import asyncio
-                        logger.debug(f"StateManager: publishing mode events via EventBus (loop_main={id(self._loop) if self._loop else None})")
+                        logger.info(f"🔄 StateManager: начинаем публикацию событий (EventBus подключен, loop={id(self._loop) if self._loop else None})")
                         async def _publish_changes():
-                            logger.debug(f"StateManager: -> publish app.mode_changed: {mode}")
+                            logger.info(f"🔄 StateManager: -> publish app.mode_changed: {mode}")
                             await self._event_bus.publish("app.mode_changed", {"mode": mode})
-                            logger.debug(f"StateManager: -> publish app.state_changed: {self.previous_mode} -> {mode}")
+                            logger.info(f"🔄 StateManager: -> publish app.state_changed: {self.previous_mode} -> {mode}")
                             await self._event_bus.publish("app.state_changed", {
                                 "old_mode": self.previous_mode,
                                 "new_mode": mode
                             })
                         # Публикуем всегда на сохранённый основной loop, если он есть и живой
                         if self._loop is not None and self._loop.is_running():
+                            logger.info(f"🔄 StateManager: публикуем через run_coroutine_threadsafe")
                             asyncio.run_coroutine_threadsafe(_publish_changes(), self._loop)
                         else:
+                            logger.info(f"🔄 StateManager: публикуем через asyncio.run (fallback)")
                             # Fallback: синхронно в текущем потоке
                             asyncio.run(_publish_changes())
+                        logger.info(f"✅ StateManager: события опубликованы успешно")
                     except Exception as e:
-                        logger.debug(f"Не удалось опубликовать события смены режима: {e}")
+                        logger.error(f"❌ StateManager: Не удалось опубликовать события смены режима: {e}")
+                        import traceback
+                        logger.error(f"❌ StateManager: Traceback: {traceback.format_exc()}")
+                else:
+                    logger.warning(f"⚠️ StateManager: EventBus не подключен, события не публикуются")
             
         except Exception as e:
             logger.error(f"❌ Ошибка установки режима: {e}")

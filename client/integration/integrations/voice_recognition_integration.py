@@ -68,6 +68,8 @@ class VoiceRecognitionIntegration:
             await self.event_bus.subscribe("voice.recording_stop", self._on_recording_stop, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_cancel_request, EventPriority.CRITICAL)
             await self.event_bus.subscribe("interrupt.request", self._on_cancel_request, EventPriority.CRITICAL)
+            # Гарантированно закрываем прослушивание при выходе из LISTENING
+            await self.event_bus.subscribe("app.mode_changed", self._on_app_mode_changed, EventPriority.MEDIUM)
 
             # Инициализация реального распознавателя, если симуляция отключена
             if not self.config.simulate and _REAL_VOICE_AVAILABLE:
@@ -228,6 +230,24 @@ class VoiceRecognitionIntegration:
             self._recording_active = False
         except Exception as e:
             logger.error(f"VOICE: error in cancel handler: {e}")
+
+    async def _on_app_mode_changed(self, event: Dict[str, Any]):
+        """Страховка: при выходе из LISTENING закрываем любое активное прослушивание"""
+        try:
+            data = (event or {}).get("data", {})
+            new_mode = data.get("mode")
+            if new_mode in (AppMode.SLEEPING, AppMode.PROCESSING):
+                # Закрываем распознавание/прослушивание, если вдруг активно
+                await self._cancel_recognition(reason="mode_changed")
+                if not self.config.simulate and self._recognizer is not None:
+                    # Пытаемся мягко отменить прослушивание (если есть такой метод)
+                    try:
+                        await self._recognizer.cancel_listening()
+                    except Exception:
+                        # Если cancel_listening недоступен — оставляем закрытие на stop_listening при release
+                        pass
+        except Exception as e:
+            logger.debug(f"VOICE: mode_changed guard failed: {e}")
 
     async def _start_recognition(self, session_id: float):
         # Публикуем старт распознавания

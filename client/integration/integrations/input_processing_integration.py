@@ -47,6 +47,7 @@ class InputProcessingIntegration:
         self.is_running = False
         self._current_session_id: Optional[float] = None
         self._session_recognized: bool = False
+        self._recording_started: bool = False
         
     async def initialize(self) -> bool:
         """Инициализация input_processing (клавиатура)"""
@@ -122,7 +123,7 @@ class InputProcessingIntegration:
             )
             raise
     async def _handle_press(self, event: KeyEvent):
-        """Начало удержания: включаем запись и переводим в LISTENING"""
+        """Начало удержания: готовим сессию, но не открываем микрофон (until LONG_PRESS)."""
         try:
             logger.info(f"🔑 PRESS EVENT: {event.timestamp} - начинаем запись")
             logger.debug(f"PRESS: session(before)={self._current_session_id}, recognized={self._session_recognized}")
@@ -131,28 +132,9 @@ class InputProcessingIntegration:
             # Создаем сессию и сбрасываем флаг распознавания
             self._current_session_id = event.timestamp or time.monotonic()
             self._session_recognized = False
+            self._recording_started = False
             logger.debug(f"PRESS: session(after)={self._current_session_id}, recognized reset to {self._session_recognized}")
-            # Публикуем старт записи
-            await self.event_bus.publish(
-                "voice.recording_start",
-                {
-                    "source": "keyboard",
-                    "timestamp": event.timestamp,
-                    "session_id": self._current_session_id,
-                }
-            )
-            logger.debug("PRESS: voice.recording_start опубликовано")
-            
-            # Переключаем режим в LISTENING
-            if hasattr(self.state_manager, 'set_mode'):
-                logger.debug("PRESS: вызываем state_manager.set_mode(LISTENING)")
-                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                    await self.state_manager.set_mode(AppMode.LISTENING)
-                else:
-                    self.state_manager.set_mode(AppMode.LISTENING)
-                logger.info("PRESS: режим установлен LISTENING")
-
-            # Смена режима публикуется централизованно через ApplicationStateManager
+            # На PRESS ничего не запускаем: ждём LONG_PRESS, чтобы открыть микрофон
         except Exception as e:
             await self.error_handler.handle_error(
                 severity=ErrorSeverity.MEDIUM,
@@ -267,6 +249,21 @@ class InputProcessingIntegration:
             )
             logger.debug("SHORT_PRESS: опубликовано")
 
+            # В режиме Quartz SHORT_PRESS генерируется вместо RELEASE.
+            # Если запись успели начать (после LONG_PRESS), останавливаем её.
+            if self._recording_started and self._current_session_id is not None:
+                logger.debug("SHORT_PRESS: публикуем voice.recording_stop (для закрытия микрофона)")
+                await self.event_bus.publish(
+                    "voice.recording_stop",
+                    {
+                        "source": "keyboard",
+                        "timestamp": event.timestamp,
+                        "duration": event.duration,
+                        "session_id": self._current_session_id,
+                    }
+                )
+                logger.debug("SHORT_PRESS: voice.recording_stop опубликовано")
+
             # Переключаем режим в SLEEPING
             if hasattr(self.state_manager, 'set_mode'):
                 if asyncio.iscoroutinefunction(self.state_manager.set_mode):
@@ -280,6 +277,7 @@ class InputProcessingIntegration:
             # Сбрасываем текущую сессию
             self._current_session_id = None
             self._session_recognized = False
+            self._recording_started = False
             logger.debug("SHORT_PRESS: сброшены session_id и recognized")
             
         except Exception as e:
@@ -306,6 +304,28 @@ class InputProcessingIntegration:
                 }
             )
             logger.debug("LONG_PRESS: опубликовано")
+
+            # На LONG_PRESS стартуем запись и переходим в LISTENING (push-to-talk)
+            if self._current_session_id is None:
+                self._current_session_id = event.timestamp or time.monotonic()
+            if not self._recording_started:
+                await self.event_bus.publish(
+                    "voice.recording_start",
+                    {
+                        "source": "keyboard",
+                        "timestamp": event.timestamp,
+                        "session_id": self._current_session_id,
+                    }
+                )
+                self._recording_started = True
+                logger.debug("LONG_PRESS: voice.recording_start опубликовано")
+
+                if hasattr(self.state_manager, 'set_mode'):
+                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                        await self.state_manager.set_mode(AppMode.LISTENING)
+                    else:
+                        self.state_manager.set_mode(AppMode.LISTENING)
+                    logger.info("LONG_PRESS: режим установлен LISTENING")
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -334,21 +354,22 @@ class InputProcessingIntegration:
             )
             logger.debug("RELEASE: keyboard.release опубликовано")
             
-            # Останавливаем запись
-            logger.debug("RELEASE: публикуем voice.recording_stop")
-            await self.event_bus.publish(
-                "voice.recording_stop",
-                {
-                    "source": "keyboard",
-                    "timestamp": event.timestamp,
-                    "duration": event.duration,
-                    "session_id": self._current_session_id,
-                }
-            )
-            logger.debug("RELEASE: voice.recording_stop опубликовано")
+            # Останавливаем запись, только если она была начата (после LONG_PRESS)
+            if self._recording_started and self._current_session_id is not None:
+                logger.debug("RELEASE: публикуем voice.recording_stop")
+                await self.event_bus.publish(
+                    "voice.recording_stop",
+                    {
+                        "source": "keyboard",
+                        "timestamp": event.timestamp,
+                        "duration": event.duration,
+                        "session_id": self._current_session_id,
+                    }
+                )
+                logger.debug("RELEASE: voice.recording_stop опубликовано")
 
-            # На отпускании всегда переходим в PROCESSING (иконка жёлтая, "думает")
-            if hasattr(self.state_manager, 'set_mode'):
+            # Переходим в PROCESSING только если запись велась; иначе остаёмся в текущем режиме (обычно SLEEPING)
+            if self._recording_started and hasattr(self.state_manager, 'set_mode'):
                 logger.debug("RELEASE: вызываем state_manager.set_mode(PROCESSING)")
                 if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                     await self.state_manager.set_mode(AppMode.PROCESSING)
@@ -361,6 +382,7 @@ class InputProcessingIntegration:
             # Сбрасываем сессию
             self._current_session_id = None
             self._session_recognized = False
+            self._recording_started = False
             logger.debug("RELEASE: сброшены session_id и recognized")
             
         except Exception as e:

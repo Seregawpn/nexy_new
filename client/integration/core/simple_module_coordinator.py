@@ -28,6 +28,7 @@ from integrations.audio_device_integration import AudioDeviceIntegration
 from modules.audio_device_manager.core.types import AudioDeviceManagerConfig
 from integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
+from integrations.screenshot_capture_integration import ScreenshotCaptureIntegration
 
 # Импорты core компонентов
 from integration.core.event_bus import EventBus, EventPriority
@@ -240,6 +241,13 @@ class SimpleModuleCoordinator:
                 error_handler=self.error_handler,
                 config=interrupt_config
             )
+
+            # Screenshot Capture Integration (PROCESSING)
+            self.integrations['screenshot_capture'] = ScreenshotCaptureIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+            )
             
             # Voice Recognition Integration - конфигурация по умолчанию/из unified_config
             try:
@@ -265,7 +273,7 @@ class SimpleModuleCoordinator:
                 config=vrec_config,
             )
 
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition")
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")
@@ -293,11 +301,18 @@ class SimpleModuleCoordinator:
             await self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.HIGH)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
             await self.event_bus.subscribe("app.mode_changed", self._on_mode_changed, EventPriority.MEDIUM)
-            
+
             # Подписываемся на события клавиатуры
             await self.event_bus.subscribe("keyboard.long_press", self._on_keyboard_event, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.release", self._on_keyboard_event, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_keyboard_event, EventPriority.HIGH)
+
+            # Подписываемся на события скриншота для логирования
+            try:
+                await self.event_bus.subscribe("screenshot.captured", self._on_screenshot_captured, EventPriority.MEDIUM)
+                await self.event_bus.subscribe("screenshot.error", self._on_screenshot_error, EventPriority.MEDIUM)
+            except Exception:
+                pass
             
             print("✅ Координация настроена")
             
@@ -478,7 +493,32 @@ class SimpleModuleCoordinator:
             
         except Exception as e:
             print(f"❌ Ошибка обработки события клавиатуры: {e}")
-    
+            
+    async def _on_screenshot_captured(self, event):
+        """Логирование результата захвата скриншота"""
+        try:
+            data = (event or {}).get("data", {})
+            path = data.get("image_path")
+            width = data.get("width")
+            height = data.get("height")
+            size_bytes = data.get("size_bytes")
+            session_id = data.get("session_id")
+            print(f"🖼️ Screenshot captured: {path} ({width}x{height}, {size_bytes} bytes), session={session_id}")
+            logger.info(f"Screenshot captured: path={path}, size={size_bytes}, dims={width}x{height}, session={session_id}")
+        except Exception as e:
+            logger.debug(f"Failed to log screenshot.captured: {e}")
+
+    async def _on_screenshot_error(self, event):
+        """Логирование ошибок захвата скриншота"""
+        try:
+            data = (event or {}).get("data", {})
+            err = data.get("error")
+            session_id = data.get("session_id")
+            print(f"🖼️ Screenshot error: {err}, session={session_id}")
+            logger.warning(f"Screenshot error: {err}, session={session_id}")
+        except Exception as e:
+            logger.debug(f"Failed to log screenshot.error: {e}")
+
     def get_status(self) -> Dict[str, Any]:
         """Получить статус всех компонентов"""
         return {

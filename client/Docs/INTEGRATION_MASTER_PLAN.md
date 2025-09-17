@@ -13,19 +13,19 @@
 ### Δ Addendum 2025‑09‑17 (PTT завершён, события, анти‑дубли)
 
 - VoiceRecognitionIntegration реализован (реальный захват; simulate=false):
-  - PRESS → `voice.recording_start` → `voice.recognition_started` + `voice.mic_opened` → запись
-  - RELEASE → немедленный `voice.mic_closed` (UI), в фоне `stop_listening()` → `voice.recognition_completed/failed`
+  - LONG_PRESS → `voice.recording_start` → `voice.recognition_started` + `voice.mic_opened` → запись
+  - RELEASE → `voice.recording_stop` (UI закрывает микрофон через `voice.mic_closed`), затем `stop_listening()` → `voice.recognition_completed/failed`
 - TrayControllerIntegration подписан на `voice.mic_opened/closed` для точной индикации LISTENING/PROCESSING/SLEEPING.
 - Убраны дубли публикации `app.mode_changed` из InputProcessing — теперь только через `ApplicationStateManager.set_mode`.
-- InputProcessing SHORT_PRESS больше не публикует `voice.recording_stop` — отмена идёт через `keyboard.short_press`.
+- InputProcessing: SHORT_PRESS публикует `voice.recording_stop` только если запись начата (после LONG_PRESS); иначе просто возврат в SLEEPING и сброс сессии.
 - AudioDeviceIntegration не стартует менеджер в `initialize()` (только в `start()`), убрано «already running».
 - PermissionsIntegration: анти‑спам (разблокировка публикуется только при смене состояния).
 - Конфиг: `integrations.voice_recognition.simulate: false` активирован.
 
 - Push‑to‑Talk (PTT) реализован в `InputProcessingIntegration`:
-  - PRESS (≥1.0s) → режим LISTENING + событие `voice.recording_start(session_id)`
-  - RELEASE → немедленный переход в PROCESSING (остановка записи); далее `VoiceRecognitionIntegration` завершает распознавание и публикует результат/ошибку (при ошибке/timeout → SLEEPING)
-  - `long_press_threshold` теперь 1.0s
+  - LONG_PRESS (≥1.0s) → режим LISTENING + событие `voice.recording_start(session_id)`
+  - RELEASE → `voice.recording_stop` и переход в PROCESSING; далее `VoiceRecognitionIntegration` завершает распознавание и публикует результат/ошибку (при ошибке/timeout → SLEEPING)
+  - `long_press_threshold` теперь 1.0s (настраивается)
 - Контракты событий (EventBus):
   - `voice.recording_start/stop` обязательно публикуют `session_id`
   - Распознавание публикует `voice.recognition_completed(session_id, text)` либо `voice.recognition_failed(session_id)`
@@ -71,7 +71,7 @@ client/
 │   │   ├── speech_playback_integration.py    ← СОЗДАТЬ (ПРИОРИТЕТ 4)
 │   │   ├── interrupt_management_integration.py ✅ Готов и работает
 │   │   ├── hardware_id_integration.py        ← СОЗДАТЬ (ПРИОРИТЕТ 5)
-│   │   ├── screenshot_capture_integration.py ← СОЗДАТЬ (ПРИОРИТЕТ 2)
+│   │   ├── screenshot_capture_integration.py ✅ Готов и интегрирован (триггер: `voice.recording_stop`)
 │   │   └── mode_management_integration.py    ← СОЗДАТЬ (ПРИОРИТЕТ 6)
 │   └── workflows/                    # Бизнес-логика
 │       ├── sleeping_workflow.py      # ✅ Готов

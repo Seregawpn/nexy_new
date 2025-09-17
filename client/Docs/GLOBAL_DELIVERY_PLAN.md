@@ -50,11 +50,11 @@
   - Тест‑гейт: прерывание из LISTENING/PROCESSING всегда завершает корректно.
 
 - 1.8 VoiceRecognitionIntegration (LISTENING)
-  - Действия: PRESS → `voice.recording_start` → реальное `start_listening()`; RELEASE → мгновенный `voice.mic_closed` (UI), затем результат (`voice.recognition_completed/failed`).
+  - Действия: LONG_PRESS → `voice.recording_start` → реальное `start_listening()`; RELEASE → `voice.recording_stop` (UI обновляется через `voice.mic_closed`), затем результат (`voice.recognition_completed/failed`). Короткий тап (SHORT_PRESS) возвращает в SLEEPING без открытия микрофона.
   - Тест‑гейт: реальное распознавание работает; события приходят в правильном порядке; нет дублей.
 
 - 1.9 ScreenshotCaptureIntegration (PROCESSING)
-  - Действия: захват скриншота при входе в PROCESSING; обработка ошибок разрешения.
+  - Действия: захват скриншота по событию `voice.recording_stop` (совпадает с переходом в PROCESSING); оптимизация размера; обработка ошибок разрешений.
   - Тест‑гейт: скрин получен; отказ — событие ошибки.
 
 - 1.10 GrpcClientIntegration (PROCESSING)
