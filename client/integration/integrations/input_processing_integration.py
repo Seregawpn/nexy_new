@@ -268,6 +268,37 @@ class InputProcessingIntegration:
                 }
             )
             logger.debug("SHORT_PRESS: опубликовано")
+
+            # Короткое нажатие считается прерыванием: останавливаем запись и возвращаемся в SLEEPING
+            logger.debug("SHORT_PRESS: останавливаем запись (voice.recording_stop)")
+            await self.event_bus.publish(
+                "voice.recording_stop",
+                {
+                    "source": "keyboard",
+                    "timestamp": event.timestamp,
+                    "duration": event.duration,
+                    "session_id": self._current_session_id,
+                }
+            )
+
+            # Переключаем режим в SLEEPING
+            if hasattr(self.state_manager, 'set_mode'):
+                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
+                    await self.state_manager.set_mode(AppMode.SLEEPING)
+                else:
+                    self.state_manager.set_mode(AppMode.SLEEPING)
+                logger.info("SHORT_PRESS: режим установлен SLEEPING")
+
+            # Публикуем смену режима для UI
+            try:
+                await self.event_bus.publish("app.mode_changed", {"mode": AppMode.SLEEPING})
+            except Exception as e:
+                logger.debug(f"SHORT_PRESS: не удалось опубликовать app.mode_changed: {e}")
+
+            # Сбрасываем текущую сессию
+            self._current_session_id = None
+            self._session_recognized = False
+            logger.debug("SHORT_PRESS: сброшены session_id и recognized")
             
         except Exception as e:
             await self.error_handler.handle_error(
