@@ -17,6 +17,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 # Импорты интеграций (НЕ модулей напрямую!)
 from integrations.tray_controller_integration import TrayControllerIntegration
 from integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
+from integrations.grpc_client_integration import GrpcClientIntegration
 from modules.tray_controller.core.tray_types import TrayConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
 from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
@@ -282,7 +283,14 @@ class SimpleModuleCoordinator:
                 config=vrec_config,
             )
 
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture")
+            # Grpc Client Integration
+            self.integrations['grpc'] = GrpcClientIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+            )
+
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture, grpc")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

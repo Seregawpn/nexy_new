@@ -8,6 +8,7 @@ from .input_processing_integration import InputProcessingIntegration
 from .voice_recognition_integration import VoiceRecognitionIntegration
 from .tray_controller_integration import TrayControllerIntegration
 from .hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
+from .grpc_client_integration import GrpcClientIntegration, GrpcClientIntegrationConfig
 # from .permissions_integration import PermissionsIntegration  # Временно отключено
 # from .network_manager_integration import NetworkManagerIntegration  # Временно отключено
 
@@ -17,6 +18,8 @@ __all__ = [
     'TrayControllerIntegration',
     'HardwareIdIntegration',
     'HardwareIdIntegrationConfig',
+    'GrpcClientIntegration',
+    'GrpcClientIntegrationConfig',
     # 'PermissionsIntegration',  # Временно отключено
     # 'NetworkManagerIntegration'  # Временно отключено
 ]
