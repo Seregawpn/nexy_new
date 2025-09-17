@@ -158,6 +158,22 @@ class TrayController:
                 self.tray_menu.show_notification(title, message, subtitle)
         except Exception as e:
             logger.error(f"❌ Ошибка показа уведомления: {e}")
+
+    async def update_menu_status_text(self, status_text: str):
+        """Обновить текст статуса в меню (например, Sleeping/Listening/Processing)."""
+        try:
+            if self.tray_menu:
+                self.tray_menu.update_status_text(status_text)
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления текста статуса меню: {e}")
+
+    async def update_menu_output_device(self, device_name: str):
+        """Обновить пункт меню с текущим устройством вывода."""
+        try:
+            if self.tray_menu:
+                self.tray_menu.update_output_device(device_name)
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления пункта меню Output: {e}")
     
     def set_event_callback(self, event_type: str, callback: Callable):
         """Установить обработчик событий"""

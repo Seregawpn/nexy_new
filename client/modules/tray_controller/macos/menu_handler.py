@@ -15,6 +15,9 @@ class MacOSTrayMenu:
         self.app: Optional[rumps.App] = None
         self.menu_items: List[TrayMenuItem] = []
         self.status_callbacks: Dict[str, Callable] = {}
+        # Ссылки на изменяемые пункты меню
+        self._status_item: Optional[rumps.MenuItem] = None
+        self._output_item: Optional[rumps.MenuItem] = None
     
     def create_app(self, icon_path: str) -> rumps.App:
         """Создать приложение с иконкой в трее"""
@@ -25,11 +28,17 @@ class MacOSTrayMenu:
                 quit_button=None  # Убираем стандартную кнопку выхода
             )
             
-            # Добавляем простое меню
+            # Создаём изменяемые элементы меню (статус и текущее устройство)
+            title_item = rumps.MenuItem(title="Nexy AI Assistant")
+            self._status_item = rumps.MenuItem(title="Status: Waiting")
+            self._output_item = rumps.MenuItem(title="Output: Unknown")
+
+            # Добавляем простое меню (с объектами MenuItem)
             self.app.menu = [
-                "Nexy AI Assistant",
+                title_item,
                 None,
-                "Status: Waiting",
+                self._status_item,
+                self._output_item,
                 None,
                 "Quit"
             ]
@@ -149,6 +158,24 @@ class MacOSTrayMenu:
             )
         except Exception as e:
             print(f"Ошибка показа уведомления: {e}")
+
+    def update_status_text(self, text: str):
+        """Обновить текст статуса в меню."""
+        if not self.app or not self._status_item:
+            return
+        try:
+            self._status_item.title = f"Status: {text}"
+        except Exception as e:
+            print(f"Ошибка обновления статуса меню: {e}")
+
+    def update_output_device(self, device_name: str):
+        """Обновить название текущего устройства вывода в меню."""
+        if not self.app or not self._output_item:
+            return
+        try:
+            self._output_item.title = f"Output: {device_name}"
+        except Exception as e:
+            print(f"Ошибка обновления устройства в меню: {e}")
     
     def update_icon(self, icon_path: str):
         """Обновить иконку"""

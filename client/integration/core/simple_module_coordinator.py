@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 # Импорты интеграций (НЕ модулей напрямую!)
 from integrations.tray_controller_integration import TrayControllerIntegration
+from integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
 from modules.tray_controller.core.tray_types import TrayConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
 from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
@@ -128,6 +129,14 @@ class SimpleModuleCoordinator:
     async def _create_integrations(self):
         """Создание всех интеграций"""
         try:
+            # Hardware ID Integration — должен стартовать рано, чтобы ID был доступен всем
+            self.integrations['hardware_id'] = HardwareIdIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=None  # берёт значения из unified_config.yaml при наличии
+            )
+
             # TrayController Integration - используем конфигурацию модуля
             # Конфигурация будет загружена внутри TrayControllerIntegration
             tray_config = None  # Будет создана автоматически из unified_config.yaml
@@ -311,6 +320,13 @@ class SimpleModuleCoordinator:
             try:
                 await self.event_bus.subscribe("screenshot.captured", self._on_screenshot_captured, EventPriority.MEDIUM)
                 await self.event_bus.subscribe("screenshot.error", self._on_screenshot_error, EventPriority.MEDIUM)
+            except Exception:
+                pass
+
+            # Подписываемся на события аудио для явного логирования
+            try:
+                await self.event_bus.subscribe("audio.device_switched", self._on_audio_device_switched, EventPriority.MEDIUM)
+                await self.event_bus.subscribe("audio.device_snapshot", self._on_audio_device_snapshot, EventPriority.MEDIUM)
             except Exception:
                 pass
             
@@ -518,6 +534,29 @@ class SimpleModuleCoordinator:
             logger.warning(f"Screenshot error: {err}, session={session_id}")
         except Exception as e:
             logger.debug(f"Failed to log screenshot.error: {e}")
+
+    async def _on_audio_device_switched(self, event):
+        """Логирование переключений аудио устройства."""
+        try:
+            data = (event or {}).get("data", {})
+            from_device = data.get("from_device")
+            to_device = data.get("to_device")
+            device_type = data.get("device_type")
+            print(f"🔊 Audio switched: {from_device} → {to_device} [{device_type}]")
+            logger.info(f"Audio switched: {from_device} -> {to_device} type={device_type}")
+        except Exception as e:
+            logger.debug(f"Failed to log audio.device_switched: {e}")
+
+    async def _on_audio_device_snapshot(self, event):
+        """Логирование текущего устройства при запуске."""
+        try:
+            data = (event or {}).get("data", {})
+            current = data.get("current_device")
+            device_type = data.get("device_type")
+            print(f"🔊 Audio device: {current} [{device_type}] (snapshot)")
+            logger.info(f"Audio device snapshot: {current} type={device_type}")
+        except Exception as e:
+            logger.debug(f"Failed to log audio.device_snapshot: {e}")
 
     def get_status(self) -> Dict[str, Any]:
         """Получить статус всех компонентов"""

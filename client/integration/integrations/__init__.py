@@ -7,6 +7,7 @@ Integrations Module
 from .input_processing_integration import InputProcessingIntegration
 from .voice_recognition_integration import VoiceRecognitionIntegration
 from .tray_controller_integration import TrayControllerIntegration
+from .hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
 # from .permissions_integration import PermissionsIntegration  # Временно отключено
 # from .network_manager_integration import NetworkManagerIntegration  # Временно отключено
 
@@ -14,6 +15,8 @@ __all__ = [
     'InputProcessingIntegration',
     'VoiceRecognitionIntegration',
     'TrayControllerIntegration',
+    'HardwareIdIntegration',
+    'HardwareIdIntegrationConfig',
     # 'PermissionsIntegration',  # Временно отключено
     # 'NetworkManagerIntegration'  # Временно отключено
 ]

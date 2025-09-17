@@ -172,6 +172,10 @@ class TrayControllerIntegration:
             # Подписываемся на события микрофона/распознавания для точной индикации
             await self.event_bus.subscribe("voice.mic_opened", self._on_voice_mic_opened, EventPriority.HIGH)
             await self.event_bus.subscribe("voice.mic_closed", self._on_voice_mic_closed, EventPriority.HIGH)
+            # Подписываемся на переключение аудиоустройств
+            await self.event_bus.subscribe("audio.device_switched", self._on_audio_device_switched, EventPriority.MEDIUM)
+            # Подписываемся на снапшот устройства для первичного заполнения
+            await self.event_bus.subscribe("audio.device_snapshot", self._on_audio_device_snapshot, EventPriority.MEDIUM)
             
             logger.info("✅ Обработчики событий TrayControllerIntegration настроены")
             
@@ -200,6 +204,13 @@ class TrayControllerIntegration:
             success = await self.tray_controller.update_status(status)
             if success:
                 logger.info(f"🔄 Статус трея обновлен: {status.value}")
+                # Обновляем текст статуса в меню для наглядности
+                human = {
+                    TrayStatus.SLEEPING: "Sleeping",
+                    TrayStatus.LISTENING: "Listening",
+                    TrayStatus.PROCESSING: "Processing",
+                }.get(status, status.value.title())
+                await self.tray_controller.update_menu_status_text(human)
             else:
                 logger.warning(f"⚠️ Не удалось обновить статус трея: {status.value}")
                 
@@ -277,6 +288,34 @@ class TrayControllerIntegration:
             })
         except Exception as e:
             logger.error(f"❌ Ошибка обработки voice.mic_closed: {e}")
+
+    async def _on_audio_device_switched(self, event):
+        """Отображение устройства, на которое произошло переключение."""
+        try:
+            data = (event or {}).get("data", {})
+            to_device = data.get("to_device") or data.get("device") or "Unknown"
+            device_type = data.get("device_type", "output")
+            # Обновляем пункт меню "Output: ..."
+            if self.tray_controller:
+                await self.tray_controller.update_menu_output_device(to_device)
+                # Ненавязчивая нотификация (без звука)
+                await self.tray_controller.show_notification(
+                    title="Audio device switched",
+                    message=f"Now using: {to_device}",
+                    subtitle=device_type
+                )
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки audio.device_switched: {e}")
+
+    async def _on_audio_device_snapshot(self, event):
+        """Первичное отображение текущего устройства в меню на старте."""
+        try:
+            data = (event or {}).get("data", {})
+            cur = data.get("current_device") or "Unknown"
+            if self.tray_controller:
+                await self.tray_controller.update_menu_output_device(cur)
+        except Exception as e:
+            logger.debug(f"Failed to handle audio.device_snapshot in tray: {e}")
     
     async def _on_app_startup(self, event):
         """Обработка запуска приложения"""
