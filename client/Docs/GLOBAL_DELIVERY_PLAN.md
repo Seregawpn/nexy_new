@@ -61,15 +61,29 @@
   - Действия: отправка (текст+скрин) на Azure; ретраи/backoff зависят от `network`.
   - Тест‑гейт: успешный ответ; при `DISCONNECTED` — не спамит и восстанавливается.
 
-- 1.11 SpeechPlaybackIntegration (внутри PROCESSING)
+ - 1.11 SpeechPlaybackIntegration (внутри PROCESSING) — базовая
   - Действия: воспроизведение ответа; по окончании публикует `processing.complete`.
-  - Тест‑гейт: аудио доигрывается; завершение переводит в SLEEPING.
+  - Прерывания: НЕ внедряем на этом шаге (минимально жизнеспособная реализация без отмен).
+  - Тест‑гейт: аудио доигрывается до конца; корректный переход в SLEEPING.
 
-- 1.12 FSM + Workflows (3 файла)
-  - Действия: формализовать переходы/таймауты/анти‑гонки; внедрить `sleeping_workflow.py`, `listening_workflow.py`, `processing_workflow.py` (подэтапы: capture→grpc→playback).
-  - Тест‑гейт: нет гонок; сценарии с прерыванием/таймаутами стабильны.
+ - 1.11b SpeechPlaybackInterrupts — расширение
+  - Действия: `interrupt.request{scope: playback|all}` и `keyboard.short_press` немедленно останавливают плеер → `playback.cancelled` → (врем.) `processing.complete`.
+  - Тест‑гейт: прерывание в любой момент безопасно возвращает в SLEEPING; нет гонок.
+
+- 1.12 FSM + Workflows (3 файла) + прерывания
+  - Действия: формализовать переходы/таймауты/анти‑гонки; внедрить `sleeping_workflow.py`, `listening_workflow.py`, `processing_workflow.py` (подэтапы: capture→grpc→playback) с единым протоколом прерываний.
+  - Прерывания (настройка): определить `interrupt.request{scope: voice|capture|grpc|playback|all, priority, interrupt_id, deadline_ms, reason}` и `interrupt.completed{interrupt_id, result}`; интегрировать точки отмены в каждый подпроцесс; централизованный возврат в SLEEPING через координатор.
+  - Тест‑гейт: нет гонок; стабильные сценарии с прерыванием/таймаутами во всех стадиях S/L/P.
 
 **Exit‑критерий Этапа 1**: Полный цикл S→L→P→S проходит стабильно; логика через EventBus; интеграции тонкие; логи без PII.
+
+### Последовательность внедрения (дорожная карта)
+1) ScreenshotCaptureIntegration → `screenshot.captured|error`
+2) GrpcClientIntegration → `grpc.request_*`
+3) SpeechPlaybackIntegration (базовая реализация без прерываний)
+4) SpeechPlaybackInterrupts (прерывания для плеера)
+5) Формализация `listening_workflow.py` и `processing_workflow.py`
+6) Расширение InterruptManagementIntegration (interrupt_id, дедлайны, дедуп)
 
 ---
 
