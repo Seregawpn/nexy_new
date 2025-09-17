@@ -90,7 +90,30 @@ class GrpcClientIntegration:
     async def initialize(self) -> bool:
         try:
             logger.info("Initializing GrpcClientIntegration...")
-            self._client = GrpcClient()
+            # Собираем конфигурацию gRPC из unified_config
+            try:
+                net = uc.get_network_config()
+                servers_cfg = {}
+                for name, s in net.grpc_servers.items():
+                    servers_cfg[name] = {
+                        'address': s.host,
+                        'port': s.port,
+                        'use_ssl': s.ssl,
+                        'timeout': s.timeout,
+                        'retry_attempts': s.retry_attempts,
+                        'retry_delay': s.retry_delay,
+                    }
+                client_cfg = {
+                    'servers': servers_cfg,
+                    'auto_fallback': net.auto_fallback,
+                    'connection_timeout': net.connection_check_interval,
+                    'max_retry_attempts': self.config.max_retries,
+                    'retry_delay': self.config.retry_delay_sec,
+                }
+            except Exception:
+                client_cfg = None
+
+            self._client = GrpcClient(config=client_cfg)
 
             # Подписки
             await self.event_bus.subscribe("voice.recognition_completed", self._on_voice_completed, EventPriority.HIGH)
@@ -354,4 +377,3 @@ class GrpcClientIntegration:
             "hardware_id_cached": bool(self._hardware_id),
             "inflight": list(self._inflight.keys()),
         }
-

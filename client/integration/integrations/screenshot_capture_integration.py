@@ -90,11 +90,10 @@ class ScreenshotCaptureIntegration:
 
             # Подписки на события — даже в degraded-режиме, чтобы отдавать screenshot.error
             await self.event_bus.subscribe("app.mode_changed", self._on_mode_changed, EventPriority.HIGH)
-            await self.event_bus.subscribe("app.state_changed", self._on_state_changed, EventPriority.HIGH)
             await self.event_bus.subscribe("voice.recording_stop", self._on_voice_recording_stop, EventPriority.HIGH)
             
             # Дополнительная подписка для отладки
-            logger.info("🔧 ScreenshotCapture: Подписки настроены - app.mode_changed, app.state_changed, voice.recording_stop")
+            logger.info("🔧 ScreenshotCapture: Подписки настроены - app.mode_changed, voice.recording_stop")
             # Подписки на статусы разрешений, чтобы не пытаться снимать без Screen Recording
             try:
                 await self.event_bus.subscribe("permissions.status_checked", self._on_permission_status, EventPriority.MEDIUM)

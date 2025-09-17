@@ -67,6 +67,53 @@ class ErrorHandler:
             
         except Exception as e:
             logger.error(f"❌ Ошибка в обработчике ошибок: {e}")
+
+    async def handle(self, error: Exception, category: Any = "unknown", severity: Any = "error", context: Dict[str, Any] = None):
+        """Совместимый метод обработки ошибок с гибкими типами аргументов.
+
+        Args:
+            error: Exception или строка сообщения
+            category: строка или ErrorCategory
+            severity: строка ('low'|'medium'|'high'|'critical'|'error') или ErrorSeverity
+            context: произвольный контекст
+        """
+        try:
+            # Сообщение
+            message = str(error)
+            # Severity маппинг
+            if isinstance(severity, ErrorSeverity):
+                sev = severity
+            else:
+                sev_map = {
+                    "low": ErrorSeverity.LOW,
+                    "debug": ErrorSeverity.LOW,
+                    "medium": ErrorSeverity.MEDIUM,
+                    "info": ErrorSeverity.MEDIUM,
+                    "high": ErrorSeverity.HIGH,
+                    "warning": ErrorSeverity.HIGH,
+                    "critical": ErrorSeverity.CRITICAL,
+                    "error": ErrorSeverity.CRITICAL,
+                }
+                sev = sev_map.get(str(severity).lower(), ErrorSeverity.CRITICAL)
+            # Category маппинг
+            if isinstance(category, ErrorCategory):
+                cat = category
+            else:
+                try:
+                    cat = ErrorCategory(str(category).lower())
+                except Exception:
+                    # Специфичные категории
+                    if str(category).lower() in ("network",):
+                        cat = ErrorCategory.NETWORK
+                    elif str(category).lower() in ("permission", "permissions"):
+                        cat = ErrorCategory.PERMISSION
+                    elif str(category).lower() in ("configuration", "config"):
+                        cat = ErrorCategory.CONFIGURATION
+                    else:
+                        cat = ErrorCategory.UNKNOWN
+            await self.handle_error(sev, cat, message, context or {})
+        except Exception as e:
+            logger.error(f"❌ Ошибка в handle(): {e}")
     
     def _get_log_level(self, severity: ErrorSeverity) -> int:
         """Получить уровень логирования для серьезности"""
