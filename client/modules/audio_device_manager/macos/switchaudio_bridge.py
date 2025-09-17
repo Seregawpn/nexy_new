@@ -122,8 +122,8 @@ class SwitchAudioBridge:
             # Используем switchaudio для получения списка устройств
             devices = await self._get_devices_from_switchaudio()
             
-            # Сортируем по приоритету (числовое значение)
-            devices.sort(key=lambda x: x.priority.value, reverse=True)
+            # Сортируем по приоритету (меньшее значение = выше приоритет)
+            devices.sort(key=lambda x: x.priority.value)
             
             return devices
             
@@ -353,7 +353,7 @@ class SwitchAudioBridge:
             
             # Используем SwitchAudioSource для переключения
             result = subprocess.run([
-                'SwitchAudioSource', '-s', target_device.name
+                'SwitchAudioSource', '-t', 'output', '-s', target_device.name
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:
@@ -379,7 +379,7 @@ class SwitchAudioBridge:
                 if len(part) > 3:  # Игнорируем короткие части
                     logger.info(f"🔄 Пробуем переключиться по части имени: {part}")
                     result = subprocess.run([
-                        'SwitchAudioSource', '-s', part
+                        'SwitchAudioSource', '-t', 'output', '-s', part
                     ], capture_output=True, text=True, timeout=10)
                     
                     if result.returncode == 0:
@@ -389,7 +389,7 @@ class SwitchAudioBridge:
             # Если не получилось, пробуем переключиться на встроенные динамики
             logger.info("🔄 Переключаемся на встроенные динамики...")
             result = subprocess.run([
-                'SwitchAudioSource', '-s', 'MacBook Air Speakers'
+                'SwitchAudioSource', '-t', 'output', '-s', 'MacBook Air Speakers'
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:
@@ -402,8 +402,6 @@ class SwitchAudioBridge:
         except Exception as e:
             logger.error(f"❌ Ошибка альтернативного переключения: {e}")
             return False
-
-
 
 
 

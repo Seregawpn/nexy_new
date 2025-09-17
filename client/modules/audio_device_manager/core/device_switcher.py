@@ -63,11 +63,12 @@ class DeviceSwitcher:
             
             # Сравниваем с текущим устройством
             if self.current_device:
-                if best_new_device.priority.value > self.current_device.priority.value:
+                # Меньшее числовое значение = более высокий приоритет
+                if best_new_device.priority.value < self.current_device.priority.value:
                     logger.info(f"🔄 Переключение на более приоритетное устройство: {best_new_device.name}")
                     await self._switch_to_device(best_new_device)
                 else:
-                    logger.info(f"ℹ️ Новое устройство {best_new_device.name} имеет меньший приоритет, оставляем текущее")
+                    logger.info(f"ℹ️ Новое устройство {best_new_device.name} имеет более низкий приоритет, оставляем текущее")
             else:
                 # Если нет текущего устройства, переключаемся на лучшее
                 logger.info(f"🔄 Переключение на новое устройство: {best_new_device.name}")
@@ -144,8 +145,8 @@ class DeviceSwitcher:
                 logger.warning("⚠️ Нет подходящих устройств для переключения")
                 return None
             
-            # Сортируем по приоритету (убывание)
-            sorted_devices = sorted(connected_devices, key=lambda x: x.priority.value, reverse=True)
+            # Сортируем по приоритету (меньшее значение = выше приоритет)
+            sorted_devices = sorted(connected_devices, key=lambda x: x.priority.value)
             
             best_device = sorted_devices[0]
             logger.info(f"🏆 Лучшее устройство: {best_device.name} (тип: {best_device.type.value}, приоритет: {best_device.priority})")
@@ -251,7 +252,6 @@ class DeviceSwitcher:
     def is_auto_switch_enabled(self) -> bool:
         """Проверка, включено ли автоматическое переключение"""
         return self.auto_switch_enabled
-
 
 
 

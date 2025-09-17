@@ -23,13 +23,15 @@
 - Azure VM: IP 20.151.51.172, Team ID: 5NKLL2CLB9, Bundle ID: com.nexy.assistant
 
 ### Текущий статус (КРИТИЧНО УЧИТЫВАТЬ)
-✅ ЗАВЕРШЕННЫЕ ИНТЕГРАЦИИ (10 из 12):
+✅ ЗАВЕРШЕННЫЕ ИНТЕГРАЦИИ (9 из 12):
 - TrayControllerIntegration, PermissionsIntegration, InputProcessingIntegration
 - UpdateManagerIntegration, NetworkManagerIntegration, AudioDeviceIntegration
-- InterruptManagementIntegration
+- InterruptManagementIntegration, VoiceRecognitionIntegration, ScreenshotCaptureIntegration
 
-🔥 КРИТИЧЕСКИЙ ПРИОРИТЕТ:
-- VoiceRecognitionIntegration (для завершения Push-to-Talk)
+🔥 КРИТИЧЕСКИЕ ПРИОРИТЕТЫ (правильная последовательность):
+1. HardwareIdIntegration (ОБЯЗАТЕЛЬНО для GrpcClient)
+2. GrpcClientIntegration (зависит от Hardware ID)
+3. SpeechPlaybackIntegration (зависит от GrpcClient)
 
 ## 🚫 ЗАПРЕТЫ
 - НЕ дублировать функционал существующих модулей
@@ -38,11 +40,11 @@
 - НЕ работать с модулями напрямую (только через интеграции)
 - НЕ менять Bundle ID, Team ID, структуру проекта без согласования
 
-## 🎯 ПРИОРИТЕТЫ РАЗРАБОТКИ
-1. Завершить VoiceRecognitionIntegration (критично для PTT)
-2. ScreenshotCaptureIntegration
-3. GrpcClientIntegration  
-4. SpeechPlaybackIntegration
+## 🎯 ПРИОРИТЕТЫ РАЗРАБОТКИ (ОБНОВЛЕНО)
+1. HardwareIdIntegration (КРИТИЧНО - без него GrpcClient не работает)
+2. GrpcClientIntegration (отправка данных на Azure сервер)
+3. SpeechPlaybackIntegration (завершение цикла PROCESSING → SLEEPING)
+4. ModeManagementIntegration (FSM логика)
 5. Workflows (listening_workflow.py, processing_workflow.py)
 
 ## 📝 СТИЛЬ КОДА
@@ -65,16 +67,18 @@
 - Обновлять документацию при изменениях
 
 ## 📊 ТЕКУЩИЕ ЗАДАЧИ (из INTEGRATION_MASTER_PLAN.md)
-### СЛЕДУЮЩИЙ ШАГ: VoiceRecognitionIntegration
+### СЛЕДУЮЩИЙ ШАГ: HardwareIdIntegration
 **Задачи:**
-- Создать `VoiceRecognitionIntegration` (тонкая обертка)
-- Подключить к EventBus для `voice.recording_start/stop`
-- Реализовать симуляцию распознавания для тестирования
-- Публиковать `voice.recognition_completed` с `session_id`
-- Добавить таймаут ожидания распознавания
-- Интегрировать с `InputProcessingIntegration`
+- Создать `HardwareIdIntegration` (тонкая обертка)
+- Подключить к EventBus
+- Получить hardware_id при запуске приложения (app.startup)
+- Публиковать `hardware.id_obtained` с уникальным ID
+- Кэширование ID для повторного использования
+- Интегрировать с SimpleModuleCoordinator
 
-**Тест-гейт:** PRESS → LISTENING → RELEASE → ждать → PROCESSING/SLEEPING
+**Тест-гейт:** При запуске получен hardware_id, доступен для GrpcClient
+
+**ЗАВИСИМОСТЬ:** GrpcClient требует hardware_id как обязательное поле в StreamRequest
 
 ## 🏗️ АРХИТЕКТУРНЫЕ ПРАВИЛА
 ### Структура интеграций:
