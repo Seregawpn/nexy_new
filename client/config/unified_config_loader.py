@@ -52,8 +52,13 @@ class LoggingConfig:
 class UnifiedConfigLoader:
     """Единый загрузчик конфигурации с автоматической синхронизацией"""
     
-    def __init__(self, config_file: str = "config/unified_config.yaml"):
-        self.config_file = Path(config_file)
+    def __init__(self, config_file: Optional[Union[str, Path]] = None):
+        # По умолчанию используем файл, расположенный рядом с этим модулем,
+        # чтобы не зависеть от текущего рабочего каталога запуска.
+        if config_file is None:
+            self.config_file = Path(__file__).resolve().parent / "unified_config.yaml"
+        else:
+            self.config_file = Path(config_file)
         self._config_cache: Optional[Dict[str, Any]] = None
         self._last_modified: Optional[float] = None
     

@@ -66,7 +66,7 @@ logging:
   error_file: ~/Library/Logs/Nexy/errors.log
   file: ~/Library/Logs/Nexy/app.log
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-  level: INFO
+  level: DEBUG
   loggers:
     accessibility: nexy.accessibility
     audio: nexy.audio

@@ -21,18 +21,12 @@ from modules.network_manager.core.types import NetworkEvent, NetworkStatus
 from modules.network_manager.core.network_manager import NetworkManager
 from modules.network_manager.core.config import NetworkManagerConfig
 
+# Импорт конфигурации
+from config.unified_config_loader import UnifiedConfigLoader
+
 logger = logging.getLogger(__name__)
 
-@dataclass
-class NetworkManagerIntegrationConfig:
-    """Конфигурация NetworkManagerIntegration"""
-    check_interval: float = 30.0
-    ping_timeout: float = 5.0
-    ping_hosts: list = None
-    
-    def __post_init__(self):
-        if self.ping_hosts is None:
-            self.ping_hosts = ["8.8.8.8", "1.1.1.1", "google.com"]
+# Убираем дублированную конфигурацию - используем NetworkManagerConfig из модуля
 
 class NetworkManagerIntegration:
     """Интеграция NetworkManager с EventBus и ApplicationStateManager"""
@@ -42,12 +36,29 @@ class NetworkManagerIntegration:
         event_bus: EventBus,
         state_manager: ApplicationStateManager,
         error_handler: ErrorHandler,
-        config: Optional[NetworkManagerIntegrationConfig] = None,
+        config: Optional[NetworkManagerConfig] = None,
     ):
         self.event_bus = event_bus
         self.state_manager = state_manager
         self.error_handler = error_handler
-        self.config = config or NetworkManagerIntegrationConfig()
+        
+        # Загружаем конфигурацию из unified_config.yaml
+        unified_config = UnifiedConfigLoader()
+        if config is None:
+            # Создаем конфигурацию модуля из unified_config
+            config_data = unified_config._load_config()
+            net_cfg = config_data['integrations']['network_manager']
+            
+            config = NetworkManagerConfig(
+                check_interval=net_cfg['check_interval'],
+                ping_timeout=net_cfg['ping_timeout'],
+                max_retries=3,  # из модуля
+                retry_delay=5.0,  # из модуля
+                ping_hosts=net_cfg['ping_hosts'],
+                test_urls=['https://www.google.com', 'https://www.apple.com']  # из модуля
+            )
+        
+        self.config = config
         
         # NetworkManager экземпляр
         self._manager: Optional[NetworkManager] = None

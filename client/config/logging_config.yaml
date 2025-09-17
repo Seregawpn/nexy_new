@@ -12,7 +12,7 @@ handlers:
   console_handler:
     class: logging.StreamHandler
     formatter: standard
-    level: INFO
+    level: DEBUG
     stream: ext://sys.stdout
   error_file_handler:
     backupCount: 3
@@ -28,7 +28,7 @@ handlers:
     encoding: utf8
     filename: ~/Library/Logs/Nexy/app.log
     formatter: detailed
-    level: INFO
+    level: DEBUG
     maxBytes: 10485760
 loggers:
   Nexy:
@@ -36,33 +36,33 @@ loggers:
     - file_handler
     - console_handler
     - error_file_handler
-    level: INFO
+    level: DEBUG
     propagate: false
   nexy.accessibility:
     handlers:
     - file_handler
     - console_handler
-    level: INFO
+    level: DEBUG
     propagate: false
   nexy.audio:
     handlers:
     - file_handler
-    level: INFO
+    level: DEBUG
     propagate: false
   nexy.grpc:
     handlers:
     - file_handler
-    level: INFO
+    level: DEBUG
     propagate: false
   nexy.screen_capture:
     handlers:
     - file_handler
-    level: INFO
+    level: DEBUG
     propagate: false
   nexy.stt:
     handlers:
     - file_handler
-    level: INFO
+    level: DEBUG
     propagate: false
 root:
   handlers:

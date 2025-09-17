@@ -29,13 +29,7 @@ async def main():
         # Создаем координатор
         coordinator = SimpleModuleCoordinator()
         
-        # Инициализируем
-        success = await coordinator.initialize()
-        if not success:
-            print("❌ Не удалось инициализировать координатор")
-            return
-        
-        # Запускаем
+        # Запускаем (run() сам вызовет initialize())
         await coordinator.run()
         
     except Exception as e:
@@ -54,4 +48,6 @@ if __name__ == "__main__":
         print("\n⏹️ Приложение прервано пользователем")
     finally:
         loop.close()
+
+
 

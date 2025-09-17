@@ -22,17 +22,13 @@ from modules.audio_device_manager.core.types import (
     AudioDevice, DeviceType, DeviceStatus, AudioDeviceManagerConfig
 )
 
+# Импорт конфигурации
+from config.unified_config_loader import UnifiedConfigLoader
+
 logger = logging.getLogger(__name__)
 
-@dataclass
-class AudioDeviceIntegrationConfig:
-    """Конфигурация AudioDeviceIntegration"""
-    auto_switch_enabled: bool = True
-    monitoring_interval: float = 3.0
-    switch_delay: float = 0.5
-    enable_microphone_on_listening: bool = True
-    disable_microphone_on_sleeping: bool = True
-    disable_microphone_on_processing: bool = True
+# Убираем дублированную конфигурацию - используем AudioDeviceManagerConfig из модуля
+# и дополнительные настройки из unified_config.yaml
 
 class AudioDeviceIntegration:
     """Интеграция AudioDeviceManager с EventBus и ApplicationStateManager"""
@@ -42,12 +38,36 @@ class AudioDeviceIntegration:
         event_bus: EventBus,
         state_manager: ApplicationStateManager,
         error_handler: ErrorHandler,
-        config: Optional[AudioDeviceIntegrationConfig] = None,
+        config: Optional[AudioDeviceManagerConfig] = None,
     ):
         self.event_bus = event_bus
         self.state_manager = state_manager
         self.error_handler = error_handler
-        self.config = config or AudioDeviceIntegrationConfig()
+        # Загружаем конфигурацию из unified_config.yaml
+        unified_config = UnifiedConfigLoader()
+        if config is None:
+            # Создаем конфигурацию модуля из unified_config
+            config_data = unified_config._load_config()
+            audio_cfg = config_data['audio']['device_manager']
+            integration_cfg = config_data['integrations']['audio_device']
+            
+            config = AudioDeviceManagerConfig(
+                auto_switch_enabled=integration_cfg['auto_switch_enabled'],
+                monitoring_interval=integration_cfg['monitoring_interval'],
+                switch_delay=integration_cfg['switch_delay'],
+                device_priorities=audio_cfg['device_priorities'],
+                user_preferences=None,  # Будет заполнено в __post_init__
+                macos_settings=None     # Будет заполнено в __post_init__
+            )
+        
+        self.config = config
+        
+        # Дополнительные настройки интеграции из unified_config
+        config_data = unified_config._load_config()
+        integration_cfg = config_data['integrations']['audio_device']
+        self.enable_microphone_on_listening = integration_cfg['enable_microphone_on_listening']
+        self.disable_microphone_on_sleeping = integration_cfg['disable_microphone_on_sleeping']
+        self.disable_microphone_on_processing = integration_cfg['disable_microphone_on_processing']
         
         # AudioDeviceManager экземпляр
         self._manager: Optional[AudioDeviceManager] = None

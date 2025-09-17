@@ -15,14 +15,17 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Импорты интеграций (НЕ модулей напрямую!)
-from integrations.tray_controller_integration import TrayControllerIntegration, TrayControllerConfig
+from integrations.tray_controller_integration import TrayControllerIntegration
+from modules.tray_controller.core.tray_types import TrayConfig
 from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
-from integrations.permissions_integration import PermissionsIntegration, PermissionsIntegrationConfig
+from integrations.permissions_integration import PermissionsIntegration
+from modules.permissions.core.types import PermissionConfig
 from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
-from integrations.network_manager_integration import NetworkManagerIntegration, NetworkManagerIntegrationConfig
-from integrations.audio_device_integration import AudioDeviceIntegration, AudioDeviceIntegrationConfig
+from integrations.network_manager_integration import NetworkManagerIntegration
+from modules.network_manager.core.config import NetworkManagerConfig
+from integrations.audio_device_integration import AudioDeviceIntegration
+from modules.audio_device_manager.core.types import AudioDeviceManagerConfig
 from integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
-from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 
 # Импорты core компонентов
@@ -30,7 +33,13 @@ from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager, AppMode
 from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
+# Импорт конфигурации
+from config.unified_config_loader import UnifiedConfigLoader
+
 logger = logging.getLogger(__name__)
+
+# Глобальная защита от множественного запуска
+_app_running = False
 
 class SimpleModuleCoordinator:
     """Центральный координатор модулей для Nexy AI Assistant"""
@@ -43,6 +52,9 @@ class SimpleModuleCoordinator:
         
         # Интеграции (обертки для модулей)
         self.integrations: Dict[str, Any] = {}
+        
+        # Конфигурация
+        self.config = UnifiedConfigLoader()
         
         # Состояние
         self.is_initialized = False
@@ -101,14 +113,9 @@ class SimpleModuleCoordinator:
     async def _create_integrations(self):
         """Создание всех интеграций"""
         try:
-            # TrayController Integration
-            tray_config = TrayControllerConfig(
-                icon_size=16,
-                show_status_in_menu=True,
-                enable_notifications=True,
-                auto_update_status=True,
-                debug_mode=True
-            )
+            # TrayController Integration - используем конфигурацию модуля
+            # Конфигурация будет загружена внутри TrayControllerIntegration
+            tray_config = None  # Будет создана автоматически из unified_config.yaml
             
             self.integrations['tray'] = TrayControllerIntegration(
                 event_bus=self.event_bus,
@@ -117,20 +124,24 @@ class SimpleModuleCoordinator:
                 config=tray_config
             )
             
-            # InputProcessing Integration
+            # InputProcessing Integration - загружаем из конфигурации
+            config_data = self.config._load_config()
+            kbd_cfg = config_data['integrations']['keyboard']
             keyboard_config = KeyboardConfig(
-                key_to_monitor="space",
-                short_press_threshold=0.6,
-                long_press_threshold=1.0,
-                event_cooldown=0.1,
-                hold_check_interval=0.05,
-                debounce_time=0.1
+                key_to_monitor=kbd_cfg['key_to_monitor'],
+                short_press_threshold=kbd_cfg['short_press_threshold'],
+                long_press_threshold=kbd_cfg['long_press_threshold'],
+                event_cooldown=kbd_cfg['event_cooldown'],
+                hold_check_interval=kbd_cfg['hold_check_interval'],
+                debounce_time=kbd_cfg['debounce_time']
             )
             
+            input_cfg = config_data['integrations']['input_processing']
             input_config = InputProcessingConfig(
                 keyboard_config=keyboard_config,
-                enable_keyboard_monitoring=True,
-                auto_start=True
+                enable_keyboard_monitoring=input_cfg['enable_keyboard_monitoring'],
+                auto_start=input_cfg['auto_start'],
+                keyboard_backend=kbd_cfg.get('backend', 'auto')
             )
             
             self.integrations['input'] = InputProcessingIntegration(
@@ -140,14 +151,9 @@ class SimpleModuleCoordinator:
                 config=input_config
             )
             
-            # Permissions Integration
-            permissions_config = PermissionsIntegrationConfig(
-                check_interval=30,
-                auto_request_required=True,
-                show_instructions=True,
-                open_preferences=True,
-                debug_mode=True
-            )
+            # Permissions Integration - используем конфигурацию модуля
+            # Конфигурация будет загружена внутри PermissionsIntegration
+            permissions_config = None  # Будет создана автоматически из unified_config.yaml
             
             self.integrations['permissions'] = PermissionsIntegration(
                 event_bus=self.event_bus,
@@ -156,19 +162,20 @@ class SimpleModuleCoordinator:
                 config=permissions_config
             )
             
-            # Update Manager Integration
+            # Update Manager Integration - загружаем из конфигурации
+            upd_cfg = config_data['update_manager']
             update_config = UpdateManagerIntegrationConfig(
-                enabled=True,
-                check_interval=24,
-                check_time="02:00",
-                auto_install=True,
-                announce_updates=False,  # Тихий режим
-                check_on_startup=True,
-                appcast_url="https://api.nexy.ai/updates/appcast.xml",
-                retry_attempts=3,
-                retry_delay=300,
-                silent_mode=True,  # Полностью тихий режим
-                log_updates=True
+                enabled=upd_cfg['enabled'],
+                check_interval=upd_cfg['check_interval'],
+                check_time=upd_cfg['check_time'],
+                auto_install=upd_cfg['auto_install'],
+                announce_updates=upd_cfg['announce_updates'],
+                check_on_startup=upd_cfg['check_on_startup'],
+                appcast_url=config_data['network']['appcast']['base_url'] + "/appcast.xml",
+                retry_attempts=upd_cfg['retry_attempts'],
+                retry_delay=upd_cfg['retry_delay'],
+                silent_mode=upd_cfg['silent_mode'],
+                log_updates=upd_cfg['log_updates']
             )
             
             self.integrations['update_manager'] = UpdateManagerIntegration(
@@ -178,12 +185,9 @@ class SimpleModuleCoordinator:
                 config=update_config
             )
             
-            # Network Manager Integration
-            network_config = NetworkManagerIntegrationConfig(
-                check_interval=30.0,
-                ping_timeout=5.0,
-                ping_hosts=["8.8.8.8", "1.1.1.1", "google.com"]
-            )
+            # Network Manager Integration - используем конфигурацию модуля
+            # Конфигурация будет загружена внутри NetworkManagerIntegration
+            network_config = None  # Будет создана автоматически из unified_config.yaml
             
             self.integrations['network'] = NetworkManagerIntegration(
                 event_bus=self.event_bus,
@@ -192,15 +196,9 @@ class SimpleModuleCoordinator:
                 config=network_config
             )
             
-            # Audio Device Integration
-            audio_config = AudioDeviceIntegrationConfig(
-                auto_switch_enabled=True,
-                monitoring_interval=3.0,
-                switch_delay=0.5,
-                enable_microphone_on_listening=True,
-                disable_microphone_on_sleeping=True,
-                disable_microphone_on_processing=True
-            )
+            # Audio Device Integration - используем конфигурацию модуля
+            # Конфигурация будет загружена внутри AudioDeviceIntegration
+            audio_config = None  # Будет создана автоматически из unified_config.yaml
             
             self.integrations['audio'] = AudioDeviceIntegration(
                 event_bus=self.event_bus,
@@ -209,16 +207,17 @@ class SimpleModuleCoordinator:
                 config=audio_config
             )
             
-            # Interrupt Management Integration
+            # Interrupt Management Integration - загружаем из конфигурации
+            int_cfg = config_data['integrations']['interrupt_management']
             interrupt_config = InterruptManagementIntegrationConfig(
-                max_concurrent_interrupts=5,
-                interrupt_timeout=10.0,
-                retry_attempts=3,
-                retry_delay=1.0,
-                enable_speech_interrupts=True,
-                enable_recording_interrupts=True,
-                enable_session_interrupts=True,
-                enable_full_reset=True
+                max_concurrent_interrupts=int_cfg['max_concurrent_interrupts'],
+                interrupt_timeout=int_cfg['interrupt_timeout'],
+                retry_attempts=int_cfg['retry_attempts'],
+                retry_delay=int_cfg['retry_delay'],
+                enable_speech_interrupts=int_cfg['enable_speech_interrupts'],
+                enable_recording_interrupts=int_cfg['enable_recording_interrupts'],
+                enable_session_interrupts=int_cfg['enable_session_interrupts'],
+                enable_full_reset=int_cfg['enable_full_reset']
             )
             
             self.integrations['interrupt'] = InterruptManagementIntegration(
@@ -228,29 +227,7 @@ class SimpleModuleCoordinator:
                 config=interrupt_config
             )
             
-            # Voice Recognition Integration
-            voice_config = VoiceRecognitionIntegrationConfig(
-                enabled=True,
-                simulation_mode=True,  # Включаем симуляцию для тестирования
-                simulation_delay=1.5,  # 1.5 секунды задержки
-                simulation_success_rate=0.8,  # 80% успешных распознаваний
-                language="en-US",
-                timeout=3.0,
-                phrase_timeout=0.3,
-                energy_threshold=100,
-                sample_rate=16000,
-                chunk_size=1024,
-                channels=1
-            )
-            
-            self.integrations['voice_recognition'] = VoiceRecognitionIntegration(
-                event_bus=self.event_bus,
-                state_manager=self.state_manager,
-                error_handler=self.error_handler,
-                config=voice_config
-            )
-            
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition")
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")
@@ -360,7 +337,15 @@ class SimpleModuleCoordinator:
     
     async def run(self):
         """Запуск приложения"""
+        global _app_running
         try:
+            # Проверяем, не запущено ли уже приложение
+            if _app_running or self.is_running:
+                print("⚠️ Приложение уже запущено")
+                return
+            
+            _app_running = True
+                
             # Инициализируем
             success = await self.initialize()
             if not success:
@@ -396,6 +381,7 @@ class SimpleModuleCoordinator:
             import traceback
             traceback.print_exc()
         finally:
+            _app_running = False
             await self.stop()
     
     # Обработчики событий (только координация, не дублирование логики)
@@ -422,8 +408,17 @@ class SimpleModuleCoordinator:
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""
         try:
-            new_mode = event.data.get("mode")
-            print(f"🔄 Координация смены режима: {new_mode.value if new_mode else 'unknown'}")
+            # EventBus передает события как dict: {"type", "data", "timestamp"}
+            if isinstance(event, dict):
+                data = event.get("data") or {}
+                new_mode = data.get("mode", None)
+            else:
+                # fallback на объектный стиль (на всякий случай)
+                data = getattr(event, "data", {}) or {}
+                new_mode = data.get("mode", None)
+
+            printable_mode = getattr(new_mode, "value", None) or str(new_mode) if new_mode is not None else "unknown"
+            print(f"🔄 Координация смены режима: {printable_mode}")
             
             # Делегируем обработку интеграциям
             # Координатор только координирует, не обрабатывает!
@@ -434,7 +429,11 @@ class SimpleModuleCoordinator:
     async def _on_keyboard_event(self, event):
         """Обработка событий клавиатуры"""
         try:
-            event_type = event.event_type
+            # EventBus передает dict с ключом "type"
+            if isinstance(event, dict):
+                event_type = event.get("type", "unknown")
+            else:
+                event_type = getattr(event, "event_type", "unknown")
             print(f"⌨️ Координация события клавиатуры: {event_type}")
             
             # Делегируем обработку интеграциям

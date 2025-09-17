@@ -13,30 +13,46 @@ from dataclasses import dataclass
 from modules.tray_controller import TrayController, TrayStatus, TrayConfig
 from modules.tray_controller.core.tray_types import TrayEvent
 
+# Импорт конфигурации
+from config.unified_config_loader import UnifiedConfigLoader
+
 # Импорты интеграции
-from integration.core.event_bus import EventBus, EventPriority
-from integration.core.state_manager import ApplicationStateManager, AppMode
-from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from core.event_bus import EventBus, EventPriority
+from core.state_manager import ApplicationStateManager, AppMode
+from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class TrayControllerConfig:
-    """Конфигурация TrayController Integration"""
-    icon_size: int = 16
-    show_status_in_menu: bool = True
-    enable_notifications: bool = True
-    auto_update_status: bool = True
-    debug_mode: bool = False
+# Убираем дублированную конфигурацию - используем TrayConfig из модуля
 
 class TrayControllerIntegration:
     """Интеграция TrayController с EventBus и ApplicationStateManager"""
     
     def __init__(self, event_bus: EventBus, state_manager: ApplicationStateManager, 
-                 error_handler: ErrorHandler, config: TrayControllerConfig):
+                 error_handler: ErrorHandler, config: Optional[TrayConfig] = None):
         self.event_bus = event_bus
         self.state_manager = state_manager
         self.error_handler = error_handler
+        # Загружаем конфигурацию из unified_config.yaml
+        unified_config = UnifiedConfigLoader()
+        if config is None:
+            # Создаем конфигурацию модуля из unified_config
+            config_data = unified_config._load_config()
+            tray_cfg = config_data['integrations']['tray_controller']
+            
+            config = TrayConfig(
+                icon_size=tray_cfg['icon_size'],
+                show_status=tray_cfg['show_status_in_menu'],  # Правильное поле
+                show_menu=True,  # Из модуля
+                enable_click_events=True,  # Из модуля
+                enable_right_click=True,  # Из модуля
+                auto_hide=False,  # Из модуля
+                animation_speed=0.5,  # Из модуля
+                menu_font_size=13,  # Из модуля
+                enable_sound=tray_cfg['enable_notifications'],  # Маппинг
+                debug_mode=tray_cfg['debug_mode']
+            )
+        
         self.config = config
         
         # TrayController (обертываем существующий модуль)
@@ -211,7 +227,12 @@ class TrayControllerIntegration:
     async def _on_keyboard_event(self, event):
         """Обработка событий клавиатуры"""
         try:
-            event_type = event.get("type")
+            # Безопасное получение типа события
+            if isinstance(event, dict):
+                event_type = event.get("type", "unknown")
+            else:
+                event_type = getattr(event, 'event_type', 'unknown')
+            
             logger.info(f"⌨️ Обработка события клавиатуры в TrayControllerIntegration: {event_type}")
             
             # Push-to-talk: режимы меняются в InputProcessingIntegration
@@ -219,6 +240,8 @@ class TrayControllerIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка обработки события клавиатуры: {e}")
+            import traceback
+            logger.debug(f"Стектрейс: {traceback.format_exc()}")
     
     async def _on_app_startup(self, event):
         """Обработка запуска приложения"""

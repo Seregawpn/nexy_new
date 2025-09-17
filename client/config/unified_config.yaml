@@ -58,7 +58,7 @@ logging:
   error_file: ~/Library/Logs/Nexy/errors.log
   file: ~/Library/Logs/Nexy/app.log
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-  level: INFO
+  level: DEBUG
   loggers:
     accessibility: nexy.accessibility
     audio: nexy.audio
@@ -133,3 +133,55 @@ update_manager:
   retry_attempts: 3
   retry_delay: 300
   silent_mode: true
+
+# Конфигурации интеграций
+integrations:
+  tray_controller:
+    icon_size: 16
+    show_status_in_menu: true
+    enable_notifications: true
+    auto_update_status: true
+    debug_mode: true
+  
+  keyboard:
+    key_to_monitor: space
+    backend: quartz
+    short_press_threshold: 0.6
+    long_press_threshold: 1.0
+    event_cooldown: 0.1
+    hold_check_interval: 0.05
+    debounce_time: 0.1
+  
+  input_processing:
+    enable_keyboard_monitoring: true
+    auto_start: true
+  
+  permissions:
+    check_interval: 30
+    auto_request_required: true
+    show_instructions: true
+    open_preferences: true
+    debug_mode: true
+  
+  network_manager:
+    check_interval: 30.0
+    ping_timeout: 5.0
+    ping_hosts: ["8.8.8.8", "1.1.1.1", "google.com"]
+  
+  audio_device:
+    auto_switch_enabled: true
+    monitoring_interval: 3.0
+    switch_delay: 0.5
+    enable_microphone_on_listening: true
+    disable_microphone_on_sleeping: true
+    disable_microphone_on_processing: true
+  
+  interrupt_management:
+    max_concurrent_interrupts: 5
+    interrupt_timeout: 10.0
+    retry_attempts: 3
+    retry_delay: 1.0
+    enable_speech_interrupts: true
+    enable_recording_interrupts: true
+    enable_session_interrupts: true
+    enable_full_reset: true

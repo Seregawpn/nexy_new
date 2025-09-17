@@ -13,9 +13,9 @@ from modules.input_processing.keyboard.keyboard_monitor import KeyboardMonitor
 from modules.input_processing.keyboard.types import KeyEvent, KeyEventType, KeyboardConfig
 
 # Импорты интеграции
-from integration.core.event_bus import EventBus, EventPriority
-from integration.core.state_manager import ApplicationStateManager, AppMode
-from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from core.event_bus import EventBus, EventPriority
+from core.state_manager import ApplicationStateManager, AppMode
+from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ class InputProcessingConfig:
     keyboard_config: KeyboardConfig
     enable_keyboard_monitoring: bool = True
     auto_start: bool = True
+    keyboard_backend: str = "auto"  # auto|quartz|pynput
 
 class InputProcessingIntegration:
     """Интеграция модуля input_processing"""
@@ -35,7 +36,9 @@ class InputProcessingIntegration:
         self.state_manager = state_manager
         self.error_handler = error_handler
         self.config = config
-        
+        # Флаг используемого backend
+        self._using_quartz = False
+
         # Компоненты
         self.keyboard_monitor: Optional[KeyboardMonitor] = None
         
@@ -73,25 +76,40 @@ class InputProcessingIntegration:
     async def _initialize_keyboard_monitor(self):
         """Инициализация мониторинга клавиатуры"""
         try:
-            self.keyboard_monitor = KeyboardMonitor(self.config.keyboard_config)
+            # Выбираем backend
+            backend = (self.config.keyboard_backend or "auto").lower()
+            use_quartz = False
+            try:
+                import platform
+                is_macos = platform.system() == "Darwin"
+            except Exception:
+                is_macos = False
+
+            if is_macos and backend in ("auto", "quartz"):
+                try:
+                    from modules.input_processing.keyboard.mac.quartz_monitor import QuartzKeyboardMonitor
+                    self.keyboard_monitor = QuartzKeyboardMonitor(self.config.keyboard_config)
+                    use_quartz = True
+                    self._using_quartz = True
+                    logger.info("✅ Используется QuartzKeyboardMonitor (macOS)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось инициализировать QuartzKeyboardMonitor: {e}. Фоллбек на pynput")
+
+            if not use_quartz:
+                self.keyboard_monitor = KeyboardMonitor(self.config.keyboard_config)
             
-            # Регистрация обработчиков
-            self.keyboard_monitor.register_callback(
-                KeyEventType.PRESS,
-                self._handle_press
-            )
-            self.keyboard_monitor.register_callback(
-                KeyEventType.SHORT_PRESS, 
-                self._handle_short_press
-            )
-            self.keyboard_monitor.register_callback(
-                KeyEventType.LONG_PRESS, 
-                self._handle_long_press
-            )
-            self.keyboard_monitor.register_callback(
-                KeyEventType.RELEASE, 
-                self._handle_key_release
-            )
+            # Регистрация обработчиков: для Quartz можно регистрировать async-методы напрямую,
+            # для pynput используем sync wrapper'ы
+            if self._using_quartz:
+                self.keyboard_monitor.register_callback(KeyEventType.PRESS, self._handle_press)
+                self.keyboard_monitor.register_callback(KeyEventType.SHORT_PRESS, self._handle_short_press)
+                self.keyboard_monitor.register_callback(KeyEventType.LONG_PRESS, self._handle_long_press)
+                self.keyboard_monitor.register_callback(KeyEventType.RELEASE, self._handle_key_release)
+            else:
+                self.keyboard_monitor.register_callback(KeyEventType.PRESS, self._sync_handle_press)
+                self.keyboard_monitor.register_callback(KeyEventType.SHORT_PRESS, self._sync_handle_short_press)
+                self.keyboard_monitor.register_callback(KeyEventType.LONG_PRESS, self._sync_handle_long_press)
+                self.keyboard_monitor.register_callback(KeyEventType.RELEASE, self._sync_handle_key_release)
             
             logger.info("✅ KeyboardMonitor инициализирован")
             
@@ -106,9 +124,14 @@ class InputProcessingIntegration:
     async def _handle_press(self, event: KeyEvent):
         """Начало удержания: включаем запись и переводим в LISTENING"""
         try:
+            logger.info(f"🔑 PRESS EVENT: {event.timestamp} - начинаем запись")
+            logger.debug(f"PRESS: session(before)={self._current_session_id}, recognized={self._session_recognized}")
+            print(f"🔑 PRESS EVENT: {event.timestamp} - начинаем запись")  # Для отладки
+            
             # Создаем сессию и сбрасываем флаг распознавания
             self._current_session_id = event.timestamp or time.monotonic()
             self._session_recognized = False
+            logger.debug(f"PRESS: session(after)={self._current_session_id}, recognized reset to {self._session_recognized}")
             # Публикуем старт записи
             await self.event_bus.publish(
                 "voice.recording_start",
@@ -118,13 +141,22 @@ class InputProcessingIntegration:
                     "session_id": self._current_session_id,
                 }
             )
+            logger.debug("PRESS: voice.recording_start опубликовано")
             
             # Переключаем режим в LISTENING
             if hasattr(self.state_manager, 'set_mode'):
+                logger.debug("PRESS: вызываем state_manager.set_mode(LISTENING)")
                 if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                     await self.state_manager.set_mode(AppMode.LISTENING)
                 else:
                     self.state_manager.set_mode(AppMode.LISTENING)
+                logger.info("PRESS: режим установлен LISTENING")
+
+            # Публикуем событие смены режима для интеграций (трей и т.д.)
+            try:
+                await self.event_bus.publish("app.mode_changed", {"mode": AppMode.LISTENING})
+            except Exception as e:
+                logger.debug(f"PRESS: не удалось опубликовать app.mode_changed: {e}")
         except Exception as e:
             await self.error_handler.handle_error(
                 severity=ErrorSeverity.MEDIUM,
@@ -158,6 +190,7 @@ class InputProcessingIntegration:
         
     async def start(self) -> bool:
         """Запуск input_processing"""
+        print(f"🔧 DEBUG: InputProcessingIntegration.start() вызван")
         try:
             if not self.is_initialized:
                 logger.warning("⚠️ input_processing не инициализирован")
@@ -167,9 +200,22 @@ class InputProcessingIntegration:
             if self.keyboard_monitor:
                 # Передаем основной event loop для корректной работы async колбэков
                 import asyncio
-                self.keyboard_monitor.set_loop(asyncio.get_running_loop())
+                # В идеале сюда пробрасывается общий background loop
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop:
+                    self.keyboard_monitor.set_loop(loop)
                 self.keyboard_monitor.start_monitoring()
                 logger.info("🎹 Мониторинг клавиатуры запущен")
+                
+                # Отладка: проверяем статус
+                status = self.keyboard_monitor.get_status()
+                print(f"🔧 DEBUG: KeyboardMonitor статус: {status}")
+                print(f"🔧 DEBUG: Callbacks зарегистрированы: {status.get('callbacks_registered', 0)}")
+                print(f"🔧 DEBUG: Мониторинг активен: {status.get('is_monitoring', False)}")
+                print(f"⌨️ DEBUG: НАЖМИТЕ ПРОБЕЛ СЕЙЧАС ДЛЯ ТЕСТИРОВАНИЯ!")
                 
             self.is_running = True
             logger.info("✅ input_processing запущен")
@@ -209,9 +255,10 @@ class InputProcessingIntegration:
     async def _handle_short_press(self, event: KeyEvent):
         """Обработка короткого нажатия пробела"""
         try:
-            logger.debug(f"🔑 Короткое нажатие: {event.duration:.3f}с")
+            logger.debug(f"🔑 SHORT_PRESS: {event.duration:.3f}с")
             
             # Публикация события
+            logger.debug("SHORT_PRESS: публикуем keyboard.short_press")
             await self.event_bus.publish(
                 "keyboard.short_press",
                 {
@@ -220,6 +267,7 @@ class InputProcessingIntegration:
                     "duration": event.duration
                 }
             )
+            logger.debug("SHORT_PRESS: опубликовано")
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -232,9 +280,10 @@ class InputProcessingIntegration:
     async def _handle_long_press(self, event: KeyEvent):
         """Обработка длинного нажатия пробела"""
         try:
-            logger.debug(f"🔑 Длинное нажатие: {event.duration:.3f}с")
+            logger.debug(f"🔑 LONG_PRESS: {event.duration:.3f}с")
             
             # Публикация события
+            logger.debug("LONG_PRESS: публикуем keyboard.long_press")
             await self.event_bus.publish(
                 "keyboard.long_press",
                 {
@@ -243,6 +292,7 @@ class InputProcessingIntegration:
                     "duration": event.duration
                 }
             )
+            logger.debug("LONG_PRESS: опубликовано")
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -255,9 +305,12 @@ class InputProcessingIntegration:
     async def _handle_key_release(self, event: KeyEvent):
         """Обработка отпускания пробела"""
         try:
-            logger.debug(f"🔑 Отпускание: {event.duration:.3f}с")
+            logger.info(f"🔑 RELEASE EVENT: {event.duration:.3f}с")
+            logger.debug(f"RELEASE: session={self._current_session_id}, recognized={self._session_recognized}")
+            print(f"🔑 RELEASE EVENT: {event.duration:.3f}с")  # Для отладки
             
             # Публикация события
+            logger.debug("RELEASE: публикуем keyboard.release")
             await self.event_bus.publish(
                 "keyboard.release",
                 {
@@ -266,8 +319,10 @@ class InputProcessingIntegration:
                     "duration": event.duration
                 }
             )
+            logger.debug("RELEASE: keyboard.release опубликовано")
             
             # Останавливаем запись
+            logger.debug("RELEASE: публикуем voice.recording_stop")
             await self.event_bus.publish(
                 "voice.recording_stop",
                 {
@@ -277,28 +332,41 @@ class InputProcessingIntegration:
                     "session_id": self._current_session_id,
                 }
             )
+            logger.debug("RELEASE: voice.recording_stop опубликовано")
 
-            # Ждем результат распознавания с таймаутом
-            recognized = await self._wait_for_recognition_result()
+            # Мгновенное решение на отпускании: используем флаг распознавания текущей сессии
+            recognized = bool(self._session_recognized)
+            logger.info(f"RELEASE: recognized={recognized}")
 
             # Переключаем состояние в зависимости от результата
             if hasattr(self.state_manager, 'set_mode'):
+                logger.debug("RELEASE: вызываем state_manager.set_mode")
                 if recognized:
-                    logger.info("✅ Распознавание успешно - переключаем в PROCESSING")
                     if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                         await self.state_manager.set_mode(AppMode.PROCESSING)
                     else:
                         self.state_manager.set_mode(AppMode.PROCESSING)
+                    logger.info("RELEASE: режим установлен PROCESSING")
                 else:
-                    logger.info("❌ Распознавание неуспешно - переключаем в SLEEPING")
                     if asyncio.iscoroutinefunction(self.state_manager.set_mode):
                         await self.state_manager.set_mode(AppMode.SLEEPING)
                     else:
                         self.state_manager.set_mode(AppMode.SLEEPING)
+                    logger.info("RELEASE: режим установлен SLEEPING")
+
+            # Публикуем событие смены режима, чтобы обновить UI
+            try:
+                await self.event_bus.publish(
+                    "app.mode_changed",
+                    {"mode": AppMode.PROCESSING if recognized else AppMode.SLEEPING}
+                )
+            except Exception as e:
+                logger.debug(f"RELEASE: не удалось опубликовать app.mode_changed: {e}")
 
             # Сбрасываем сессию
             self._current_session_id = None
             self._session_recognized = False
+            logger.debug("RELEASE: сброшены session_id и recognized")
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -309,39 +377,15 @@ class InputProcessingIntegration:
             )
             
             
-    async def _wait_for_recognition_result(self) -> bool:
-        """Ждем результат распознавания с таймаутом"""
-        try:
-            if not self._current_session_id:
-                logger.warning("Нет активной сессии для ожидания распознавания")
-                return False
-            
-            logger.info(f"🎤 Ожидание распознавания для сессии {self._current_session_id}")
-            
-            # Ждем с таймаутом 3 секунды
-            timeout = 3.0
-            start_time = time.time()
-            
-            while time.time() - start_time < timeout:
-                if self._session_recognized:
-                    logger.info("✅ Получен результат распознавания")
-                    return True
-                
-                # Небольшая задержка чтобы не нагружать CPU
-                await asyncio.sleep(0.1)
-            
-            logger.warning(f"⏰ Таймаут ожидания распознавания ({timeout}с)")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Ошибка ожидания распознавания: {e}")
-            return False
-            
     # Обработчики внешних событий
     async def _handle_mode_switch(self, event):
         """Обработка смены режима"""
         try:
-            mode = event.data
+            # EventBus передает событие как dict
+            if isinstance(event, dict):
+                mode = event.get("data")
+            else:
+                mode = getattr(event, "data", None)
             logger.debug(f"🔄 Смена режима: {mode}")
             
             if mode == AppMode.LISTENING:
@@ -358,7 +402,64 @@ class InputProcessingIntegration:
                 message=f"Ошибка обработки mode switch: {e}",
                 context={"where": "input_processing_integration.handle_mode_switch"}
             )
-            
+    
+    # Sync wrapper'ы для callback'ов KeyboardMonitor
+    def _sync_handle_press(self, event):
+        """Sync wrapper для async _handle_press"""
+        try:
+            print(f"🔑 SYNC PRESS: {event.timestamp} - ПОЛУЧЕН CALLBACK!")  # Отладка
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                print(f"🔑 DEBUG: Найден running loop, планирую async task")
+                future = asyncio.run_coroutine_threadsafe(self._handle_press(event), loop)
+                print(f"🔑 DEBUG: Task запланирован: {future}")
+            except RuntimeError:
+                print(f"🔑 DEBUG: Нет running loop, запускаю напрямую")
+                asyncio.run(self._handle_press(event))
+        except Exception as e:
+            print(f"❌ Ошибка sync_handle_press: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _sync_handle_short_press(self, event):
+        """Sync wrapper для async _handle_short_press"""
+        try:
+            print(f"🔑 SYNC SHORT: {event.duration:.3f}с")  # Отладка
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._handle_short_press(event), loop)
+            else:
+                asyncio.run(self._handle_short_press(event))
+        except Exception as e:
+            print(f"❌ Ошибка sync_handle_short_press: {e}")
+    
+    def _sync_handle_long_press(self, event):
+        """Sync wrapper для async _handle_long_press"""
+        try:
+            print(f"🔑 SYNC LONG: {event.duration:.3f}с")  # Отладка
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._handle_long_press(event), loop)
+            else:
+                asyncio.run(self._handle_long_press(event))
+        except Exception as e:
+            print(f"❌ Ошибка sync_handle_long_press: {e}")
+    
+    def _sync_handle_key_release(self, event):
+        """Sync wrapper для async _handle_key_release"""
+        try:
+            print(f"🔑 SYNC RELEASE: {event.duration:.3f}с")  # Отладка
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._handle_key_release(event), loop)
+            else:
+                asyncio.run(self._handle_key_release(event))
+        except Exception as e:
+            print(f"❌ Ошибка sync_handle_key_release: {e}")
             
     def get_status(self) -> Dict[str, Any]:
         """Получение статуса интеграции"""

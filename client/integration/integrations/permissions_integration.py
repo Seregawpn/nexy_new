@@ -10,32 +10,46 @@ from dataclasses import dataclass
 
 # Импорты модулей
 from modules.permissions import PermissionManager, PermissionType, PermissionStatus, PermissionResult
-from modules.permissions.core.types import PermissionEvent
+from modules.permissions.core.types import PermissionEvent, PermissionConfig
+
+# Импорт конфигурации
+from config.unified_config_loader import UnifiedConfigLoader
 
 # Импорты интеграции
-from integration.core.event_bus import EventBus, EventPriority
-from integration.core.state_manager import ApplicationStateManager, AppMode
-from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from core.event_bus import EventBus, EventPriority
+from core.state_manager import ApplicationStateManager, AppMode
+from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class PermissionsIntegrationConfig:
-    """Конфигурация PermissionsIntegration"""
-    check_interval: int = 30  # Интервал проверки разрешений в секундах
-    auto_request_required: bool = True  # Автоматически запрашивать обязательные разрешения
-    show_instructions: bool = True  # Показывать инструкции для разрешений
-    open_preferences: bool = True  # Автоматически открывать настройки
-    debug_mode: bool = False
+# Убираем дублированную конфигурацию - используем PermissionConfig из модуля
 
 class PermissionsIntegration:
     """Интеграция PermissionManager с EventBus и ApplicationStateManager"""
     
     def __init__(self, event_bus: EventBus, state_manager: ApplicationStateManager, 
-                 error_handler: ErrorHandler, config: PermissionsIntegrationConfig):
+                 error_handler: ErrorHandler, config: Optional[PermissionConfig] = None):
         self.event_bus = event_bus
         self.state_manager = state_manager
         self.error_handler = error_handler
+        # Загружаем конфигурацию из unified_config.yaml
+        unified_config = UnifiedConfigLoader()
+        if config is None:
+            # Создаем конфигурацию модуля из unified_config
+            config_data = unified_config._load_config()
+            perm_cfg = config_data['integrations']['permissions']
+            
+            config = PermissionConfig(
+                required_permissions=[
+                    PermissionType.MICROPHONE,
+                    PermissionType.SCREEN_CAPTURE,
+                    PermissionType.NETWORK
+                ],  # Из модуля
+                check_interval=perm_cfg['check_interval'],
+                auto_open_preferences=perm_cfg['open_preferences'],
+                show_instructions=perm_cfg['show_instructions']
+            )
+        
         self.config = config
         
         # PermissionManager (обертываем существующий модуль)
@@ -101,7 +115,7 @@ class PermissionsIntegration:
             await self._check_all_permissions()
             
             # Запрашиваем обязательные разрешения если включено
-            if self.config.auto_request_required:
+            if self.config.auto_open_preferences:  # Используем правильное поле
                 await self._request_required_permissions()
             
             # Запускаем мониторинг
@@ -308,8 +322,16 @@ class PermissionsIntegration:
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""
         try:
-            new_mode = event.data.get("mode")
-            logger.info(f"🔄 Обработка смены режима в PermissionsIntegration: {new_mode.value}")
+            # EventBus события приходят как dict
+            if isinstance(event, dict):
+                data = event.get("data") or {}
+                new_mode = data.get("mode")
+            else:
+                data = getattr(event, "data", {}) or {}
+                new_mode = data.get("mode")
+
+            printable_mode = getattr(new_mode, "value", None) or str(new_mode)
+            logger.info(f"🔄 Обработка смены режима в PermissionsIntegration: {printable_mode}")
             
             # Если переходим в режим прослушивания, проверяем разрешения
             if new_mode == AppMode.LISTENING:
@@ -376,10 +398,9 @@ class PermissionsIntegration:
             },
             "config": {
                 "check_interval": self.config.check_interval,
-                "auto_request_required": self.config.auto_request_required,
+                "auto_open_preferences": self.config.auto_open_preferences,
                 "show_instructions": self.config.show_instructions,
-                "open_preferences": self.config.open_preferences,
-                "debug_mode": self.config.debug_mode
+                "required_permissions": [p.value for p in self.config.required_permissions]
             }
         }
     

@@ -7,9 +7,9 @@ import logging
 from typing import Optional, Dict, Any
 
 # Импорты core компонентов
-from integration.core.event_bus import EventBus, EventPriority
-from integration.core.state_manager import ApplicationStateManager, AppMode
-from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
+from core.event_bus import EventBus, EventPriority
+from core.state_manager import ApplicationStateManager, AppMode
+from core.error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 # Импорты модуля обновлений
 from modules.update_manager import UpdateManager, UpdateConfig, UpdateStatus, UpdateInfo
