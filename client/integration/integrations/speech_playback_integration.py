@@ -76,6 +76,8 @@ class SpeechPlaybackIntegration:
             await self.event_bus.subscribe("grpc.response.audio", self._on_audio_chunk, EventPriority.HIGH)
             await self.event_bus.subscribe("grpc.request_completed", self._on_grpc_completed, EventPriority.HIGH)
             await self.event_bus.subscribe("grpc.request_failed", self._on_grpc_failed, EventPriority.HIGH)
+            # Сигналы (короткие тоны) через EventBus
+            await self.event_bus.subscribe("playback.signal", self._on_playback_signal, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_interrupt, EventPriority.CRITICAL)
             await self.event_bus.subscribe("interrupt.request", self._on_interrupt, EventPriority.CRITICAL)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
@@ -318,6 +320,65 @@ class SpeechPlaybackIntegration:
 
     async def _on_app_shutdown(self, event):
         await self.stop()
+
+    async def _on_playback_signal(self, event: Dict[str, Any]):
+        """Приём коротких сигналов (PCM s16le mono) для немедленного воспроизведения."""
+        try:
+            if not self._player:
+                return
+            data = (event or {}).get("data", {})
+            pcm = data.get("pcm")
+            if not pcm:
+                return
+            sr = int(data.get("sample_rate", 0))
+            ch = int(data.get("channels", 1))
+            gain = float(data.get("gain", 1.0))
+            priority = int(data.get("priority", 10))
+            pattern = data.get("pattern")
+
+            logger.info(f"🔔 playback.signal: pattern={pattern}, bytes={len(pcm)}, sr={sr}, ch={ch}, gain={gain}, prio={priority}")
+
+            # Проверяем sample rate — должен совпадать с плеером
+            target_sr = int(self.config['sample_rate'])
+            if sr != target_sr:
+                logger.debug(f"Signal SR mismatch: got={sr}, player={target_sr} — skipping")
+                return
+
+            # Декодируем PCM s16le mono
+            try:
+                arr = np.frombuffer(pcm, dtype=np.int16)
+            except Exception:
+                return
+
+            # Применяем gain (осторожно с переполнением)
+            try:
+                if gain != 1.0:
+                    a = arr.astype(np.float32) * max(0.0, min(1.0, gain))
+                    a = np.clip(a, -32768.0, 32767.0).astype(np.int16)
+                else:
+                    a = arr
+            except Exception:
+                a = arr
+
+            # Добавляем данные и при необходимости запускаем воспроизведение
+            try:
+                meta = {"kind": "signal", "pattern": pattern}
+                self._player.add_audio_data(a, priority=priority, metadata=meta)
+                state = self._player.state_manager.get_state()
+                if state == PlaybackState.PAUSED:
+                    self._player.resume_playback()
+                elif state != PlaybackState.PLAYING:
+                    if not self._player.initialize():
+                        await self._handle_error(Exception("player_init_failed"), where="speech.signal.player_init")
+                        return
+                    if not self._player.start_playback():
+                        await self._handle_error(Exception("start_failed"), where="speech.signal.start_playback")
+                        return
+                    await self.event_bus.publish("playback.started", {"signal": True})
+            except Exception as e:
+                await self._handle_error(e, where="speech.signal.add_chunk")
+        except Exception as e:
+            await self._handle_error(e, where="speech.on_playback_signal", severity="warning")
 
     # -------- Utils --------
     async def _finalize_on_silence(self, sid, timeout: float = 1.5):

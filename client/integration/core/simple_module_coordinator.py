@@ -33,6 +33,9 @@ from modules.audio_device_manager.core.types import AudioDeviceManagerConfig
 from integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
 from integrations.screenshot_capture_integration import ScreenshotCaptureIntegration
+from integrations.signal_integration import SignalIntegration
+from modules.signals.config.types import PatternConfig
+from integrations.signal_integration import SignalsIntegrationConfig
 
 # Импорты core компонентов
 from integration.core.event_bus import EventBus, EventPriority
@@ -306,7 +309,36 @@ class SimpleModuleCoordinator:
                 error_handler=self.error_handler,
             )
 
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback")
+            # Signals Integration (audio cues via EventBus -> playback)
+            try:
+                sig_raw = config_data.get('integrations', {}).get('signals', {})
+                patterns_cfg = {}
+                for name, p in sig_raw.get('patterns', {}).items():
+                    patterns_cfg[name] = PatternConfig(
+                        audio=p.get('audio', True),
+                        visual=p.get('visual', False),
+                        volume=p.get('volume', 0.2),
+                        tone_hz=p.get('tone_hz', 880),
+                        duration_ms=p.get('duration_ms', 120),
+                        cooldown_ms=p.get('cooldown_ms', 300),
+                    )
+                sig_cfg = SignalsIntegrationConfig(
+                    enabled=sig_raw.get('enabled', True),
+                    sample_rate=sig_raw.get('sample_rate', 48_000),
+                    default_volume=sig_raw.get('default_volume', 0.2),
+                    patterns=patterns_cfg or None,
+                )
+            except Exception:
+                sig_cfg = SignalsIntegrationConfig()
+
+            self.integrations['signals'] = SignalIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=sig_cfg,
+            )
+
+            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals")
             
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")

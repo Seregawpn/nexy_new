@@ -157,6 +157,11 @@ await event_bus.publish("app.state_changed", {"old_mode": ..., "new_mode": ...})
 - Воспроизведение
   - `playback.started|completed|failed|cancelled{session_id}`
 
+- Сигналы (cues)
+  - `signal.request{kind, pattern, volume?, device?, session_id?}`
+  - `signal.completed|failed{pattern, ...}`
+  - Рекомендуемые автосигналы: LISTENING→`listen_start`, playback.completed→`done`, ошибки/отмены→`error|cancel`
+
 - Разрешения/Аудио/Сеть/Железо
   - `permissions.app_blocked|app_unblocked{...}`
   - `audio.device_switched|audio.device_snapshot{...}`

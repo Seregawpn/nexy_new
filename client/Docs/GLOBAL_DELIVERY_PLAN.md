@@ -24,6 +24,7 @@
 Δ 2025‑09‑18 — обновление статуса
 - Реализован end‑to‑end поток: LISTENING → PROCESSING → захват скриншота → gRPC → приём аудио чанков → воспроизведение → возврат в SLEEPING
 - Ограничение: возврат в SLEEPING пока вызывается таймаутом PROCESSING — требуется привязать к `grpc.request_completed`/`end_message` или `playback.completed`
+ - Создан модуль Signals (audio/visual cues): не требует новых entitlements; безопасен для PKG/подписи/нотаризации; интеграция планируется через AudioSink + SignalIntegration
 
 - 1.1 Tray стабилизация
   - Действия: подписка на `app.mode_changed` и `voice.mic_opened/closed`; индикация S/L/P; текст статуса; позже — `network.status_changed`.
