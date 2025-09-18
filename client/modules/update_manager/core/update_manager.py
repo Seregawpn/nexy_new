@@ -108,7 +108,7 @@ class UpdateManager:
         """Проверка, можно ли проверять обновления"""
         # Не проверяем во время активной работы
         current_mode = self.state_manager.get_current_mode()
-        if current_mode in ["LISTENING", "PROCESSING", "SPEAKING"]:
+        if current_mode in ["LISTENING", "PROCESSING"]:
             logger.info(f"Откладываю проверку обновлений - активный режим: {current_mode}")
             return False
             
@@ -245,7 +245,7 @@ class UpdateManager:
         new_mode = event_data.get("new_mode")
         
         # Если приложение переходит в активный режим, откладываем обновление
-        if new_mode in ["LISTENING", "PROCESSING", "SPEAKING"]:
+        if new_mode in ["LISTENING", "PROCESSING"]:
             if self.current_status in [UpdateStatus.DOWNLOADING, UpdateStatus.INSTALLING]:
                 logger.info(f"Приостанавливаю обновление - активный режим: {new_mode}")
                 await self._pause_update_process()

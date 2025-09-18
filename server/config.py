@@ -33,6 +33,8 @@ class Config:
     EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'en-US-JennyNeural')
     EDGE_TTS_RATE = os.getenv('EDGE_TTS_RATE', '+0%')
     EDGE_TTS_VOLUME = os.getenv('EDGE_TTS_VOLUME', '+0%')
+    USE_EDGE_TTS = os.getenv('USE_EDGE_TTS', 'false').lower() == 'true'
+    FORCE_EDGE_TTS = os.getenv('FORCE_EDGE_TTS', 'false').lower() == 'true'
     
     # =====================================================
     # AZURE SPEECH TTS - ВКЛЮЧЕН
@@ -56,10 +58,14 @@ class Config:
     DB_PASSWORD = os.getenv('DB_PASSWORD', '')
     
     # =====================================================
-    # АУДИО
+    # АУДИО - СИНХРОНИЗИРОВАНО С КЛИЕНТОМ
     # =====================================================
-    SAMPLE_RATE = int(os.getenv('SAMPLE_RATE', '48000'))
-    CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', '1024'))
+    # ВАЖНО: Эти настройки должны совпадать с клиентской конфигурацией
+    # Клиент: client/config/unified_config.yaml -> audio.sample_rate, audio.chunk_size, audio.format
+    # Формат: всегда int16 для совместимости (клиент: audio.format = int16)
+    SAMPLE_RATE = int(os.getenv('SAMPLE_RATE', '48000'))  # = unified_config.yaml:audio.sample_rate
+    CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', '1024'))     # = unified_config.yaml:audio.chunk_size  
+    AUDIO_FORMAT = 'int16'  # = unified_config.yaml:audio.format (всегда int16)
     
     # =====================================================
     # ЛОГИРОВАНИЕ

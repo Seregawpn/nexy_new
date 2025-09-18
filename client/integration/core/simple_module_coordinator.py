@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 # Импорты интеграций (НЕ модулей напрямую!)
 from integrations.tray_controller_integration import TrayControllerIntegration
+from integrations.mode_management_integration import ModeManagementIntegration
 from integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
 from integrations.grpc_client_integration import GrpcClientIntegration
 from integrations.speech_playback_integration import SpeechPlaybackIntegration
@@ -284,6 +285,13 @@ class SimpleModuleCoordinator:
                 config=vrec_config,
             )
 
+            # Mode Management Integration (централизация режимов)
+            self.integrations['mode_management'] = ModeManagementIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+            )
+
             # Grpc Client Integration
             self.integrations['grpc'] = GrpcClientIntegration(
                 event_bus=self.event_bus,
@@ -463,6 +471,23 @@ class SimpleModuleCoordinator:
                 return
             
             print("🎯 Запуск приложения с иконкой в меню-баре...")
+            
+            # Запускаем UI-таймер ПОСЛЕ того как rumps приложение готово
+            # Используем rumps.Timer для запуска таймера в UI-потоке (однократно)
+            import rumps
+            def start_timer_callback(_):
+                try:
+                    tray_integration.start_ui_timer()
+                    logger.info("✅ UI-таймер запущен через rumps callback")
+                    # Останавливаем startup_timer после первого запуска
+                    startup_timer.stop()
+                except Exception as e:
+                    logger.error(f"❌ Ошибка запуска UI-таймера через callback: {e}")
+            
+            # Запускаем таймер через 1 секунду после старта приложения (однократно)
+            # В rumps.Timer нет параметра repeat; останавливаем таймер внутри колбэка
+            startup_timer = rumps.Timer(start_timer_callback, 1.0)
+            startup_timer.start()
             
             # Запускаем приложение rumps (блокирующий вызов)
             app.run()

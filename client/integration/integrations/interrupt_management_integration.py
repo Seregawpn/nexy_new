@@ -359,25 +359,15 @@ class InterruptManagementIntegration:
                     "timestamp": interrupt_event.timestamp
                 })
             
-            # Переводим в режим SLEEPING
-            if self.state_manager and hasattr(self.state_manager, 'set_mode') and callable(self.state_manager.set_mode):
+            # Переводим в режим SLEEPING централизованно
+            if self.event_bus:
                 try:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.SLEEPING)
-                    else:
-                        self.state_manager.set_mode(AppMode.SLEEPING)
+                    await self.event_bus.publish("mode.request", {
+                        "target": AppMode.SLEEPING,
+                        "source": "interrupt_management"
+                    })
                 except Exception as e:
-                    logger.error(f"Error setting mode to SLEEPING: {e}")
-            else:
-                # Публикуем событие смены режима
-                if self.event_bus:
-                    try:
-                        await self.event_bus.publish("app.state_changed", {
-                            "old_mode": "PROCESSING",
-                            "new_mode": "SLEEPING"
-                        })
-                    except Exception as e:
-                        logger.error(f"Error publishing state change: {e}")
+                    logger.error(f"Error publishing mode.request SLEEPING: {e}")
             
             interrupt_event.status = InterruptStatus.COMPLETED
             interrupt_event.result = "Speech stopped successfully"
@@ -421,25 +411,15 @@ class InterruptManagementIntegration:
                     "timestamp": interrupt_event.timestamp
                 })
             
-            # Переводим в режим PROCESSING
-            if self.state_manager and hasattr(self.state_manager, 'set_mode') and callable(self.state_manager.set_mode):
+            # Переводим в режим PROCESSING централизованно
+            if self.event_bus:
                 try:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.PROCESSING)
-                    else:
-                        self.state_manager.set_mode(AppMode.PROCESSING)
+                    await self.event_bus.publish("mode.request", {
+                        "target": AppMode.PROCESSING,
+                        "source": "interrupt_management"
+                    })
                 except Exception as e:
-                    logger.error(f"Error setting mode to PROCESSING: {e}")
-            else:
-                # Публикуем событие смены режима
-                if self.event_bus:
-                    try:
-                        await self.event_bus.publish("app.state_changed", {
-                            "old_mode": "LISTENING",
-                            "new_mode": "PROCESSING"
-                        })
-                    except Exception as e:
-                        logger.error(f"Error publishing state change: {e}")
+                    logger.error(f"Error publishing mode.request PROCESSING: {e}")
             
             interrupt_event.status = InterruptStatus.COMPLETED
             interrupt_event.result = "Recording stopped successfully"
@@ -462,25 +442,15 @@ class InterruptManagementIntegration:
                     "timestamp": interrupt_event.timestamp
                 })
             
-            # Переводим в режим SLEEPING
-            if self.state_manager and hasattr(self.state_manager, 'set_mode') and callable(self.state_manager.set_mode):
+            # Переводим в режим SLEEPING централизованно
+            if self.event_bus:
                 try:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.SLEEPING)
-                    else:
-                        self.state_manager.set_mode(AppMode.SLEEPING)
+                    await self.event_bus.publish("mode.request", {
+                        "target": AppMode.SLEEPING,
+                        "source": "interrupt_management"
+                    })
                 except Exception as e:
-                    logger.error(f"Error setting mode to SLEEPING: {e}")
-            else:
-                # Публикуем событие смены режима
-                if self.event_bus:
-                    try:
-                        await self.event_bus.publish("app.state_changed", {
-                            "old_mode": "PROCESSING",
-                            "new_mode": "SLEEPING"
-                        })
-                    except Exception as e:
-                        logger.error(f"Error publishing state change: {e}")
+                    logger.error(f"Error publishing mode.request SLEEPING: {e}")
             
             interrupt_event.status = InterruptStatus.COMPLETED
             interrupt_event.result = "Session cleared successfully"
@@ -506,25 +476,15 @@ class InterruptManagementIntegration:
             # Отменяем все активные прерывания
             await self._cancel_all_interrupts()
             
-            # Переводим в режим SLEEPING
-            if self.state_manager and hasattr(self.state_manager, 'set_mode') and callable(self.state_manager.set_mode):
+            # Переводим в режим SLEEPING централизованно
+            if self.event_bus:
                 try:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.SLEEPING)
-                    else:
-                        self.state_manager.set_mode(AppMode.SLEEPING)
+                    await self.event_bus.publish("mode.request", {
+                        "target": AppMode.SLEEPING,
+                        "source": "interrupt_management"
+                    })
                 except Exception as e:
-                    logger.error(f"Error setting mode to SLEEPING: {e}")
-            else:
-                # Публикуем событие смены режима
-                if self.event_bus:
-                    try:
-                        await self.event_bus.publish("app.state_changed", {
-                            "old_mode": "PROCESSING",
-                            "new_mode": "SLEEPING"
-                        })
-                    except Exception as e:
-                        logger.error(f"Error publishing state change: {e}")
+                    logger.error(f"Error publishing mode.request SLEEPING: {e}")
             
             interrupt_event.status = InterruptStatus.COMPLETED
             interrupt_event.result = "Full reset completed successfully"

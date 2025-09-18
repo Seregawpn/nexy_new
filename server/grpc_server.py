@@ -298,6 +298,12 @@ class StreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                     except Exception as audio_error:
                         logger.error(f"Ошибка потоковой генерации аудио для '{text_chunk[:30]}...': {audio_error}")
 
+            # По завершении основного цикла отправляем финальный маркер конца стрима
+            try:
+                yield streaming_pb2.StreamResponse(end_message="done")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось отправить end_message: {e}")
+
             stream_end_time = asyncio.get_event_loop().time()
             total_stream_time = stream_end_time - stream_start_time
             logger.info(f"✅ Gemini Live API streaming завершен для сессии {session_id}")

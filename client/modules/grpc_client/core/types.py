@@ -35,9 +35,10 @@ class ServerConfig:
     retry_attempts: int = 3
     retry_delay: float = 1.0
     max_message_size: int = 50 * 1024 * 1024  # 50MB
-    keep_alive_time: int = 30
-    keep_alive_timeout: int = 5
-    keep_alive_permit_without_calls: bool = True
+    # Keepalive defaults tuned to avoid server GOAWAY (too_many_pings)
+    keep_alive_time: int = 120
+    keep_alive_timeout: int = 10
+    keep_alive_permit_without_calls: bool = False
 
 
 @dataclass

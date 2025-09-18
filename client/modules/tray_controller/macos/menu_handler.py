@@ -18,6 +18,7 @@ class MacOSTrayMenu:
         # Ссылки на изменяемые пункты меню
         self._status_item: Optional[rumps.MenuItem] = None
         self._output_item: Optional[rumps.MenuItem] = None
+        # UI таймер/очередь не используются на уровне модуля (обновления делает интеграция)
     
     def create_app(self, icon_path: str) -> rumps.App:
         """Создать приложение с иконкой в трее"""
@@ -27,28 +28,16 @@ class MacOSTrayMenu:
                 name=self.app_name,
                 quit_button=None  # Убираем стандартную кнопку выхода
             )
+            # Включаем цветные иконки (отключаем шаблонный режим)
+            try:
+                self.app.template = False
+            except Exception:
+                pass
             
-            # Создаём изменяемые элементы меню (статус и текущее устройство)
-            title_item = rumps.MenuItem(title="Nexy AI Assistant")
-            self._status_item = rumps.MenuItem(title="Status: Waiting")
-            self._output_item = rumps.MenuItem(title="Output: Unknown")
+            # Изначально меню заполняется интеграцией через TrayController._create_default_menu()
+            # Здесь не создаём собственных пунктов меню, чтобы избежать дублирования и несинхронности.
+            self.app.menu = []
 
-            # Добавляем простое меню (с объектами MenuItem)
-            self.app.menu = [
-                title_item,
-                None,
-                self._status_item,
-                self._output_item,
-                None,
-                "Quit"
-            ]
-            
-            # Добавляем обработчик выхода
-            def quit_app(sender):
-                rumps.quit_application()
-            
-            self.app.menu["Quit"].set_callback(quit_app)
-            
             # Устанавливаем иконку если есть
             if icon_path and os.path.exists(icon_path):
                 self.app.icon = icon_path
@@ -73,8 +62,11 @@ class MacOSTrayMenu:
         
         try:
             if item.separator:
-                # Добавляем разделитель
-                rumps.separator()
+                # Добавляем разделитель в меню приложения
+                try:
+                    self.app.menu.add(rumps.separator())
+                except Exception:
+                    pass
             else:
                 # Создаем элемент меню
                 menu_item = rumps.MenuItem(
@@ -88,6 +80,16 @@ class MacOSTrayMenu:
                 
                 # Добавляем в меню
                 self.app.menu.add(menu_item)
+
+                # Сохраняем ссылки на изменяемые элементы (по префиксу заголовка)
+                try:
+                    if isinstance(item.title, str):
+                        if item.title.startswith("Status:"):
+                            self._status_item = menu_item
+                        elif item.title.startswith("Output:"):
+                            self._output_item = menu_item
+                except Exception:
+                    pass
                 
                 # Если есть подменю
                 if item.submenu:
@@ -167,7 +169,7 @@ class MacOSTrayMenu:
             self._status_item.title = f"Status: {text}"
         except Exception as e:
             print(f"Ошибка обновления статуса меню: {e}")
-
+        
     def update_output_device(self, device_name: str):
         """Обновить название текущего устройства вывода в меню."""
         if not self.app or not self._output_item:
@@ -196,3 +198,5 @@ class MacOSTrayMenu:
         """Завершить приложение"""
         if self.app:
             rumps.quit_application()
+
+    

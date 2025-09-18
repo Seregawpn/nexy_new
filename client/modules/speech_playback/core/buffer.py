@@ -37,17 +37,26 @@ class ChunkInfo:
             self.metadata = {}
 
 class ChunkBuffer:
-    """Буфер для управления чанками аудио"""
+    """
+    Буфер для управления чанками аудио (2D: frames x channels)
     
-    def __init__(self, max_memory_mb: int = 1024):
+    ВАЖНО: Параметры по умолчанию - fallback значения.
+    Рекомендуется передавать параметры из централизованной конфигурации.
+    """
+
+    def __init__(self, max_memory_mb: int = 256, channels: int = 1, dtype: np.dtype = np.int16):
         """
         Инициализация буфера
-        
+
         Args:
             max_memory_mb: Максимальное использование памяти в МБ
+            channels: Количество каналов вывода
+            dtype: Тип данных внутреннего буфера
         """
         self._chunk_queue = queue.Queue()
-        self._playback_buffer = np.array([], dtype=np.int16)
+        self._channels = max(1, min(2, int(channels)))
+        self._dtype = dtype
+        self._playback_buffer = np.zeros((0, self._channels), dtype=self._dtype)
         self._buffer_lock = threading.RLock()
         self._max_memory_bytes = max_memory_mb * 1024 * 1024
         self._current_memory_usage = 0
@@ -60,8 +69,32 @@ class ChunkBuffer:
             'total_data_size': 0,
             'peak_memory_usage': 0
         }
-        
-        logger.info(f"🔧 ChunkBuffer инициализирован (max_memory: {max_memory_mb}MB)")
+
+        logger.info(f"🔧 ChunkBuffer инициализирован (max_memory: {max_memory_mb}MB, channels: {self._channels})")
+
+    def set_channels(self, channels: int):
+        """Изменить число каналов буфера с безопасной конвертацией текущих данных"""
+        new_ch = max(1, min(2, int(channels)))
+        with self._buffer_lock:
+            if new_ch == self._channels:
+                return
+            # Конвертируем существующий буфер, если он не пуст
+            if len(self._playback_buffer) > 0:
+                if new_ch == 1 and self._playback_buffer.shape[1] > 1:
+                    # downmix стерео → моно
+                    mixed = self._playback_buffer.mean(axis=1)
+                    self._playback_buffer = mixed.reshape(-1, 1).astype(self._dtype, copy=False)
+                elif new_ch == 2 and self._playback_buffer.shape[1] == 1:
+                    # дублирование моно → стерео
+                    mono = self._playback_buffer.reshape(-1)
+                    self._playback_buffer = np.column_stack([mono, mono]).astype(self._dtype, copy=False)
+                else:
+                    # Уже нужное количество
+                    pass
+            else:
+                # Переинициализируем пустой буфер
+                self._playback_buffer = np.zeros((0, new_ch), dtype=self._dtype)
+            self._channels = new_ch
     
     @property
     def queue_size(self) -> int:
@@ -175,23 +208,39 @@ class ChunkBuffer:
         try:
             with self._buffer_lock:
                 old_size = len(self._playback_buffer)
-                
-                # Убеждаемся, что данные имеют правильную форму
+
                 data = chunk_info.data
-                if len(data.shape) == 2:
-                    # 2D данные - преобразуем в 1D
-                    data = data.flatten()
-                
-                # Добавляем в буфер
+                # Приводим dtype к буферному
+                if data.dtype != self._dtype:
+                    data = data.astype(self._dtype)
+                # Приводим форму к 2D (frames, channels)
+                if data.ndim == 1:
+                    data = data.reshape(-1, 1)
+                # Приводим число каналов к буферному
+                if data.shape[1] != self._channels:
+                    if self._channels == 1 and data.shape[1] > 1:
+                        data = data.mean(axis=1).reshape(-1, 1).astype(self._dtype, copy=False)
+                    elif self._channels == 2 and data.shape[1] == 1:
+                        mono = data.reshape(-1)
+                        data = np.column_stack([mono, mono]).astype(self._dtype, copy=False)
+                    elif self._channels == 2 and data.shape[1] > 2:
+                        data = data[:, :2]
+                    else:
+                        # Нестандартный случай — последняя страховка
+                        data = np.column_stack([data[:, 0]] * self._channels).astype(self._dtype, copy=False)
+
+                # Добавляем в буфер (по rows)
                 if len(self._playback_buffer) == 0:
                     self._playback_buffer = data
                 else:
-                    self._playback_buffer = np.concatenate([self._playback_buffer, data])
-                
+                    self._playback_buffer = np.vstack([self._playback_buffer, data])
+
                 chunk_info.state = ChunkState.BUFFERED
-                
-                logger.info(f"✅ Чанк добавлен в буфер: {chunk_info.id} (size: {len(data)}, buffer: {old_size} → {len(self._playback_buffer)})")
-                
+
+                logger.info(
+                    f"✅ Чанк добавлен в буфер: {chunk_info.id} (frames: {len(data)}, buffer: {old_size} → {len(self._playback_buffer)}, ch={self._channels})"
+                )
+
                 return True
                 
         except Exception as e:
@@ -214,21 +263,24 @@ class ChunkBuffer:
             if len(self._playback_buffer) >= frames:
                 data = self._playback_buffer[:frames]
                 self._playback_buffer = self._playback_buffer[frames:]
-                logger.debug(f"🎵 Воспроизведено: {frames} сэмплов (осталось: {len(self._playback_buffer)})")
+                logger.debug(f"🎵 Воспроизведено: {frames} фреймов (осталось: {len(self._playback_buffer)})")
                 return data
             else:
-                # Если данных недостаточно, возвращаем то что есть + тишина
+                # Если данных недостаточно, возвращаем то что есть + тишина (2D)
                 if len(self._playback_buffer) > 0:
                     data = self._playback_buffer.copy()
-                    self._playback_buffer = np.array([], dtype=np.int16)
-                    # Дополняем тишиной до нужного размера
-                    silence = np.zeros(frames - len(data), dtype=np.int16)
-                    result = np.concatenate([data, silence])
-                    logger.debug(f"🎵 Воспроизведено: {len(data)} сэмплов + {len(silence)} тишины")
+                    current_dtype = self._playback_buffer.dtype
+                    current_ch = self._playback_buffer.shape[1]
+                    self._playback_buffer = np.zeros((0, current_ch), dtype=current_dtype)
+                    silence = np.zeros((frames - len(data), current_ch), dtype=current_dtype)
+                    result = np.vstack([data, silence])
+                    logger.debug(
+                        f"🎵 Воспроизведено: {len(data)} фреймов + {len(silence)} тишины (dtype={current_dtype}, ch={current_ch})"
+                    )
                     return result
                 else:
-                    logger.debug(f"🎵 Нет данных, воспроизводим тишину: {frames} сэмплов")
-                    return np.zeros(frames, dtype=np.int16)
+                    logger.debug(f"🎵 Нет данных, воспроизводим тишину: {frames} фреймов, ch={self._channels}")
+                    return np.zeros((frames, self._channels), dtype=self._dtype)
     
     def mark_chunk_completed(self, chunk_info: ChunkInfo):
         """Отметить чанк как завершенный"""
@@ -259,8 +311,8 @@ class ChunkBuffer:
         """Очистить буфер воспроизведения"""
         with self._buffer_lock:
             old_size = len(self._playback_buffer)
-            self._playback_buffer = np.array([], dtype=np.int16)
-            logger.info(f"🧹 Буфер воспроизведения очищен: {old_size} сэмплов")
+            self._playback_buffer = np.zeros((0, self._channels), dtype=self._dtype)
+            logger.info(f"🧹 Буфер воспроизведения очищен: {old_size} фреймов")
     
     def clear_all(self):
         """Очистить все буферы"""
@@ -296,29 +348,30 @@ class ChunkBuffer:
             'has_data': self.has_data
         }
     
-    def wait_for_completion(self, timeout: float = 30.0) -> bool:
+    def wait_for_completion(self, timeout: float = None) -> bool:
         """
         Ждать завершения обработки всех чанков
         
         Args:
-            timeout: Таймаут ожидания в секундах
+            timeout: Таймаут ожидания в секундах (None = без таймаута)
             
         Returns:
             Успешность завершения
         """
         start_time = time.time()
         
-        while time.time() - start_time < timeout:
+        while True:
             if self.is_empty:
-                logger.info("✅ Все чанки обработаны")
+                elapsed = time.time() - start_time
+                logger.info(f"✅ Все чанки обработаны за {elapsed:.1f}с")
                 return True
             
+            # Проверяем таймаут только если он задан
+            if timeout is not None and time.time() - start_time >= timeout:
+                logger.warning(f"⚠️ Таймаут ожидания завершения ({timeout}s)")
+                return False
+            
             time.sleep(0.1)
-        
-        logger.warning(f"⚠️ Таймаут ожидания завершения ({timeout}s)")
-        return False
-
-
 
 
 

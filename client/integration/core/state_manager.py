@@ -5,16 +5,29 @@ ApplicationStateManager - Управление состоянием прилож
 import logging
 from typing import Dict, Any, Optional
 import threading
-from enum import Enum
+
+"""
+NOTE: AppMode is imported from the centralized mode_management module to avoid
+duplication and desynchronization. This keeps a single source of truth for
+application modes across all integrations.
+"""
+try:
+    # Preferred: top-level import (packaged or PYTHONPATH includes modules)
+    from mode_management import AppMode  # type: ignore
+except Exception:
+    try:
+        # Fallback: explicit modules path if repository layout is used
+        from modules.mode_management import AppMode  # type: ignore
+    except Exception:
+        # Last-resort minimal inline enum to not break local tools; values match
+        # the centralized one. Should not be used in production.
+        from enum import Enum
+        class AppMode(Enum):
+            SLEEPING = "sleeping"
+            LISTENING = "listening"
+            PROCESSING = "processing"
 
 logger = logging.getLogger(__name__)
-
-class AppMode(Enum):
-    """Режимы приложения"""
-    SLEEPING = "sleeping"
-    LISTENING = "listening"
-    PROCESSING = "processing"
-    SPEAKING = "speaking"
 
 class ApplicationStateManager:
     """Менеджер состояния приложения"""
@@ -59,28 +72,54 @@ class ApplicationStateManager:
                 
                 logger.info(f"🔄 Режим изменен: {self.previous_mode.value} → {mode.value}")
 
+                # 🎯 TRAY DEBUG: Синхронный лог ПЕРЕД публикацией
+                logger.info(f"🎯 TRAY DEBUG: set_mode() готов публиковать app.mode_changed: {mode}")
+                logger.info(f"🎯 TRAY DEBUG: EventBus подключен: {self._event_bus is not None}")
+
                 # Публикуем централизованные события (если EventBus подключен)
                 if self._event_bus is not None:
                     try:
                         import asyncio
-                        logger.info(f"🔄 StateManager: начинаем публикацию событий (EventBus подключен, loop={id(self._loop) if self._loop else None})")
+                        # Всегда ориентируемся на loop, закреплённый в EventBus
+                        loop = getattr(self._event_bus, "_loop", None)
+                        logger.info(
+                            f"🔄 StateManager: начинаем публикацию событий (EventBus подключен, eb_loop={id(loop) if loop else None})"
+                        )
+
                         async def _publish_changes():
-                            logger.info(f"🔄 StateManager: -> publish app.mode_changed: {mode}")
-                            await self._event_bus.publish("app.mode_changed", {"mode": mode})
-                            logger.info(f"🔄 StateManager: -> publish app.state_changed: {self.previous_mode} -> {mode}")
+                            logger.info(
+                                f"🎯 TRAY DEBUG: StateManager публикует app.mode_changed: {mode} (type: {type(mode)})"
+                            )
+                            event_data = {"mode": mode}
+                            logger.info(f"🎯 TRAY DEBUG: StateManager event_data: {event_data}")
+                            await self._event_bus.publish("app.mode_changed", event_data)
+                            logger.info("🎯 TRAY DEBUG: StateManager app.mode_changed опубликовано успешно")
+
+                            # Проверяем есть ли подписчики
+                            try:
+                                subscribers = getattr(self._event_bus, 'subscribers', {}).get("app.mode_changed", [])
+                                logger.info(
+                                    f"🎯 TRAY DEBUG: StateManager подписчиков на app.mode_changed: {len(subscribers)}"
+                                )
+                            except Exception:
+                                pass
+                            logger.info(
+                                f"🔄 StateManager: -> publish app.state_changed: {self.previous_mode} -> {mode}"
+                            )
                             await self._event_bus.publish("app.state_changed", {
                                 "old_mode": self.previous_mode,
                                 "new_mode": mode
                             })
-                        # Публикуем всегда на сохранённый основной loop, если он есть и живой
-                        if self._loop is not None and self._loop.is_running():
-                            logger.info(f"🔄 StateManager: публикуем через run_coroutine_threadsafe")
-                            asyncio.run_coroutine_threadsafe(_publish_changes(), self._loop)
+
+                        # Если у EventBus есть живой loop — публикуем на нём
+                        if loop is not None and getattr(loop, 'is_running', lambda: False)():
+                            logger.info("🔄 StateManager: публикуем через run_coroutine_threadsafe на loop EventBus (без ожидания)")
+                            # Не ждём завершения — исключаем блокировку UI-сигналов
+                            asyncio.run_coroutine_threadsafe(_publish_changes(), loop)
                         else:
-                            logger.info(f"🔄 StateManager: публикуем через asyncio.run (fallback)")
-                            # Fallback: синхронно в текущем потоке
+                            logger.info("🔄 StateManager: публикуем через asyncio.run (fallback)")
                             asyncio.run(_publish_changes())
-                        logger.info(f"✅ StateManager: события опубликованы успешно")
+                        logger.info("✅ StateManager: события опубликованы успешно")
                     except Exception as e:
                         logger.error(f"❌ StateManager: Не удалось опубликовать события смены режима: {e}")
                         import traceback

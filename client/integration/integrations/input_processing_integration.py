@@ -150,6 +150,15 @@ class InputProcessingIntegration:
         await self.event_bus.subscribe("mode.switch", self._handle_mode_switch, EventPriority.HIGH)
         # Подписка на завершение распознавания (для мгновенного решения)
         await self.event_bus.subscribe("voice.recognition_completed", self._on_recognition_completed, EventPriority.HIGH)
+        # Возврат в SLEEPING при неудаче/таймауте распознавания
+        try:
+            await self.event_bus.subscribe("voice.recognition_failed", self._on_recognition_failed, EventPriority.HIGH)
+        except Exception:
+            pass
+        try:
+            await self.event_bus.subscribe("voice.recognition_timeout", self._on_recognition_failed, EventPriority.HIGH)
+        except Exception:
+            pass
 
     async def _on_recognition_completed(self, event):
         """Фиксируем факт распознавания для текущей сессии"""
@@ -164,6 +173,27 @@ class InputProcessingIntegration:
                 category=ErrorCategory.RUNTIME,
                 message=f"Ошибка обработки recognition_completed: {e}",
                 context={"where": "input_processing_integration.on_recognition_completed"}
+            )
+    
+    async def _on_recognition_failed(self, event):
+        """Возврат в SLEEPING при неудаче/таймауте распознавания."""
+        try:
+            # Сбрасываем текущую сессию
+            self._current_session_id = None
+            self._session_recognized = False
+            self._recording_started = False
+            # Переходим в SLEEPING через централизованный запрос
+            await self.event_bus.publish("mode.request", {
+                "target": AppMode.SLEEPING,
+                "source": "input_processing"
+            })
+            logger.info("VOICE FAIL/TIMEOUT: запрос на SLEEPING отправлен")
+        except Exception as e:
+            await self.error_handler.handle_error(
+                severity=ErrorSeverity.LOW,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки recognition_failed/timeout: {e}",
+                context={"where": "input_processing_integration.on_recognition_failed"}
             )
         
     async def start(self) -> bool:
@@ -264,13 +294,25 @@ class InputProcessingIntegration:
                 )
                 logger.debug("SHORT_PRESS: voice.recording_stop опубликовано")
 
-            # Переключаем режим в SLEEPING
-            if hasattr(self.state_manager, 'set_mode'):
-                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                    await self.state_manager.set_mode(AppMode.SLEEPING)
-                else:
-                    self.state_manager.set_mode(AppMode.SLEEPING)
-                logger.info("SHORT_PRESS: режим установлен SLEEPING")
+            # При коротком нажатии:
+            # - если идёт PROCESSING (воспроизведение/обработка) — отправляем interrupt.request
+            # - иначе (LISTENING/SLEEPING) — запрашиваем SLEEPING
+            try:
+                current = self.state_manager.get_current_mode()
+            except Exception:
+                current = None
+            if current == AppMode.PROCESSING:
+                await self.event_bus.publish("interrupt.request", {
+                    "scope": "playback",
+                    "reason": "keyboard.short_press"
+                })
+                logger.info("SHORT_PRESS: interrupt.request(playback)")
+            else:
+                await self.event_bus.publish("mode.request", {
+                    "target": AppMode.SLEEPING,
+                    "source": "input_processing"
+                })
+                logger.info("SHORT_PRESS: запрос на SLEEPING отправлен")
 
             # Смена режима публикуется централизованно через ApplicationStateManager
 
@@ -320,12 +362,12 @@ class InputProcessingIntegration:
                 self._recording_started = True
                 logger.debug("LONG_PRESS: voice.recording_start опубликовано")
 
-                if hasattr(self.state_manager, 'set_mode'):
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.LISTENING)
-                    else:
-                        self.state_manager.set_mode(AppMode.LISTENING)
-                    logger.info("LONG_PRESS: режим установлен LISTENING")
+                # Запрашиваем переход в LISTENING централизованно
+                await self.event_bus.publish("mode.request", {
+                    "target": AppMode.LISTENING,
+                    "source": "input_processing"
+                })
+                logger.info("LONG_PRESS: запрос на LISTENING отправлен")
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -369,13 +411,13 @@ class InputProcessingIntegration:
                 logger.debug("RELEASE: voice.recording_stop опубликовано")
 
             # Переходим в PROCESSING только если запись велась; иначе остаёмся в текущем режиме (обычно SLEEPING)
-            if self._recording_started and hasattr(self.state_manager, 'set_mode'):
-                logger.debug("RELEASE: вызываем state_manager.set_mode(PROCESSING)")
-                if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                    await self.state_manager.set_mode(AppMode.PROCESSING)
-                else:
-                    self.state_manager.set_mode(AppMode.PROCESSING)
-                logger.info("RELEASE: режим установлен PROCESSING")
+            if self._recording_started:
+                logger.debug("RELEASE: публикуем mode.request(PROCESSING)")
+                await self.event_bus.publish("mode.request", {
+                    "target": AppMode.PROCESSING,
+                    "source": "input_processing"
+                })
+                logger.info("RELEASE: запрос на PROCESSING отправлен")
 
             # Смена режима публикуется централизованно через ApplicationStateManager
 

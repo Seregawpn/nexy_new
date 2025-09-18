@@ -25,18 +25,52 @@ from ..utils.device_utils import get_best_audio_device
 from ..macos.core_audio import CoreAudioManager
 from ..macos.performance import PerformanceMonitor
 
+# ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ АУДИО
+from config.audio_config import get_audio_config
+
 logger = logging.getLogger(__name__)
 
 @dataclass
 class PlayerConfig:
-    """Конфигурация плеера"""
-    sample_rate: int = 44100
-    channels: int = 2
-    dtype: str = 'int16'
-    buffer_size: int = 512
-    max_memory_mb: int = 1024
+    """
+    Конфигурация плеера
+    
+    ВАЖНО: Используйте from_centralized_config() для загрузки из unified_config.yaml
+    Хардкод значения ниже - только fallback на случай ошибки загрузки конфигурации.
+    """
+    sample_rate: int = 48000  # Fallback - загружается из централизованной конфигурации
+    channels: int = 1         # Fallback - загружается из централизованной конфигурации
+    dtype: str = 'int16'      # Fallback - загружается из централизованной конфигурации
+    buffer_size: int = 512    # Fallback - загружается из централизованной конфигурации
+    max_memory_mb: int = 1024 # Fallback - загружается из централизованной конфигурации
     device_id: Optional[int] = None
     auto_device_selection: bool = True
+    
+    @classmethod
+    def from_centralized_config(cls) -> 'PlayerConfig':
+        """
+        Создать PlayerConfig из централизованной конфигурации
+        
+        Returns:
+            PlayerConfig: Конфигурация из unified_config.yaml
+        """
+        try:
+            audio_config = get_audio_config()
+            config_dict = audio_config.get_speech_playback_config()
+            
+            return cls(
+                sample_rate=config_dict['sample_rate'],
+                channels=config_dict['channels'],
+                dtype=config_dict['dtype'],
+                buffer_size=config_dict['buffer_size'],
+                max_memory_mb=config_dict['max_memory_mb'],
+                auto_device_selection=config_dict['auto_device_selection'],
+                device_id=None  # Определяется автоматически
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки централизованной конфигурации: {e}")
+            logger.info("🔄 Используем конфигурацию по умолчанию")
+            return cls()  # Fallback к defaults
 
 class SequentialSpeechPlayer:
     """Плеер для последовательного воспроизведения речи"""
@@ -46,11 +80,23 @@ class SequentialSpeechPlayer:
         Инициализация плеера
         
         Args:
-            config: Конфигурация плеера
+            config: Конфигурация плеера (если None, загружается из централизованной конфигурации)
         """
-        self.config = config or PlayerConfig()
+        # Используем централизованную конфигурацию по умолчанию
+        if config is None:
+            try:
+                self.config = PlayerConfig.from_centralized_config()
+                logger.info("✅ PlayerConfig загружен из централизованной конфигурации")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка загрузки централизованной конфигурации: {e}")
+                logger.info("🔄 Используем fallback конфигурацию")
+                self.config = PlayerConfig()
+        else:
+            self.config = config
         self.state_manager = StateManager()
-        self.chunk_buffer = ChunkBuffer(max_memory_mb=self.config.max_memory_mb)
+        # Выбираем dtype буфера под конфиг (унифицировано на int16)
+        buf_dtype = np.int16 if str(self.config.dtype).lower() in ('int16', 'short') else np.int16  # Всегда int16
+        self.chunk_buffer = ChunkBuffer(max_memory_mb=self.config.max_memory_mb, channels=self.config.channels, dtype=buf_dtype)
         
         # Потоки и синхронизация
         self._playback_thread: Optional[threading.Thread] = None
@@ -87,9 +133,21 @@ class SequentialSpeechPlayer:
                 device = get_best_audio_device()
                 if device:
                     self.config.device_id = device.portaudio_index
-                    logger.info(f"🎵 Выбрано устройство: {device.name}")
+                    # Определяем целевое число каналов по устройству (1..2)
+                    target_channels = 1 if device.channels <= 1 else 2
+                    if target_channels != self.config.channels:
+                        self.config.channels = target_channels
+                    # Синхронизируем буфер под новое число каналов
+                    try:
+                        self.chunk_buffer.set_channels(self.config.channels)
+                    except Exception:
+                        pass
+                    logger.info(f"🎵 Выбрано устройство: {device.name} (channels: {device.channels}, sample_rate: {device.sample_rate})")
                 else:
                     logger.warning("⚠️ Не удалось выбрать аудио устройство")
+            
+            # Логируем конфигурацию плеера для отладки
+            logger.info(f"🎵 Конфигурация плеера: sample_rate={self.config.sample_rate}Hz, channels={self.config.channels}, dtype={self.config.dtype}")
             
             # Инициализация мониторинга производительности
             self._performance_monitor.start()
@@ -118,10 +176,41 @@ class SequentialSpeechPlayer:
             # Resampling если необходимо
             if hasattr(audio_data, 'sample_rate') and audio_data.sample_rate != self.config.sample_rate:
                 audio_data = resample_audio(audio_data, self.config.sample_rate)
-            
-            # Конвертация каналов если необходимо
-            if len(audio_data.shape) == 1:  # Моно
-                audio_data = convert_channels(audio_data, self.config.channels)
+
+            # Конвертация каналов под целевые (1..2) и приведение к 2D
+            try:
+                converted = convert_channels(audio_data, self.config.channels)
+            except Exception:
+                converted = audio_data
+            # Убеждаемся, что 2D
+            if converted.ndim == 1:
+                if self.config.channels == 1:
+                    converted = converted.reshape(-1, 1)
+                else:
+                    converted = np.column_stack([converted, converted])
+            elif converted.ndim > 2:
+                converted = converted.reshape(converted.shape[0], -1)
+
+            # Приводим dtype к конфигу (унифицировано на int16)
+            try:
+                if str(self.config.dtype).lower() in ('int16', 'short'):
+                    # Внутренний вывод int16 (нативный для большинства аудио устройств)
+                    if converted.dtype == np.float32:
+                        audio_data = np.clip(converted, -1.0, 1.0)
+                        audio_data = (audio_data * 32767.0).astype(np.int16)
+                    elif converted.dtype != np.int16:
+                        audio_data = converted.astype(np.int16)
+                    else:
+                        audio_data = converted  # Уже int16 - не конвертируем
+                else:
+                    # Fallback для других форматов
+                    if converted.dtype == np.float32:
+                        audio_data = np.clip(converted, -1.0, 1.0)
+                        audio_data = (audio_data * 32767.0).astype(np.int16)
+                    else:
+                        audio_data = converted.astype(np.int16)
+            except Exception:
+                audio_data = converted
             
             # Добавляем в буфер
             chunk_id = self.chunk_buffer.add_chunk(audio_data, priority, metadata)
@@ -288,29 +377,52 @@ class SequentialSpeechPlayer:
         try:
             if status:
                 logger.warning(f"⚠️ Статус аудио потока: {status}")
-            
-            # Получаем данные из буфера
+
+            # Получаем данные из буфера (2D: frames x channels)
             data = self.chunk_buffer.get_playback_data(frames)
             
-            # Формируем выходные данные
+            # Логируем для отладки (только первые несколько вызовов)
+            if not hasattr(self, '_callback_debug_count'):
+                self._callback_debug_count = 0
+            if self._callback_debug_count < 3:
+                logger.debug(f"🎵 Audio callback: frames={frames}, data_shape={data.shape if len(data) > 0 else 'empty'}, target_channels={self.config.channels}")
+                self._callback_debug_count += 1
+            
+            # Формируем выходные данные (ожидаем 2D)
             if len(data) == 0:
-                # Если данных нет, заполняем тишиной
-                outdata[:] = np.zeros((frames, self.config.channels), dtype=self.config.dtype)
+                outdata[:] = 0
             else:
-                # Убеждаемся, что данные имеют правильную форму
-                if len(data.shape) == 1:
-                    # 1D данные - дублируем для стерео
-                    if self.config.channels == 1:
-                        outdata[:] = data.reshape(-1, 1)
-                    else:
-                        outdata[:] = np.column_stack([data, data])
-                else:
-                    # 2D данные - используем как есть
-                    outdata[:] = data.reshape(-1, self.config.channels)
+                copy_ch = min(self.config.channels, data.shape[1])
+                out_frames = min(frames, data.shape[0])
+                outdata[:out_frames, :copy_ch] = data[:out_frames, :copy_ch]
+                if out_frames < frames:
+                    outdata[out_frames:, :] = 0
                 
         except Exception as e:
             logger.error(f"❌ Ошибка в audio callback: {e}")
-            outdata[:] = np.zeros((frames, self.config.channels), dtype=self.config.dtype)
+            outdata[:] = 0
+
+    def reconfigure_channels(self, new_channels: int) -> bool:
+        """Безопасно переинициализировать аудиовывод под новое число каналов (1..2)"""
+        try:
+            new_ch = 1 if new_channels <= 1 else 2
+            if new_ch == self.config.channels:
+                return True
+            # Останавливаем текущий поток
+            self._stop_audio_stream()
+            # Обновляем конфиг и буфер
+            self.config.channels = new_ch
+            try:
+                self.chunk_buffer.set_channels(new_ch)
+            except Exception:
+                pass
+            # Запускаем заново если были в состоянии PLAYING
+            if self.state_manager.is_playing or self.state_manager.is_paused:
+                return self._start_audio_stream()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка reconfigure_channels: {e}")
+            return False
     
     def _playback_loop(self):
         """Основной цикл воспроизведения - упрощенная версия"""
@@ -354,6 +466,17 @@ class SequentialSpeechPlayer:
                     time.sleep(0.01)
             
             logger.info("🔄 Playback loop завершен")
+            # Устанавливаем состояние IDLE после естественного завершения
+            try:
+                self.state_manager.set_state(PlaybackState.IDLE)
+            except Exception:
+                pass
+            # Коллбек завершения воспроизведения (если задан)
+            try:
+                if self._on_playback_completed:
+                    self._on_playback_completed()
+            except Exception:
+                pass
             
         except Exception as e:
             logger.error(f"❌ Ошибка в playback loop: {e}")
@@ -374,8 +497,8 @@ class SequentialSpeechPlayer:
         
         logger.warning(f"⚠️ Таймаут ожидания завершения чанка {chunk_info.id}")
     
-    def wait_for_completion(self, timeout: float = 30.0) -> bool:
-        """Ждать завершения воспроизведения всех чанков"""
+    def wait_for_completion(self, timeout: float = None) -> bool:
+        """Ждать завершения воспроизведения всех чанков (без таймаута)"""
         return self.chunk_buffer.wait_for_completion(timeout)
     
     def set_callbacks(self, 

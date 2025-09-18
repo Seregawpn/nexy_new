@@ -75,24 +75,12 @@
 
 ## 🏗️ Архитектура
 
-```
-assistant/
-├── client/                 # Клиентская часть
-│   ├── audio_player.py    # Воспроизведение аудио
-│   ├── grpc_client.py     # gRPC клиент
-│   ├── input_handler.py   # Обработка клавиатуры
-│   ├── main.py           # Основной клиент
-│   ├── screen_capture.py # Захват экрана
-│   ├── stt_recognizer.py # Распознавание речи
-│   └── utils/            # Утилиты
-├── server/                # Серверная часть
-│   ├── audio_generator.py # Генерация аудио
-│   ├── grpc_server.py    # gRPC сервер
-│   ├── main.py          # Основной сервер
-│   ├── text_processor.py # Обработка текста
-│   └── database/        # База данных
-└── docs/                 # Документация
-```
+Подробные обзоры архитектуры с описанием модулей, интеграций и потоков данных:
+
+- Клиент: `client/Docs/ARCHITECTURE_OVERVIEW.md`
+- Сервер: `server/Docs/ARCHITECTURE_OVERVIEW.md`
+
+Краткая карта каталогов доступна в началах этих документов.
 
 ## 🔧 Технические особенности
 

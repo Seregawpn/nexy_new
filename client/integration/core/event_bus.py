@@ -24,6 +24,9 @@ class EventBus:
         self.event_history: List[Dict[str, Any]] = []
         self.max_history = 1000
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # События, обработка которых должна быть быстрой (не блокирующей):
+        # публикуем обработчики как задачи и не await'им их последовательно
+        self._fast_events = {"app.mode_changed", "app.state_changed"}
     
     def attach_loop(self, loop: Optional[asyncio.AbstractEventLoop] = None):
         """Зафиксировать основной event loop для безопасной доставки событий из любых потоков."""
@@ -96,17 +99,31 @@ class EventBus:
             logger.debug(f"EventBus: dispatch '{event_type}' to {subs_cnt} subscriber(s)")
             if event_type in self.subscribers:
                 for subscriber in self.subscribers[event_type]:
+                    cb = subscriber["callback"]
                     try:
-                        cb = subscriber["callback"]
                         if asyncio.iscoroutinefunction(cb):
-                            # Если закреплён основной loop и он запущен — выполняем в нём
-                            if self._loop and self._loop.is_running() and self._loop != asyncio.get_event_loop():
-                                fut = asyncio.run_coroutine_threadsafe(cb(event), self._loop)
-                                logger.debug(f"EventBus: scheduled async callback on main loop for '{event_type}': {cb} -> {fut}")
+                            # Быстрые события: не блокируем публикацию
+                            if event_type in self._fast_events:
+                                try:
+                                    if self._loop and self._loop.is_running() and self._loop != asyncio.get_event_loop():
+                                        fut = asyncio.run_coroutine_threadsafe(cb(event), self._loop)
+                                        logger.debug(f"EventBus: scheduled (fast) async on main loop '{event_type}': {cb} -> {fut}")
+                                    else:
+                                        asyncio.create_task(cb(event))
+                                        logger.debug(f"EventBus: create_task (fast) for '{event_type}': {cb}")
+                                except Exception:
+                                    # last resort — выполнить inline, чтобы не терять событие
+                                    await cb(event)
                             else:
-                                logger.debug(f"EventBus: awaiting async callback inline for '{event_type}': {cb}")
-                                await cb(event)
+                                # Стандартный режим: сохраняем прежнюю семантику
+                                if self._loop and self._loop.is_running() and self._loop != asyncio.get_event_loop():
+                                    fut = asyncio.run_coroutine_threadsafe(cb(event), self._loop)
+                                    logger.debug(f"EventBus: scheduled async callback on main loop for '{event_type}': {cb} -> {fut}")
+                                else:
+                                    logger.debug(f"EventBus: awaiting async callback inline for '{event_type}': {cb}")
+                                    await cb(event)
                         else:
+                            # Синхронные колбэки вызываем напрямую (быстро и неблокирующе)
                             logger.debug(f"EventBus: calling sync callback for '{event_type}': {cb}")
                             cb(event)
                     except Exception as e:

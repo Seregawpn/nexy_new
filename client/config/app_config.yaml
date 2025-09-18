@@ -10,46 +10,8 @@ app:
   name: Nexy
   team_id: 5NKLL2CLB9
   version: 1.71.0
-audio:
-  bluetooth_policy: auto
-  channels: 1
-  chunk_size: 1024
-  device_manager:
-    auto_switch_to_best: true
-    auto_switch_to_headphones: true
-    cache_timeout: 5.0
-    device_priorities:
-      airpods: 100
-      beats: 95
-      bluetooth_headphones: 90
-      bluetooth_speakers: 70
-      built_in: 20
-      microphone: 5
-      other: 10
-      system_speakers: 40
-      usb_audio: 60
-      usb_headphones: 85
-      virtual_device: 1
-    enabled: true
-    exclude_virtual_devices: true
-    monitoring_interval: 3.0
-    switch_cooldown: 2.0
-    virtual_device_keywords:
-    - blackhole
-    - soundflower
-    - loopback
-    - virtual
-    - aggregate
-    - multi-output
-    - sound source
-    - audio hijack
-  follow_system_default: false
-  format: int16
-  preflush_on_switch: false
-  retries: 2
-  sample_rate: 48000
-  settle_ms: 100
-  use_coreaudio_listeners: true
+# АУДИО КОНФИГУРАЦИЯ ПЕРЕНЕСЕНА В unified_config.yaml
+# Используйте get_audio_config() для получения настроек
 autostart:
   delay: 5
   enabled: false

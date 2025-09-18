@@ -92,6 +92,7 @@ class GrpcClientIntegration:
             logger.info("Initializing GrpcClientIntegration...")
             # Собираем конфигурацию gRPC из unified_config
             try:
+                uc = UnifiedConfigLoader()
                 net = uc.get_network_config()
                 servers_cfg = {}
                 for name, s in net.grpc_servers.items():
@@ -297,7 +298,8 @@ class GrpcClientIntegration:
         # Ленивая коннекция к серверу
         try:
             if self._client and not self._client.is_connected():
-                await self._client.connect()
+                # Явно выбираем окружение из конфигурации интеграции (local|production|fallback)
+                await self._client.connect(self.config.server)
         except Exception as e:
             await self._handle_error(e, where="grpc.connect", severity="warning")
             await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": "connect_failed"})
@@ -305,6 +307,7 @@ class GrpcClientIntegration:
 
         # Стримим ответы
         try:
+            got_terminal = False
             async for resp in self._client.stream_audio(
                 prompt=text,
                 screenshot_base64=screenshot_b64 or "",
@@ -324,10 +327,16 @@ class GrpcClientIntegration:
                     })
                 elif hasattr(resp, 'end_message') and resp.end_message:
                     await self.event_bus.publish("grpc.request_completed", {"session_id": session_id})
+                    got_terminal = True
                     break
                 elif hasattr(resp, 'error_message') and resp.error_message:
                     await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": resp.error_message})
+                    got_terminal = True
                     break
+            # Если стрим завершился БЕЗ явного end_message/error — завершаем запрос сами,
+            # чтобы UI не зависал в состоянии PROCESSING.
+            if not got_terminal:
+                await self.event_bus.publish("grpc.request_completed", {"session_id": session_id})
         except asyncio.CancelledError:
             # Тихо выходим при отмене
             await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": "cancelled"})

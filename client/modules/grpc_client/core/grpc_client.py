@@ -4,7 +4,10 @@
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, Tuple
+import importlib
+import sys
+from pathlib import Path
 
 from .types import ServerConfig, RetryConfig, HealthCheckConfig, RetryStrategy
 from .retry_manager import RetryManager
@@ -132,10 +135,9 @@ class GrpcClient:
             
             if not self.is_connected():
                 await self.connect()
-            
-            # Импортируем необходимые модули
-            import streaming_pb2_grpc
-            import streaming_pb2
+
+            # Импортируем protobuf-модули с фолбэком на server/
+            streaming_pb2, streaming_pb2_grpc = self._import_proto_modules()
             
             # Создаем запрос
             if hasattr(screen_info, 'get'):
@@ -178,3 +180,27 @@ class GrpcClient:
             logger.info("🧹 GrpcClient очищен")
         except Exception as e:
             logger.error(f"❌ Ошибка очистки GrpcClient: {e}")
+
+    def _import_proto_modules(self) -> Tuple[Any, Any]:
+        """Гибкий импорт streaming_pb2 и streaming_pb2_grpc.
+        Сначала пробуем локальные модули, затем fallback в server/.
+        """
+        # 1) Пытаемся локально
+        try:
+            pb2 = importlib.import_module('streaming_pb2')
+            pb2_grpc = importlib.import_module('streaming_pb2_grpc')
+            return pb2, pb2_grpc
+        except Exception:
+            pass
+
+        # 2) Пытаемся взять из server/ (репозиторий корень/ server)
+        try:
+            repo_root = Path(__file__).resolve().parents[4]
+            server_dir = repo_root / 'server'
+            if str(server_dir) not in sys.path:
+                sys.path.append(str(server_dir))
+            pb2 = importlib.import_module('streaming_pb2')
+            pb2_grpc = importlib.import_module('streaming_pb2_grpc')
+            return pb2, pb2_grpc
+        except Exception as e:
+            raise ImportError(f"Unable to import protobuf modules (streaming_pb2*). Error: {e}")

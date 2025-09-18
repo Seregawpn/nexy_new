@@ -31,13 +31,18 @@ class RecognitionEventType(Enum):
 
 @dataclass
 class RecognitionConfig:
-    """Конфигурация распознавания речи"""
+    """
+    Конфигурация распознавания речи
+    
+    ВАЖНО: sample_rate, channels, chunk_size загружаются из централизованной 
+    конфигурации при создании объекта через default_config.py
+    """
     # Основные настройки
     language: str = "en-US"  # Только английский
-    sample_rate: int = 16000
-    chunk_size: int = 1024
-    channels: int = 1
-    dtype: str = 'int16'
+    sample_rate: int = 16000  # Будет перезаписано из централизованной конфигурации
+    chunk_size: int = 1024    # Будет перезаписано из централизованной конфигурации
+    channels: int = 1         # Будет перезаписано из централизованной конфигурации
+    dtype: str = 'int16'      # STT всегда int16
     
     # Настройки микрофона
     energy_threshold: int = 100

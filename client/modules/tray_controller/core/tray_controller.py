@@ -83,6 +83,13 @@ class TrayController:
             # Сохраняем приложение для использования в главном потоке
             self.tray_menu.app = app
             
+            # После создания rumps.App меню было очищено внутри create_app();
+            # пересоздаём дефолтное меню (Status/Output/Quit)
+            try:
+                await self._create_default_menu()
+            except Exception:
+                pass
+
             self.is_running = True
             logger.info("✅ TrayController готов к запуску")
             logger.info("ℹ️ Для отображения иконки запустите app.run() в главном потоке")
@@ -192,6 +199,10 @@ class TrayController:
                     title="Status: Waiting",
                     enabled=False
                 ),
+                TrayMenuItem(
+                    title="Output: Unknown",
+                    enabled=False
+                ),
                 TrayMenuItem(title="", separator=True),
                 TrayMenuItem(
                     title="Quit",
@@ -231,7 +242,17 @@ class TrayController:
     
     def _on_quit_clicked(self, sender):
         """Обработчик клика по выходу"""
-        asyncio.create_task(self._publish_event("quit_clicked", {}))
+        # 1) Сообщаем слушателям (например, интеграции), что пользователь инициировал выход
+        try:
+            asyncio.create_task(self._publish_event("quit_clicked", {}))
+        except Exception:
+            pass
+        # 2) Закрываем приложение трея на уровне модуля (фундаментальная ответственность)
+        try:
+            if self.tray_menu:
+                self.tray_menu.quit()
+        except Exception:
+            pass
     
     async def _publish_event(self, event_type: str, data: Dict[str, Any]):
         """Публиковать событие"""

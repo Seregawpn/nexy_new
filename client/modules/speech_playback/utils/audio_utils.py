@@ -81,7 +81,7 @@ def convert_channels(audio_data: np.ndarray, target_channels: int) -> np.ndarray
         
         # Если стерео (2D) и нужен стерео
         if len(audio_data.shape) == 2 and audio_data.shape[1] == 2 and target_channels == 2:
-            return audio_data.flatten()  # Возвращаем 1D массив
+            return audio_data  # Возвращаем 2D массив как есть
         
         # Для других случаев - дублируем первый канал
         if len(audio_data.shape) == 1:

@@ -17,7 +17,8 @@ from integration.core.error_handler import ErrorHandler
 try:
     from modules.voice_recognition.core.speech_recognizer import SpeechRecognizer
     from modules.voice_recognition.core.types import RecognitionConfig, RecognitionResult
-    from config.unified_config_loader import UnifiedConfigLoader
+    # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ
+    from config.audio_config import get_audio_config
     _REAL_VOICE_AVAILABLE = True
 except Exception:
     # Зависимости могут отсутствовать; в этом случае используем только симуляцию
@@ -74,20 +75,22 @@ class VoiceRecognitionIntegration:
             # Инициализация реального распознавателя, если симуляция отключена
             if not self.config.simulate and _REAL_VOICE_AVAILABLE:
                 try:
-                    cfg_loader = UnifiedConfigLoader()
-                    stt_cfg = cfg_loader.get_stt_config()
+                    # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ - единый источник истины
+                    audio_config = get_audio_config()
+                    voice_cfg = audio_config.get_voice_recognition_config()
+                    
                     rec_cfg = RecognitionConfig(
                         language=self.config.language,
-                        sample_rate=stt_cfg.get('sample_rate', 16000),
-                        chunk_size=stt_cfg.get('chunk_size', 1024),
-                        channels=stt_cfg.get('channels', 1),
-                        dtype=stt_cfg.get('dtype', 'int16'),
-                        energy_threshold=stt_cfg.get('energy_threshold', 100),
-                        dynamic_energy_threshold=stt_cfg.get('dynamic_energy_threshold', True),
-                        pause_threshold=stt_cfg.get('pause_threshold', 0.5),
-                        phrase_threshold=stt_cfg.get('phrase_threshold', 0.3),
-                        non_speaking_duration=stt_cfg.get('non_speaking_duration', 0.3),
-                        timeout=stt_cfg.get('timeout', 5.0),
+                        sample_rate=voice_cfg['sample_rate'],    # Из централизованной конфигурации
+                        chunk_size=voice_cfg['chunk_size'],      # Из централизованной конфигурации
+                        channels=voice_cfg['channels'],          # Из централизованной конфигурации
+                        dtype='int16',  # STT всегда int16
+                        energy_threshold=100,      # Специфичные для STT параметры
+                        dynamic_energy_threshold=True,
+                        pause_threshold=0.5,
+                        phrase_threshold=0.3,
+                        non_speaking_duration=0.3,
+                        timeout=5.0,
                     )
                     self._recognizer = SpeechRecognizer(rec_cfg)
                     logger.info("VoiceRecognitionIntegration: real SpeechRecognizer initialized")
@@ -282,14 +285,8 @@ class VoiceRecognitionIntegration:
                             "error": "no_speech",
                             "reason": "silence_or_noise"
                         })
-                        # Возврат в SLEEPING после неудачи (через StateManager)
-                        try:
-                            if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                                await self.state_manager.set_mode(AppMode.SLEEPING)
-                            else:
-                                self.state_manager.set_mode(AppMode.SLEEPING)
-                        except Exception as e:
-                            logger.debug(f"VOICE: failed to set SLEEPING after fail: {e}")
+                        # Не переводим режим здесь — финализацию режима делает воспроизведение
+                        # (SpeechPlaybackIntegration по playback.completed/failed)
 
                 if self.config.simulate:
                     await asyncio.wait_for(_simulate_work(), timeout=timeout)
@@ -302,14 +299,7 @@ class VoiceRecognitionIntegration:
                     "session_id": session_id,
                     "timeout_sec": self.config.timeout_sec
                 })
-                # Возврат в SLEEPING после таймаута (через StateManager)
-                try:
-                    if asyncio.iscoroutinefunction(self.state_manager.set_mode):
-                        await self.state_manager.set_mode(AppMode.SLEEPING)
-                    else:
-                        self.state_manager.set_mode(AppMode.SLEEPING)
-                except Exception as e:
-                    logger.debug(f"VOICE: failed to set SLEEPING after timeout: {e}")
+                # Не переводим режим здесь — финализация режима делает воспроизведение
             except asyncio.CancelledError:
                 # Отмена — ничего не публикуем, считается корректной отменой
                 raise

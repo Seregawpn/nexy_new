@@ -37,7 +37,7 @@ class KeyboardConfig:
     """Конфигурация клавиатуры"""
     key_to_monitor: str = "space"
     short_press_threshold: float = 0.6
-    long_press_threshold: float = 2.0
+    long_press_threshold: float = 1.0
     event_cooldown: float = 0.1
     hold_check_interval: float = 0.05
     debounce_time: float = 0.1

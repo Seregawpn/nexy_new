@@ -1,17 +1,32 @@
 """
 Конфигурация по умолчанию для распознавания речи
+
+ВАЖНО: Аудио параметры загружаются из централизованной конфигурации.
+Используйте get_voice_recognition_config() из config.audio_config
 """
 
 from ..core.types import RecognitionConfig
+from config.audio_config import get_audio_config
+
+def _get_base_audio_config():
+    """Получить базовые аудио параметры из централизованной конфигурации"""
+    try:
+        audio_config = get_audio_config()
+        return audio_config.get_voice_recognition_config()
+    except Exception:
+        # Fallback значения
+        return {'sample_rate': 16000, 'channels': 1, 'chunk_size': 1024}
+
+_base_config = _get_base_audio_config()
 
 # Конфигурация по умолчанию
 DEFAULT_RECOGNITION_CONFIG = RecognitionConfig(
     # Основные настройки
     language="en-US",  # Только английский
-    sample_rate=16000,
-    chunk_size=1024,
-    channels=1,
-    dtype='int16',
+    sample_rate=_base_config['sample_rate'],  # Из централизованной конфигурации
+    chunk_size=_base_config['chunk_size'],    # Из централизованной конфигурации  
+    channels=_base_config['channels'],        # Из централизованной конфигурации
+    dtype='int16',  # STT всегда int16
     
     # Настройки микрофона
     energy_threshold=100,
@@ -36,10 +51,10 @@ DEFAULT_RECOGNITION_CONFIG = RecognitionConfig(
 # Конфигурация для высокого качества
 HIGH_QUALITY_CONFIG = RecognitionConfig(
     language="en-US",  # Только английский
-    sample_rate=44100,
-    chunk_size=2048,
-    channels=1,
-    dtype='int16',
+    sample_rate=_base_config['sample_rate'],  # Из централизованной конфигурации
+    chunk_size=2048,  # Специфично для высокого качества
+    channels=_base_config['channels'],        # Из централизованной конфигурации
+    dtype='int16',  # STT всегда int16
     
     energy_threshold=50,
     dynamic_energy_threshold=True,
@@ -61,10 +76,10 @@ HIGH_QUALITY_CONFIG = RecognitionConfig(
 # Конфигурация для быстрого распознавания
 FAST_CONFIG = RecognitionConfig(
     language="en-US",  # Только английский
-    sample_rate=8000,
-    chunk_size=512,
-    channels=1,
-    dtype='int16',
+    sample_rate=_base_config['sample_rate'],  # Из централизованной конфигурации
+    chunk_size=512,   # Специфично для быстрого распознавания
+    channels=_base_config['channels'],        # Из централизованной конфигурации
+    dtype='int16',  # STT всегда int16
     
     energy_threshold=200,
     dynamic_energy_threshold=False,

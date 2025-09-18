@@ -41,6 +41,10 @@ class SpeechRecognizer:
         
         # Метрики
         self.metrics = RecognitionMetrics()
+
+        # Параметры входного устройства
+        self.input_device_index: Optional[int] = None
+        self.actual_input_rate: int = self.config.sample_rate
         
         # Инициализируем распознаватель
         self._init_recognizer()
@@ -70,6 +74,36 @@ class SpeechRecognizer:
             logger.error(f"❌ Ошибка инициализации распознавателя: {e}")
             self.state = RecognitionState.ERROR
             
+    def _pick_input_device(self) -> Optional[int]:
+        """Подбирает стабильное входное устройство. Предпочтение: встроенный микрофон."""
+        try:
+            devices = sd.query_devices()
+            # Популярные названия встроенного микрофона на macOS
+            builtin_keywords = [
+                'built-in microphone', 'macbook', 'internal microphone',
+                'microphone (built-in)', 'default - built-in'
+            ]
+            # Ищем по имени
+            for i, d in enumerate(devices):
+                name = str(d.get('name', '')).lower()
+                if d.get('max_input_channels', 0) > 0 and any(k in name for k in builtin_keywords):
+                    return i
+            # Если не нашли — берем девайс с наибольшим числом входных каналов, избегая bluetooth-headset
+            candidates = []
+            for i, d in enumerate(devices):
+                ch = d.get('max_input_channels', 0)
+                if ch > 0:
+                    name = str(d.get('name', '')).lower()
+                    is_bt_headset = ('airpods' in name) or ('headset' in name) or ('hands-free' in name)
+                    candidates.append((i, ch, 0 if is_bt_headset else 1))
+            if candidates:
+                # Сортируем: non-bt приоритетнее, затем по каналам
+                candidates.sort(key=lambda x: (x[2], x[1]), reverse=True)
+                return candidates[0][0]
+        except Exception:
+            pass
+        return None
+
     async def start_listening(self) -> bool:
         """Начинает прослушивание микрофона"""
         try:
@@ -147,13 +181,46 @@ class SpeechRecognizer:
     def _run_listening(self):
         """Запускает прослушивание микрофона"""
         try:
-            with sd.InputStream(
-                samplerate=self.config.sample_rate,
-                channels=self.config.channels,
-                dtype=self.config.dtype,
-                blocksize=self.config.chunk_size,
-                callback=self._audio_callback
-            ) as stream:
+            # Подбираем устройство
+            self.input_device_index = self._pick_input_device()
+            device_param = self.input_device_index if self.input_device_index is not None else None
+            # Пробуем с желаемой частотой
+            try:
+                self.actual_input_rate = self.config.sample_rate
+                stream = sd.InputStream(
+                    device=device_param,
+                    samplerate=self.config.sample_rate,
+                    channels=self.config.channels,
+                    dtype=self.config.dtype,
+                    blocksize=self.config.chunk_size,
+                    callback=self._audio_callback
+                )
+                stream.start()
+            except Exception as e1:
+                logger.warning(f"⚠️ Не удалось открыть InputStream с {self.config.sample_rate} Hz: {e1}")
+                # Пробуем с дефолтной частотой устройства
+                try:
+                    if device_param is not None:
+                        dev_info = sd.query_devices(device_param)
+                    else:
+                        dev_info = sd.query_devices(None, 'input')
+                    fallback_rate = int(dev_info.get('default_samplerate') or 16000)
+                    self.actual_input_rate = fallback_rate
+                    stream = sd.InputStream(
+                        device=device_param,
+                        samplerate=fallback_rate,
+                        channels=self.config.channels,
+                        dtype=self.config.dtype,
+                        blocksize=self.config.chunk_size,
+                        callback=self._audio_callback
+                    )
+                    stream.start()
+                except Exception as e2:
+                    logger.error(f"❌ Ошибка открытия InputStream даже с дефолтной частотой: {e2}")
+                    self.state = RecognitionState.ERROR
+                    return
+
+            with stream:
                 self.listen_start_time = time.time()
                 
                 while self.is_listening and not self.stop_event.is_set():
@@ -191,6 +258,14 @@ class SpeechRecognizer:
             if self.config.channels > 1:
                 audio_data = np.mean(audio_data, axis=1)
                 
+            # Если запись велась не на той частоте, приводим к целевой
+            try:
+                if self.actual_input_rate != self.config.sample_rate:
+                    from modules.voice_recognition.utils.audio_utils import resample_audio
+                    audio_data = resample_audio(audio_data, self.actual_input_rate, self.config.sample_rate)
+            except Exception as re:
+                logger.debug(f"Resample skipped: {re}")
+
             # Нормализуем аудио
             audio_data = audio_data.astype(np.float32) / np.iinfo(np.int16).max
             

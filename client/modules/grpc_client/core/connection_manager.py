@@ -128,16 +128,17 @@ class ConnectionManager:
     
     def _create_grpc_options(self, server_config: ServerConfig) -> list:
         """Создает опции gRPC"""
+        # Консервативные keepalive-настройки, чтобы избежать ENHANCE_YOUR_CALM/too_many_pings
         return [
             ('grpc.max_send_message_length', server_config.max_message_size),
             ('grpc.max_receive_message_length', server_config.max_message_size),
             ('grpc.max_metadata_size', 1024 * 1024),
-            ('grpc.keepalive_time_ms', server_config.keep_alive_time * 1000),
-            ('grpc.keepalive_timeout_ms', server_config.keep_alive_timeout * 1000),
+            ('grpc.keepalive_time_ms', max(60000, server_config.keep_alive_time * 1000)),  # >= 60s
+            ('grpc.keepalive_timeout_ms', max(5000, server_config.keep_alive_timeout * 1000)),
             ('grpc.keepalive_permit_without_calls', server_config.keep_alive_permit_without_calls),
-            ('grpc.http2.max_pings_without_data', 0),
-            ('grpc.http2.min_time_between_pings_ms', 10000),
-            ('grpc.http2.min_ping_interval_without_data_ms', 300000)
+            ('grpc.http2.max_pings_without_data', 1),
+            ('grpc.http2.min_time_between_pings_ms', 60000),
+            ('grpc.http2.min_ping_interval_without_data_ms', 600000),
         ]
     
     def _create_stub(self):

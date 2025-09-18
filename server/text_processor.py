@@ -25,13 +25,12 @@ except ImportError as e:
     LANGCHAIN_AVAILABLE = False
 
 # --- Загрузка конфигурации ---
-# Проверка наличия необходимых ключей API
-if not Config.GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found. Check config.env")
-
-# Проверяем доступность хотя бы одного API
+# Мягкая проверка наличия ключей/зависимостей: в локальном режиме допускаем отсутствие
+HAS_GEMINI_KEY = bool(Config.GEMINI_API_KEY)
+if not HAS_GEMINI_KEY:
+    logging.getLogger(__name__).warning("⚠️ GEMINI_API_KEY не установлен — включен упрощенный локальный режим без LLM")
 if not GEMINI_LIVE_AVAILABLE and not LANGCHAIN_AVAILABLE:
-    raise ImportError("Neither Gemini Live API nor LangChain are available. Install required dependencies.")
+    logging.getLogger(__name__).warning("⚠️ Gemini Live API и LangChain не найдены — будет использоваться текстовый фолбэк-ответ")
 
 logger = logging.getLogger(__name__)
 logger.info(f"🔧 API Status: Live API={GEMINI_LIVE_AVAILABLE}, LangChain={LANGCHAIN_AVAILABLE}")
@@ -103,7 +102,7 @@ class TextProcessor:
         
         try:
             # 🚀 ИНИЦИАЛИЗАЦИЯ GEMINI LIVE API (основной)
-            if GEMINI_LIVE_AVAILABLE:
+            if GEMINI_LIVE_AVAILABLE and HAS_GEMINI_KEY:
                 logger.info("🚀 Initializing Gemini Live API (primary)")
                 
                 # Создаем клиент Live API с правильными параметрами
@@ -148,7 +147,7 @@ class TextProcessor:
                 self.use_live_api = False
             
             # 🔄 ИНИЦИАЛИЗАЦИЯ LANGCHAIN (fallback)
-            if LANGCHAIN_AVAILABLE:
+            if LANGCHAIN_AVAILABLE and HAS_GEMINI_KEY:
                 logger.info("🔄 Initializing LangChain (fallback)")
                 
                 self.llm = ChatGoogleGenerativeAI(
@@ -164,9 +163,9 @@ class TextProcessor:
                 logger.warning("⚠️ LangChain not available")
                 self.llm = None
             
-            # Проверяем, что хотя бы один API доступен
+            # В локальном режиме допускаем отсутствие LLM — будет простой фолбэк
             if not self.use_live_api and not self.llm:
-                raise RuntimeError("No LLM API available. Both Live API and LangChain failed to initialize.")
+                logger.warning("⚠️ No LLM API available — enabling simple fallback response generator")
             
             # Инициализируем MemoryAnalyzer (если доступен)
             gemini_api_key = Config.GEMINI_API_KEY

@@ -273,8 +273,11 @@ class PermissionsIntegration:
         try:
             logger.warning("🚫 Блокировка приложения - отсутствуют критичные разрешения")
             
-            # Переводим приложение в режим ожидания
-            self.state_manager.set_mode(AppMode.SLEEPING)
+            # Запрашиваем переход в SLEEPING централизованно
+            await self.event_bus.publish("mode.request", {
+                "target": AppMode.SLEEPING,
+                "source": "permissions"
+            })
             
             # Публикуем событие блокировки
             await self.event_bus.publish("permissions.app_blocked", {

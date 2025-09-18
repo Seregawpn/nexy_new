@@ -192,3 +192,7 @@ integrations:
     enable_recording_interrupts: true
     enable_session_interrupts: true
     enable_full_reset: true
+  
+  grpc_client:
+    # Выбор сервера для подключения gRPC: local | production | fallback
+    server: local

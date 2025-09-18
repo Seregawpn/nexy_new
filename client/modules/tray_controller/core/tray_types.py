@@ -86,6 +86,11 @@ class TrayIconGenerator:
             TrayStatus.PROCESSING: "#FF9500"     # Желтый
         }
         
+        # 🎯 TRAY DEBUG: Логируем генерацию иконки
+        print(f"🎯 TRAY DEBUG: TrayIconGenerator.create_circle_icon status={status} (type: {type(status)})")
+        print(f"🎯 TRAY DEBUG: Available colors: {colors}")
+        print(f"🎯 TRAY DEBUG: Selected color: {colors.get(status, 'NOT_FOUND')}")
+        
         icon_types = {
             TrayStatus.SLEEPING: TrayIconType.STATIC,
             TrayStatus.LISTENING: TrayIconType.PULSING,
