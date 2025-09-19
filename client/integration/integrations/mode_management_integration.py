@@ -93,9 +93,10 @@ class ModeManagementIntegration:
             self.controller.register_mode_change_callback(_on_controller_mode_changed)
 
             # Мост с существующими событиями (на время миграции)
-            await self.event_bus.subscribe("keyboard.long_press", self._bridge_keyboard_long, EventPriority.MEDIUM)
-            await self.event_bus.subscribe("keyboard.release", self._bridge_keyboard_release, EventPriority.MEDIUM)
-            await self.event_bus.subscribe("keyboard.short_press", self._bridge_keyboard_short, EventPriority.MEDIUM)
+            # Отключено, чтобы избежать дублей mode.request (источник — InputProcessingIntegration)
+            # await self.event_bus.subscribe("keyboard.long_press", self._bridge_keyboard_long, EventPriority.MEDIUM)
+            # await self.event_bus.subscribe("keyboard.release", self._bridge_keyboard_release, EventPriority.MEDIUM)
+            # await self.event_bus.subscribe("keyboard.short_press", self._bridge_keyboard_short, EventPriority.MEDIUM)
 
             # Внимание: не возвращаем SLEEPING по завершению gRPC — ждём завершения воспроизведения
             # await self.event_bus.subscribe("grpc.request_completed", self._bridge_grpc_done, EventPriority.MEDIUM)
@@ -152,6 +153,10 @@ class ModeManagementIntegration:
 
             # Фильтрация по сессии (в PROCESSING принимаем только текущую либо interrupt)
             current_mode = self.state_manager.get_current_mode()
+            # Идемпотентность: если запрашивают тот же режим — игнорируем
+            if target == current_mode:
+                logger.debug(f"Mode request ignored (same mode): {target}")
+                return
             if current_mode == AppMode.PROCESSING and source != 'interrupt':
                 if self._active_session_id is not None and session_id is not None:
                     if session_id != self._active_session_id:

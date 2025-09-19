@@ -65,9 +65,9 @@ class SignalIntegration:
                     # Ignore unknown names to keep robust
                     pass
         else:
-            # sensible defaults
+            # sensible defaults (чуть больший cooldown для LISTEN_START, чтобы гасить дребезг)
             cooldowns = {
-                SignalPattern.LISTEN_START: CooldownPolicy(300),
+                SignalPattern.LISTEN_START: CooldownPolicy(600),
                 SignalPattern.DONE: CooldownPolicy(150),
                 SignalPattern.ERROR: CooldownPolicy(150),
                 SignalPattern.CANCEL: CooldownPolicy(150),
@@ -81,11 +81,13 @@ class SignalIntegration:
 
         self._initialized = False
         self._running = False
+        # Защита от дублей listen_start: храним последний session_id микрофона
+        self._last_listen_session_id: Optional[Any] = None
 
     async def initialize(self) -> bool:
         try:
             # Subscriptions: map app/audio/grpc events to signal requests
-            await self.event_bus.subscribe("app.mode_changed", self._on_mode_changed, EventPriority.MEDIUM)
+            # Для LISTEN_START используем только voice.mic_opened (исключаем дубли с app.mode_changed)
             await self.event_bus.subscribe("voice.mic_opened", self._on_voice_mic_opened, EventPriority.MEDIUM)
             await self.event_bus.subscribe("playback.completed", self._on_playback_completed, EventPriority.MEDIUM)
             await self.event_bus.subscribe("playback.cancelled", self._on_playback_cancelled, EventPriority.MEDIUM)
@@ -111,19 +113,23 @@ class SignalIntegration:
 
     # Handlers
     async def _on_mode_changed(self, event: Dict[str, Any]):
+        # Игнорируем LISTEN_START здесь, чтобы не дублировать с voice.mic_opened
         try:
-            data = (event or {}).get("data", {})
-            mode = data.get("mode")
-            if mode == AppMode.LISTENING:
-                logger.info("Signals: LISTEN_START (app.mode_changed)")
-                await self._service.emit(SignalRequest(pattern=SignalPattern.LISTEN_START, kind=SignalKind.AUDIO))
-        except Exception as e:
-            logger.debug(f"SignalIntegration _on_mode_changed error: {e}")
+            pass
+        except Exception:
+            pass
 
     async def _on_voice_mic_opened(self, event: Dict[str, Any]):
         try:
+            data = (event or {}).get("data", {})
+            sid = data.get("session_id")
+            if sid is not None and self._last_listen_session_id == sid:
+                logger.debug("Signals: LISTEN_START suppressed (same session)")
+                return
             logger.info("Signals: LISTEN_START (voice.mic_opened)")
             await self._service.emit(SignalRequest(pattern=SignalPattern.LISTEN_START, kind=SignalKind.AUDIO))
+            if sid is not None:
+                self._last_listen_session_id = sid
         except Exception as e:
             logger.debug(f"SignalIntegration _on_voice_mic_opened error: {e}")
 
