@@ -36,6 +36,10 @@
 - `StreamResponse { oneof content { string text_chunk; AudioChunk audio_chunk; string end_message; string error_message; } }`
 - `AudioChunk { bytes audio_data; string dtype; repeated int32 shape; }`  — dtype: например `int16`; shape: `[N]`
 
+Требования согласования с клиентом:
+- Аудио формат: 48 kHz, mono, int16 (PCM s16le). Если движок TTS выдаёт другой формат, конвертировать на сервере.
+- Ошибки/отмена: при клиентском отмене стрима (context cancelled) не отправлять `end_message`; допускается логировать отмену и корректно завершать обработку без ошибок.
+
 Размеры сообщений: сервер сконфигурирован на прием/отдачу до 50MB.
 
 ---
@@ -49,9 +53,11 @@
 5) Финализация: отправка `end_message` и закрытие стрима; сохранение скриншота в БД (если указан)
 
 Прерывания и отмена:
-- Глобальный флаг прерывания с аппаратной привязкой (`global_interrupt_flag` + `interrupt_hardware_id`)
-- Внутри цикла генерации идут частые проверки: глобфлаг, статус сессии, `context.cancelled()`
-- `InterruptSession(hardware_id)` — включает флаг прерывания и помечает активные сессии как `cancelled`
+- Клиент может отменить активный стрим двумя путями:
+  1) Отмена клиентского контекста RPC (preferred для «barge‑in»). Сервер обязан часто проверять `context.cancelled()`/`context.is_active()` и немедленно прекращать генерацию текста/аудио без отправки `end_message`.
+  2) Вызов `InterruptSession(hardware_id)` — сервер выставляет `global_interrupt_flag` и помечает активные сессии как `cancelled`, что прерывает генерацию.
+- Генераторы (текст/аудио) должны регулярно проверять оба сигнала: глобфлаг/статус сессии и отмену контекста.
+- После отмены никаких «поздних» чанков не должны отправляться в поток (важно для клиентского фильтрации и UX barge‑in).
 
 Хранение:
 - При наличии скриншота — создается запись в БД (`database_manager.create_screenshot`) с метаданными.
@@ -138,7 +144,7 @@
 ## 11) Наблюдаемость и логирование
 
 - Единая настройка logging.basicConfig в grpc_server/main
-- Подробные логи на ключевых этапах: приём запроса, начало/окончание стрима, генерация/TTС, прерывания
+- Подробные логи на ключевых этапах: приём запроса, начало/окончание стрима, генерация/TTС, прерывания (включая отличение client‑cancel vs server‑error)
 - Диагностические принты включены в StreamAudio для локальной отладки (можно отключить/понизить уровень)
 
 ---
@@ -146,10 +152,14 @@
 ## 12) Чек‑лист инвариантов
 
 - [ ] Любая генерация текста отменяема (cancel_generation + проверки флагов)
-- [ ] TTS всегда возвращает корректный формат: 48kHz, int16 mono (или корректно конвертируется)
+- [ ] TTS всегда возвращает корректный формат: 48 kHz, int16 mono (или корректно конвертируется)
 - [ ] Контекст gRPC проверяется на отмену внутри циклов
 - [ ] Размеры сообщений согласованы с клиентом (до 50MB)
 - [ ] При наличии скриншота создаётся запись в БД с метаданными
+
+— Дополнительно для barge‑in клиента (press‑first):
+- [ ] При отмене контекста стрим мгновенно прекращается, без «хвостовых» аудио чанков
+- [ ] Нет отправки `end_message` при отмене; допускается лог «cancelled by client»
 
 ---
 
@@ -193,7 +203,7 @@ sequenceDiagram
     GRPC-->>Client: StreamResponse.end_message
 ```
 
-Прерывание сессий
+Прерывание сессий (два пути)
 
 ```mermaid
 sequenceDiagram
@@ -201,11 +211,20 @@ sequenceDiagram
     participant GRPC as StreamingService
     participant TP as TextProcessor
 
+    rect rgb(240,250,240)
+    note over Client,GRPC: Путь 1 (предпочтительный для barge‑in)
+    Client-xGRPC: cancel client stream (context cancelled)
+    GRPC->>TP: cancel_generation()
+    note right of GRPC: Генераторы проверяют context.cancelled()
+    end
+
+    rect rgb(250,240,240)
+    note over Client,GRPC: Путь 2 (RPC отмены)
     Client->>GRPC: InterruptSession(hardware_id)
     GRPC->>GRPC: set global_interrupt_flag + mark sessions cancelled
     GRPC->>TP: cancel_generation()
-    note right of GRPC: Циклы генерации проверяют<br/>global flag / cancelled / context.cancelled()
     GRPC-->>Client: InterruptResponse{success, interrupted_sessions}
+    end
 ```
 
 Общий вид компонентов сервера

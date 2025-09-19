@@ -53,6 +53,8 @@ class SpeechPlaybackIntegration:
         self._grpc_done_sessions: Dict[Any, bool] = {}
         # Текущая активная сессия воспроизведения (последняя)
         self._current_session_id: Optional[Any] = None
+        # Пометки отменённых сессий для фильтрации поздних чанков
+        self._cancelled_sessions: set = set()
 
     async def initialize(self) -> bool:
         try:
@@ -120,6 +122,10 @@ class SpeechPlaybackIntegration:
         try:
             data = (event or {}).get("data", {})
             sid = data.get("session_id")
+            # Фильтрация поздних чанков после отмены
+            if sid is not None and (sid in self._cancelled_sessions):
+                logger.debug(f"Ignoring audio chunk for cancelled sid={sid}")
+                return
             if sid is not None:
                 self._current_session_id = sid
             audio_bytes: bytes = data.get("bytes") or b""
@@ -282,8 +288,11 @@ class SpeechPlaybackIntegration:
         try:
             data = (event or {}).get("data", {})
             sid = data.get("session_id")
+            err = (data.get("error") or "").lower()
             if sid is not None:
                 self._grpc_done_sessions[sid] = True
+                if err == 'cancelled':
+                    self._cancelled_sessions.add(sid)
             if self._player:
                 try:
                     self._player.stop_playback()
@@ -291,19 +300,29 @@ class SpeechPlaybackIntegration:
                     pass
             await self.event_bus.publish("playback.failed", {"session_id": sid, "error": data.get("error")})
             self._finalized_sessions[sid] = True
-            # Возврат в SLEEPING централизованно
-            try:
-                await self.event_bus.publish("mode.request", {
-                    "target": AppMode.SLEEPING,
-                    "source": "speech_playback"
-                })
-            except Exception:
-                pass
+            # Возврат в SLEEPING не инициируем, если ошибка — отмена (cancelled)
+            if err != 'cancelled':
+                try:
+                    await self.event_bus.publish("mode.request", {
+                        "target": AppMode.SLEEPING,
+                        "source": "speech_playback"
+                    })
+                except Exception:
+                    pass
         except Exception as e:
             await self._handle_error(e, where="speech.on_grpc_failed", severity="warning")
 
     async def _on_interrupt(self, event):
         try:
+            # Помечаем текущую сессию как отменённую (если есть)
+            if self._current_session_id is not None:
+                self._cancelled_sessions.add(self._current_session_id)
+            # Отменяем таймер тишины, если активен
+            try:
+                if self._silence_task and not self._silence_task.done():
+                    self._silence_task.cancel()
+            except Exception:
+                pass
             if self._player:
                 self._player.stop_playback()
             await self.event_bus.publish("playback.cancelled", {"reason": "interrupt"})

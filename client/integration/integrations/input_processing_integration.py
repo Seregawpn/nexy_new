@@ -48,6 +48,8 @@ class InputProcessingIntegration:
         self._current_session_id: Optional[float] = None
         self._session_recognized: bool = False
         self._recording_started: bool = False
+        # Debounce для short press в LISTENING
+        self._last_short_ts: float = 0.0
         
     async def initialize(self) -> bool:
         """Инициализация input_processing (клавиатура)"""
@@ -276,6 +278,17 @@ class InputProcessingIntegration:
         """Обработка короткого нажатия пробела"""
         try:
             logger.debug(f"🔑 SHORT_PRESS: {event.duration:.3f}с")
+            # Debounce: подавляем повторные короткие нажатия в LISTENING в течение ~120 мс
+            try:
+                current = self.state_manager.get_current_mode()
+            except Exception:
+                current = None
+            now = time.monotonic()
+            if current == AppMode.LISTENING and (now - self._last_short_ts) < 0.12:
+                logger.debug("SHORT_PRESS debounced in LISTENING")
+                return
+            if current == AppMode.LISTENING:
+                self._last_short_ts = now
             
             # Публикация события
             logger.debug("SHORT_PRESS: публикуем keyboard.short_press")

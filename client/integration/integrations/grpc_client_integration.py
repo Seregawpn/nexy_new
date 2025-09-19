@@ -123,6 +123,11 @@ class GrpcClientIntegration:
             await self.event_bus.subscribe("hardware.id_response", self._on_hardware_id_response, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_interrupt, EventPriority.CRITICAL)
             await self.event_bus.subscribe("interrupt.request", self._on_interrupt, EventPriority.CRITICAL)
+            # Адресная отмена активного запроса по session_id (или последний активный)
+            try:
+                await self.event_bus.subscribe("grpc.request_cancel", self._on_request_cancel, EventPriority.HIGH)
+            except Exception:
+                pass
             await self.event_bus.subscribe("network.status_changed", self._on_network_status_changed, EventPriority.MEDIUM)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
 
@@ -221,6 +226,30 @@ class GrpcClientIntegration:
                 await self.event_bus.publish("grpc.request_failed", {"session_id": sid, "error": "cancelled"})
         except Exception as e:
             await self._handle_error(e, where="grpc.on_interrupt", severity="warning")
+
+    async def _on_request_cancel(self, event):
+        """Адресная отмена активного запроса по session_id (или последний активный)."""
+        try:
+            data = (event or {}).get("data", {})
+            sid = data.get("session_id")
+            target_sid = sid
+            if not target_sid:
+                # последний активный inflight
+                try:
+                    target_sid = next(reversed(self._inflight)) if self._inflight else None
+                except Exception:
+                    target_sid = None
+            if not target_sid:
+                logger.info("grpc.request_cancel: no inflight request to cancel (noop)")
+                return
+            task = self._inflight.pop(target_sid, None)
+            if task and not task.done():
+                task.cancel()
+                await self.event_bus.publish("grpc.request_failed", {"session_id": target_sid, "error": "cancelled"})
+            else:
+                logger.debug(f"grpc.request_cancel: task not found or already done for sid={target_sid}")
+        except Exception as e:
+            await self._handle_error(e, where="grpc.on_request_cancel", severity="warning")
 
     async def _on_network_status_changed(self, event):
         try:
