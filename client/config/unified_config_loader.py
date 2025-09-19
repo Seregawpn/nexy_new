@@ -195,6 +195,18 @@ class UnifiedConfigLoader:
         config = self._load_config()
         return config['audio']
     
+    def get_speech_playback_config(self) -> Dict[str, Any]:
+        """Получает настройки воспроизведения речи"""
+        audio_config = self.get_audio_config()
+        return audio_config.get('speech_playback', {
+            'sample_rate': 48000,
+            'channels': 1,
+            'dtype': 'int16',
+            'buffer_size': 512,
+            'max_memory_mb': 50,
+            'auto_device_selection': True
+        })
+    
     def get_stt_config(self) -> Dict[str, Any]:
         """Получает настройки распознавания речи"""
         config = self._load_config()

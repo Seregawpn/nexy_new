@@ -4,9 +4,11 @@
 Перед любыми изменениями ВСЕГДА изучай эти ключевые документы:
 
 ### Концепция продукта и UX
-- `client/Docs/PRODUCT_CONCEPT.md` - ОСНОВНОЙ концепт продукта, UX-сценарии, 3 режима (SLEEPING/LISTENING/PROCESSING)
-- `client/Docs/INTEGRATION_MASTER_PLAN.md` - архитектура, план интеграции, статус модулей
-- `client/Docs/GLOBAL_DELIVERY_PLAN.md` - глобальный план поставки, Azure VM, подпись/нотаризация
+- `Docs/PRODUCT_CONCEPT.md` - ОСНОВНОЙ концепт продукта, UX-сценарии, 3 режима (SLEEPING/LISTENING/PROCESSING)
+- `Docs/INTEGRATION_MASTER_PLAN.md` - архитектура, план интеграции, статус модулей
+- `Docs/GLOBAL_DELIVERY_PLAN.md` - глобальный план поставки, Azure VM, подпись/нотаризация
+- `Docs/PACKAGING_PLAN.md` - План по упаковке приложения PKG 
+- `Docs/ARCHITECTURE_OVERVIEW.md` - Полный архитектура проекта логика и так далее
 
 ### Архитектурные принципы
 - Строго 3 режима: SLEEPING (серый), LISTENING (синий пульсирующий), PROCESSING (желтый вращающийся)

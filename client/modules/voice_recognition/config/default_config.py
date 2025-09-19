@@ -6,13 +6,12 @@
 """
 
 from ..core.types import RecognitionConfig
-from config.audio_config import get_audio_config
+from config.unified_config_loader import unified_config
 
 def _get_base_audio_config():
     """Получить базовые аудио параметры из централизованной конфигурации"""
     try:
-        audio_config = get_audio_config()
-        return audio_config.get_voice_recognition_config()
+        return unified_config.get_stt_config()
     except Exception:
         # Fallback значения
         return {'sample_rate': 16000, 'channels': 1, 'chunk_size': 1024}

@@ -50,6 +50,13 @@ audio:
   sample_rate: 48000
   settle_ms: 100
   use_coreaudio_listeners: true
+  speech_playback:
+    sample_rate: 48000
+    channels: 1
+    dtype: int16
+    buffer_size: 512
+    max_memory_mb: 50
+    auto_device_selection: true
 autostart:
   delay: 5
   enabled: false
@@ -116,6 +123,7 @@ security:
   require_screen_permission: true
 stt:
   chunk_size: 1024
+  channels: 1
   dynamic_energy_threshold: true
   energy_threshold: 100
   non_speaking_duration: 0.3

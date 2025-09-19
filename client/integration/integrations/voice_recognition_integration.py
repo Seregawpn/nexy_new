@@ -15,10 +15,7 @@ from integration.core.error_handler import ErrorHandler
 
 # Опциональная реальная реализация распознавания
 try:
-    from modules.voice_recognition.core.speech_recognizer import SpeechRecognizer
-    from modules.voice_recognition.core.types import RecognitionConfig, RecognitionResult
-    # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ
-    from config.audio_config import get_audio_config
+    from modules.voice_recognition import SpeechRecognizer, DEFAULT_RECOGNITION_CONFIG, RecognitionResult
     _REAL_VOICE_AVAILABLE = True
 except Exception:
     # Зависимости могут отсутствовать; в этом случае используем только симуляцию
@@ -75,24 +72,8 @@ class VoiceRecognitionIntegration:
             # Инициализация реального распознавателя, если симуляция отключена
             if not self.config.simulate and _REAL_VOICE_AVAILABLE:
                 try:
-                    # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ - единый источник истины
-                    audio_config = get_audio_config()
-                    voice_cfg = audio_config.get_voice_recognition_config()
-                    
-                    rec_cfg = RecognitionConfig(
-                        language=self.config.language,
-                        sample_rate=voice_cfg['sample_rate'],    # Из централизованной конфигурации
-                        chunk_size=voice_cfg['chunk_size'],      # Из централизованной конфигурации
-                        channels=voice_cfg['channels'],          # Из централизованной конфигурации
-                        dtype='int16',  # STT всегда int16
-                        energy_threshold=100,      # Специфичные для STT параметры
-                        dynamic_energy_threshold=True,
-                        pause_threshold=0.5,
-                        phrase_threshold=0.3,
-                        non_speaking_duration=0.3,
-                        timeout=5.0,
-                    )
-                    self._recognizer = SpeechRecognizer(rec_cfg)
+                    # ИСПОЛЬЗУЕМ ГОТОВУЮ КОНФИГУРАЦИЮ ИЗ МОДУЛЯ - тонкая интеграция
+                    self._recognizer = SpeechRecognizer(DEFAULT_RECOGNITION_CONFIG)
                     logger.info("VoiceRecognitionIntegration: real SpeechRecognizer initialized")
                 except Exception as e:
                     logger.warning(f"VoiceRecognitionIntegration: failed to init real recognizer, fallback to simulate. Error: {e}")

@@ -3,7 +3,7 @@
 # =====================================================
 
 # 🌐 HTTP сервер для health checks (ОБЯЗАТЕЛЬНО для Azure)
-aiohttp>=3.8.0
+aiohttp
 
 # 🚀 Google Gemini API (основной LLM)
 google-genai
@@ -21,9 +21,6 @@ grpcio
 grpcio-tools
 protobuf
 
-# Обработка изображений
-Pillow
-
 # Edge TTS (бесплатный, без API ключей)
 edge-tts
 
@@ -35,8 +32,4 @@ psycopg2-binary
 
 # Аудио обработка
 numpy
-sounddevice
 pydub
-
-# Логирование и утилиты
-rich

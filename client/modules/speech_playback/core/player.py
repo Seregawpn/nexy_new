@@ -26,7 +26,7 @@ from ..macos.core_audio import CoreAudioManager
 from ..macos.performance import PerformanceMonitor
 
 # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ АУДИО
-from config.audio_config import get_audio_config
+from config.unified_config_loader import unified_config
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class PlayerConfig:
             PlayerConfig: Конфигурация из unified_config.yaml
         """
         try:
-            audio_config = get_audio_config()
+            audio_config = unified_config.get_audio_config()
             config_dict = audio_config.get_speech_playback_config()
             
             return cls(

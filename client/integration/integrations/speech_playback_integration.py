@@ -20,7 +20,7 @@ from modules.speech_playback.core.player import SequentialSpeechPlayer, PlayerCo
 from modules.speech_playback.core.state import PlaybackState
 
 # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ АУДИО
-from config.audio_config import get_audio_config, convert_audio_format, normalize_audio_data
+from config.unified_config_loader import unified_config
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,7 @@ class SpeechPlaybackIntegration:
         self.error_handler = error_handler
         
         # ЦЕНТРАЛИЗОВАННАЯ КОНФИГУРАЦИЯ - единый источник истины
-        self.audio_config = get_audio_config()
-        self.config = self.audio_config.get_speech_playback_config()
+        self.config = unified_config.get_speech_playback_config()
 
         self._player: Optional[SequentialSpeechPlayer] = None
         self._initialized = False
@@ -80,8 +79,13 @@ class SpeechPlaybackIntegration:
             await self.event_bus.subscribe("grpc.request_failed", self._on_grpc_failed, EventPriority.HIGH)
             # Сигналы (короткие тоны) через EventBus
             await self.event_bus.subscribe("playback.signal", self._on_playback_signal, EventPriority.HIGH)
-            await self.event_bus.subscribe("keyboard.short_press", self._on_interrupt, EventPriority.CRITICAL)
-            await self.event_bus.subscribe("interrupt.request", self._on_interrupt, EventPriority.CRITICAL)
+            
+            # ЕДИНЫЙ канал прерываний - только playback.cancelled
+            await self.event_bus.subscribe("playback.cancelled", self._on_unified_interrupt, EventPriority.CRITICAL)
+            
+            # Устаревшие прямые прерывания (для обратной совместимости, но перенаправляем в единый канал)
+            await self.event_bus.subscribe("keyboard.short_press", self._on_legacy_interrupt, EventPriority.CRITICAL)
+            await self.event_bus.subscribe("interrupt.request", self._on_legacy_interrupt, EventPriority.CRITICAL)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
             # Реагируем на смену выходного устройства
             try:
@@ -312,23 +316,56 @@ class SpeechPlaybackIntegration:
         except Exception as e:
             await self._handle_error(e, where="speech.on_grpc_failed", severity="warning")
 
-    async def _on_interrupt(self, event):
+    async def _on_unified_interrupt(self, event):
+        """ЕДИНЫЙ обработчик прерывания воспроизведения"""
         try:
+            data = event.get("data", {})
+            source = data.get("source", "unknown")
+            reason = data.get("reason", "interrupt")
+            
+            logger.info(f"SpeechPlayback: ЕДИНЫЙ канал прерывания, source={source}, reason={reason}")
+            
             # Помечаем текущую сессию как отменённую (если есть)
             if self._current_session_id is not None:
                 self._cancelled_sessions.add(self._current_session_id)
+                
             # Отменяем таймер тишины, если активен
             try:
                 if self._silence_task and not self._silence_task.done():
                     self._silence_task.cancel()
             except Exception:
                 pass
+            
+            # Останавливаем воспроизведение
             if self._player:
                 self._player.stop_playback()
-            await self.event_bus.publish("playback.cancelled", {"reason": "interrupt"})
+            
+            # Очищаем все сессии
             self._finalized_sessions.clear()
+            
+            logger.info("SpeechPlayback: прерывание обработано через ЕДИНЫЙ канал")
+            
         except Exception as e:
-            await self._handle_error(e, where="speech.on_interrupt", severity="warning")
+            await self._handle_error(e, where="speech.on_unified_interrupt", severity="warning")
+    
+    async def _on_legacy_interrupt(self, event):
+        """Обработчик устаревших прерываний (перенаправляет в единый канал)"""
+        try:
+            event_type = event.get("type", "unknown")
+            data = event.get("data", {})
+            
+            logger.info(f"SpeechPlayback: получено устаревшее прерывание {event_type}, перенаправляем в ЕДИНЫЙ канал")
+            
+            # Перенаправляем в единый канал прерывания
+            await self.event_bus.publish("playback.cancelled", {
+                "session_id": data.get("session_id"),
+                "reason": "legacy_interrupt",
+                "source": f"legacy_{event_type}",
+                "original_event": event_type
+            })
+            
+        except Exception as e:
+            await self._handle_error(e, where="speech.on_legacy_interrupt", severity="warning")
 
     async def _on_app_shutdown(self, event):
         await self.stop()

@@ -13,7 +13,8 @@ protobuf
 # РАСПОЗНАВАНИЕ РЕЧИ (STT)
 # =====================================================
 SpeechRecognition
-sounddevice        # ← ЗАМЕНА PyAudio на sounddevice
+PyAudio            # ← Для voice_recognition модуля
+sounddevice        # ← Для speech_playback модуля
 
 # =====================================================
 # ЗАХВАТ ЭКРАНА
@@ -26,6 +27,7 @@ mss               # ← ТОЛЬКО mss: Быстрый захват экран
 # =====================================================
 numpy
 pydub
+scipy
 # FLAC поддержка (встроен в Speech Recognition 1.5.0)
 # Speech Recognition автоматически использует встроенный FLAC для оптимизации
 

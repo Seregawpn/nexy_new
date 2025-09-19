@@ -45,6 +45,9 @@ from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCat
 # Импорт конфигурации
 from config.unified_config_loader import UnifiedConfigLoader
 
+# Импорт Workflows
+from integration.workflows import ListeningWorkflow, ProcessingWorkflow
+
 logger = logging.getLogger(__name__)
 
 # Глобальная защита от множественного запуска
@@ -61,6 +64,9 @@ class SimpleModuleCoordinator:
         
         # Интеграции (обертки для модулей)
         self.integrations: Dict[str, Any] = {}
+        
+        # Workflows (координаторы режимов)
+        self.workflows: Dict[str, Any] = {}
         
         # Конфигурация
         self.config = UnifiedConfigLoader()
@@ -340,6 +346,21 @@ class SimpleModuleCoordinator:
 
             print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals")
             
+            # 3. Создаем Workflows (координаторы режимов)
+            print("🔧 Создание Workflows...")
+            
+            self.workflows['listening'] = ListeningWorkflow(
+                event_bus=self.event_bus
+            )
+            print("✅ ListeningWorkflow создан")
+            
+            self.workflows['processing'] = ProcessingWorkflow(
+                event_bus=self.event_bus
+            )
+            print("✅ ProcessingWorkflow создан")
+            
+            print("✅ Все Workflows созданы успешно")
+            
         except Exception as e:
             print(f"❌ Ошибка создания интеграций: {e}")
             raise
@@ -347,6 +368,7 @@ class SimpleModuleCoordinator:
     async def _initialize_integrations(self):
         """Инициализация всех интеграций"""
         try:
+            # Инициализируем интеграции
             for name, integration in self.integrations.items():
                 print(f"🔧 Инициализация {name}...")
                 success = await integration.initialize()
@@ -354,9 +376,16 @@ class SimpleModuleCoordinator:
                     print(f"❌ Ошибка инициализации {name}")
                     raise Exception(f"Failed to initialize {name}")
                 print(f"✅ {name} инициализирован")
+            
+            # Инициализируем Workflows
+            print("🔧 Инициализация Workflows...")
+            for name, workflow in self.workflows.items():
+                print(f"🔧 Инициализация workflow {name}...")
+                await workflow.initialize()
+                print(f"✅ Workflow {name} инициализирован")
                 
         except Exception as e:
-            print(f"❌ Ошибка инициализации интеграций: {e}")
+            print(f"❌ Ошибка инициализации интеграций/workflows: {e}")
             raise
     
     async def _setup_coordination(self):
@@ -414,6 +443,13 @@ class SimpleModuleCoordinator:
                     return False
                 print(f"✅ {name} запущен")
             
+            # Запускаем все Workflows
+            print("🚀 Запуск Workflows...")
+            for name, workflow in self.workflows.items():
+                print(f"🚀 Запуск workflow {name}...")
+                await workflow.start()
+                print(f"✅ Workflow {name} запущен")
+            
             self.is_running = True
             
             # Публикуем событие запуска
@@ -452,8 +488,15 @@ class SimpleModuleCoordinator:
                 else:
                     print(f"✅ {name} остановлен")
             
+            # Останавливаем все Workflows
+            print("⏹️ Остановка Workflows...")
+            for name, workflow in self.workflows.items():
+                print(f"⏹️ Остановка workflow {name}...")
+                await workflow.stop()
+                print(f"✅ Workflow {name} остановлен")
+            
             self.is_running = False
-            print("✅ Все интеграции остановлены")
+            print("✅ Все интеграции и workflows остановлены")
             # Останавливаем фоновый loop
             try:
                 if self._bg_loop and self._bg_loop.is_running():
