@@ -51,12 +51,16 @@ class ModeManagementIntegration:
         # Централизованный контроллер режимов (single source of truth)
         self.controller: ModeController = ModeController(ModeConfig())
 
-        # Управление таймаутом PROCESSING
-        self._processing_timeout_sec = 45.0
+        # Управление таймаутом PROCESSING (0.0 = отключено по требованиям)
+        self._processing_timeout_sec = 0.0
         self._processing_timeout_task: Optional[asyncio.Task] = None
 
         # Текущая активная сессия (для фильтрации заявок)
         self._active_session_id: Optional[Any] = None
+
+        # Таймаут LISTENING (0.0 = отключено по требованиям)
+        self._listening_timeout_sec = 0.0
+        self._listening_timeout_task: Optional[asyncio.Task] = None
 
         # Приоритеты источников (чем больше — тем важнее)
         self._priorities = {
@@ -99,6 +103,11 @@ class ModeManagementIntegration:
             # await self.event_bus.subscribe("keyboard.short_press", self._bridge_keyboard_short, EventPriority.MEDIUM)
 
             # Внимание: не возвращаем SLEEPING по завершению gRPC — ждём завершения воспроизведения
+            # Доп. подписки для контекста (без публикации режимов)
+            try:
+                await self.event_bus.subscribe("voice.recording_start", self._on_voice_recording_start, EventPriority.MEDIUM)
+            except Exception:
+                pass
             # await self.event_bus.subscribe("grpc.request_completed", self._bridge_grpc_done, EventPriority.MEDIUM)
             # await self.event_bus.subscribe("grpc.request_failed", self._bridge_grpc_done, EventPriority.MEDIUM)
 
@@ -195,14 +204,37 @@ class ModeManagementIntegration:
             except Exception:
                 pass
             if new_mode == AppMode.PROCESSING:
-                # Запускаем/перезапускаем таймер таймаута
+                # PROCESSING: запуск таймера только если включен (>0)
                 if self._processing_timeout_task and not self._processing_timeout_task.done():
                     self._processing_timeout_task.cancel()
-                self._processing_timeout_task = asyncio.create_task(self._processing_timeout_guard())
+                if (self._processing_timeout_sec or 0) > 0:
+                    self._processing_timeout_task = asyncio.create_task(self._processing_timeout_guard())
+                if self._listening_timeout_task and not self._listening_timeout_task.done():
+                    self._listening_timeout_task.cancel()
+            elif new_mode == AppMode.LISTENING:
+                # LISTENING: запуск таймера только если включен (>0)
+                if self._listening_timeout_task and not self._listening_timeout_task.done():
+                    self._listening_timeout_task.cancel()
+                if (self._listening_timeout_sec or 0) > 0:
+                    self._listening_timeout_task = asyncio.create_task(self._listening_timeout_guard())
+                if self._processing_timeout_task and not self._processing_timeout_task.done():
+                    self._processing_timeout_task.cancel()
             else:
-                # Любой другой режим — таймер не нужен
+                # Прочие режимы — таймеры не нужны
                 if self._processing_timeout_task and not self._processing_timeout_task.done():
                     self._processing_timeout_task.cancel()
+                if self._listening_timeout_task and not self._listening_timeout_task.done():
+                    self._listening_timeout_task.cancel()
+        except Exception:
+            pass
+
+    async def _on_voice_recording_start(self, event):
+        """Фиксируем session_id для контекста LISTENING/PROCESSING."""
+        try:
+            data = (event or {}).get("data", {})
+            sid = data.get("session_id")
+            if sid is not None:
+                self._active_session_id = sid
         except Exception:
             pass
 
@@ -291,10 +323,22 @@ class ModeManagementIntegration:
         except Exception:
             pass
 
+    async def _listening_timeout_guard(self):
+        """Автовозврат в SLEEPING, если LISTENING затянулся без RELEASE/STOP."""
+        try:
+            await asyncio.sleep(self._listening_timeout_sec)
+            if self.state_manager.get_current_mode() == AppMode.LISTENING:
+                await self._apply_mode(AppMode.SLEEPING, source="mode_management")
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
+
     def get_status(self) -> Dict[str, Any]:
         return {
             "initialized": self._initialized,
             "running": self._running,
             "processing_timeout_sec": self._processing_timeout_sec,
+            "listening_timeout_sec": self._listening_timeout_sec,
             "active_session_id": self._active_session_id,
         }
