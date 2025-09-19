@@ -3,7 +3,7 @@
 ## 📊 ОБЩАЯ ИНФОРМАЦИЯ
 
 **Дата создания:** 15 сентября 2025  
-**Дата обновления:** 18 сентября 2025 (end‑to‑end: capture → gRPC → playback; Signals integration implemented; план Auth/Chat)  
+**Дата обновления:** 19 сентября 2025 (Interrupts press‑first; Signals; end‑to‑end поток)  
 **Версия:** 2.5.0  
 **Статус:** В процессе (15 ИНТЕГРАЦИЙ ЗАВЕРШЕНЫ)  
 **Автор:** Nexy Team  
@@ -169,7 +169,7 @@ client/
 
 ### ❌ **ЧТО ОТСУТСТВУЕТ (следующие приоритеты):**
 1. **Workflows** ❌ - формализовать `listening_workflow.py`/`processing_workflow.py` (завершение по `grpc.request_completed`/`playback.completed`)
-2. **Login/Auth + Client Chat** ❌ - токен в Keychain, metadata `authorization`, CLI чат
+2. **Login/Auth + Client Chat** ❌ - Deferred (вне scope на текущем этапе)
 
 ### ✅ **ЧТО РАБОТАЕТ ПРАВИЛЬНО:**
 1. **`SimpleModuleCoordinator`** - работает только с интеграциями
@@ -1303,3 +1303,18 @@ Hardware ID → GrpcClient → SpeechPlayback
   - Путь: `modules.signals` → `EventBusAudioSink` → `playback.signal` → SpeechPlaybackIntegration
   - Реализация: аудио‑beep (880 Hz, ~120 ms, 48 kHz, s16le); визуальное мигание трея — позже
   - Тест‑гейт: LISTENING даёт короткий beep; playback.completed — «done» сигнал
+##### 1.11d Interrupts (press‑first) — ✅ MVP
+**Цель:** Мгновенное прерывание по PRESS; SHORT → SLEEPING; LONG → LISTENING; RELEASE → PROCESSING.
+
+**Сделано:**
+- [x] Press‑first interrupt: `interrupt.request` публикуется на PRESS в InputProcessing
+- [x] Плеер: жёсткий стоп без дренажа, без смены режима
+- [x] gRPC: отмена активного стрима по interrupt/short (через отмену задачи)
+- [x] Voice: отмена распознавания/прослушивания по interrupt/short
+
+**Донастройка:**
+- [ ] Явный канал `grpc.request_cancel { session_id? }`
+- [ ] Debounce SHORT в LISTENING (≤150 мс)
+- [ ] Фильтр «поздних» аудио‑чанков после cancel
+
+**Тест‑гейт:** PRESS → мгновенная тишина; PROCESSING→LONG: LISTENING без промежуточного SLEEPING; SHORT: SLEEPING.

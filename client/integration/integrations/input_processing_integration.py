@@ -129,6 +129,16 @@ class InputProcessingIntegration:
             logger.debug(f"PRESS: session(before)={self._current_session_id}, recognized={self._session_recognized}")
             print(f"🔑 PRESS EVENT: {event.timestamp} - начинаем запись")  # Для отладки
             
+            # МГНОВЕННОЕ ПРЕРЫВАНИЕ: останавливаем воспроизведение и любые активные процессы
+            try:
+                await self.event_bus.publish("interrupt.request", {
+                    "scope": "playback",
+                    "source": "keyboard",
+                    "reason": "key_press"
+                })
+            except Exception:
+                pass
+
             # Создаем сессию и сбрасываем флаг распознавания
             self._current_session_id = event.timestamp or time.monotonic()
             self._session_recognized = False
@@ -294,25 +304,12 @@ class InputProcessingIntegration:
                 )
                 logger.debug("SHORT_PRESS: voice.recording_stop опубликовано")
 
-            # При коротком нажатии:
-            # - если идёт PROCESSING (воспроизведение/обработка) — отправляем interrupt.request
-            # - иначе (LISTENING/SLEEPING) — запрашиваем SLEEPING
-            try:
-                current = self.state_manager.get_current_mode()
-            except Exception:
-                current = None
-            if current == AppMode.PROCESSING:
-                await self.event_bus.publish("interrupt.request", {
-                    "scope": "playback",
-                    "reason": "keyboard.short_press"
-                })
-                logger.info("SHORT_PRESS: interrupt.request(playback)")
-            else:
-                await self.event_bus.publish("mode.request", {
-                    "target": AppMode.SLEEPING,
-                    "source": "input_processing"
-                })
-                logger.info("SHORT_PRESS: запрос на SLEEPING отправлен")
+            # При коротком нажатии: только прерывание (уже выполнено на PRESS) и переход в SLEEPING
+            await self.event_bus.publish("mode.request", {
+                "target": AppMode.SLEEPING,
+                "source": "input_processing"
+            })
+            logger.info("SHORT_PRESS: запрос на SLEEPING отправлен")
 
             # Смена режима публикуется централизованно через ApplicationStateManager
 

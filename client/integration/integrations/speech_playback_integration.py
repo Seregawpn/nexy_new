@@ -308,13 +308,6 @@ class SpeechPlaybackIntegration:
                 self._player.stop_playback()
             await self.event_bus.publish("playback.cancelled", {"reason": "interrupt"})
             self._finalized_sessions.clear()
-            try:
-                await self.event_bus.publish("mode.request", {
-                    "target": AppMode.SLEEPING,
-                    "source": "speech_playback"
-                })
-            except Exception:
-                pass
         except Exception as e:
             await self._handle_error(e, where="speech.on_interrupt", severity="warning")
 
