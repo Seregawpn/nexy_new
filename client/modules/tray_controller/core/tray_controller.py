@@ -205,6 +205,11 @@ class TrayController:
                 ),
                 TrayMenuItem(title="", separator=True),
                 TrayMenuItem(
+                    title="Check for Updates...",
+                    action=self._on_check_updates_clicked
+                ),
+                TrayMenuItem(title="", separator=True),
+                TrayMenuItem(
                     title="Quit",
                     action=self._on_quit_clicked
                 )
@@ -235,6 +240,10 @@ class TrayController:
     def _on_settings_clicked(self, sender):
         """Обработчик клика по настройкам"""
         asyncio.create_task(self._publish_event("settings_clicked", {}))
+    
+    def _on_check_updates_clicked(self, sender):
+        """Обработчик клика по проверке обновлений"""
+        asyncio.create_task(self._publish_event("updater.check_manual", {}))
     
     def _on_about_clicked(self, sender):
         """Обработчик клика по 'О программе'"""

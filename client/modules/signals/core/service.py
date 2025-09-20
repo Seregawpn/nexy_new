@@ -18,12 +18,12 @@ from .interfaces import SignalService, SignalChannel, SignalRequest, SignalPatte
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class CooldownPolicy:
     cooldown_ms: int = 300
 
 
-@dataclass(slots=True)
+@dataclass
 class SignalMetrics:
     trigger_count: int = 0
     suppressed_by_cooldown: int = 0

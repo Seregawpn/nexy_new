@@ -36,7 +36,7 @@ class SignalKind(str, Enum):
     VISUAL = "visual"
 
 
-@dataclass(slots=True)
+@dataclass
 class SignalRequest:
     """A single signal request, ready to be emitted via a channel/service."""
 

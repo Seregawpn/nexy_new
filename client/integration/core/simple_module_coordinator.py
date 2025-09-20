@@ -25,7 +25,7 @@ from integrations.input_processing_integration import InputProcessingIntegration
 from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
 from integrations.permissions_integration import PermissionsIntegration
 from modules.permissions.core.types import PermissionConfig
-from integrations.update_manager_integration import UpdateManagerIntegration, UpdateManagerIntegrationConfig
+from integrations.updater_integration import UpdaterIntegration
 from integrations.network_manager_integration import NetworkManagerIntegration
 from modules.network_manager.core.config import NetworkManagerConfig
 from integrations.audio_device_integration import AudioDeviceIntegration
@@ -198,27 +198,13 @@ class SimpleModuleCoordinator:
                 config=permissions_config
             )
             
-            # Update Manager Integration - загружаем из конфигурации
-            upd_cfg = config_data['update_manager']
-            update_config = UpdateManagerIntegrationConfig(
-                enabled=upd_cfg['enabled'],
-                check_interval=upd_cfg['check_interval'],
-                check_time=upd_cfg['check_time'],
-                auto_install=upd_cfg['auto_install'],
-                announce_updates=upd_cfg['announce_updates'],
-                check_on_startup=upd_cfg['check_on_startup'],
-                appcast_url=config_data['network']['appcast']['base_url'] + "/appcast.xml",
-                retry_attempts=upd_cfg['retry_attempts'],
-                retry_delay=upd_cfg['retry_delay'],
-                silent_mode=upd_cfg['silent_mode'],
-                log_updates=upd_cfg['log_updates']
-            )
+            # Updater Integration - новая система обновлений
+            updater_cfg = config_data.get('updater', {})
             
-            self.integrations['update_manager'] = UpdateManagerIntegration(
+            self.integrations['updater'] = UpdaterIntegration(
                 event_bus=self.event_bus,
                 state_manager=self.state_manager,
-                error_handler=self.error_handler,
-                config=update_config
+                config=updater_cfg
             )
             
             # Network Manager Integration - используем конфигурацию модуля

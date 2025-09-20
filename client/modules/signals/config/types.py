@@ -13,7 +13,7 @@ from typing import Dict, Optional
 from ..core.interfaces import SignalPattern
 
 
-@dataclass(slots=True)
+@dataclass
 class PatternConfig:
     audio: bool = True
     visual: bool = False
@@ -23,7 +23,7 @@ class PatternConfig:
     cooldown_ms: int = 300
 
 
-@dataclass(slots=True)
+@dataclass
 class SignalsConfig:
     enabled: bool = True
     sample_rate: int = 48_000

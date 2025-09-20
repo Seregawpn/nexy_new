@@ -142,8 +142,34 @@ update_manager:
   retry_delay: 300
   silent_mode: true
 
+updater:
+  enabled: true
+  manifest_url: "https://updates.nexy.ai/manifest.json"
+  check_interval: 3600
+  auto_install: true
+  security:
+    public_key: "BASE64_PUBLIC_ED25519_KEY"
+  timeout: 30
+  retries: 3
+  ui:
+    show_notifications: true
+    auto_download: true
+
 # Конфигурации интеграций
 integrations:
+  updater:
+    enabled: true
+    manifest_url: "http://localhost:8080/manifest.json"
+    check_interval: 3600
+    check_on_startup: true
+    auto_install: true
+    security:
+      public_key: "nL2RNmchhsAlEKpqwxJ/caJhFVGmj0GtNM5O5lkA80Q="
+    timeout: 30
+    retries: 3
+    ui:
+      show_notifications: true
+      auto_download: true
   tray_controller:
     icon_size: 16
     show_status_in_menu: true
