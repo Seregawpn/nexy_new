@@ -1,9 +1,9 @@
 # 🎯 ФИНАЛЬНЫЙ ЧЕК-ЛИСТ NEXY AI ASSISTANT
 
 **Дата:** 20 сентября 2025  
-**Версия:** 3.1.0  
+**Версия:** 4.0.0 - Complete Production Pipeline  
 **Статус:** ✅ ГОТОВ К ПРОДАКШЕНУ  
-**Цель:** Pre-merge gate для проверки всех критических моментов
+**Цель:** Pre-merge gate для проверки всех критических моментов с полной нотаризацией
 
 ---
 
@@ -29,8 +29,9 @@
 ### **📦 УПАКОВКА**
 
 - [ ] **Staging pipeline работает** - `make all` проходит на чистой машине
-- [ ] **PKG устанавливается в ~/Applications** - единая стратегия без root
+- [ ] **PKG устанавливается в /Applications** - единая стратегия без root
 - [ ] **PyInstaller spec включает новые модули** - instance_manager, autostart_manager
+- [ ] **FLAC версия 1.5.0+** - проверено и актуально
 - [ ] **Все артефакты подписаны** - .app, .pkg, .dmg
 - [ ] **Все артефакты нотарифицированы** - .app, .pkg, .dmg
 - [ ] **Все артефакты stapled** - .app, .pkg, .dmg (НЕ только DMG)
@@ -159,14 +160,14 @@ bash tools/packaging/uninstall_launch_agent.sh
 ### **📦 Проверка PKG:**
 ```bash
 # Проверка подписи
-pkgutil --check-signature dist/Nexy.pkg
+pkgutil --check-signature artifacts/Nexy-2.5.0.pkg
 
 # Проверка payload
-pkgutil --expand dist/Nexy.pkg /tmp/nexy_pkg
-grep -R "Users/.*/Applications" -n /tmp/nexy_pkg
+pkgutil --expand artifacts/Nexy-2.5.0.pkg /tmp/nexy_pkg
+grep -R "Applications" -n /tmp/nexy_pkg
 
 # Проверка назначения
-pkgutil --payload-files dist/Nexy.pkg | head
+pkgutil --payload-files artifacts/Nexy-2.5.0.pkg | head
 ```
 
 ---
@@ -189,6 +190,8 @@ pkgutil --payload-files dist/Nexy.pkg | head
 
 ### **Быстрая проверка:**
 ```bash
+cd packaging/
+
 # Полный пайплайн
 make all
 
@@ -199,8 +202,8 @@ codesign --verify --deep --strict --verbose=2 dist/Nexy.app
 spctl --assess --type execute --verbose dist/Nexy.app
 
 # Проверка PKG/DMG (после нотаризации)
-spctl -a -v Nexy.pkg
-spctl -a -v Nexy.dmg
+spctl -a -v artifacts/Nexy-2.5.0.pkg
+spctl -a -v artifacts/Nexy-2.5.0.dmg
 ```
 
 ### **Переменные окружения:**
@@ -212,15 +215,15 @@ export APPLE_NOTARY_PROFILE="NexyNotary"
 
 ### **Проверка нотаризации:**
 ```bash
-# Нотарификация
+# Нотарификация (автоматически в make all)
 xcrun notarytool submit dist/Nexy.app --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
-xcrun notarytool submit Nexy.pkg --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
-xcrun notarytool submit Nexy.dmg --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
+xcrun notarytool submit artifacts/Nexy-2.5.0.pkg --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
+xcrun notarytool submit artifacts/Nexy-2.5.0.dmg --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
 
-# Stapling
+# Stapling (автоматически в make all)
 xcrun stapler staple dist/Nexy.app
-xcrun stapler staple Nexy.pkg
-xcrun stapler staple Nexy.dmg
+xcrun stapler staple artifacts/Nexy-2.5.0.pkg
+xcrun stapler staple artifacts/Nexy-2.5.0.dmg
 ```
 
 ### **📚 Документация по подписи:**

@@ -3,7 +3,7 @@
 Дата: 19 сентября 2025
 Статус: Готов к применению (итеративный чек‑лист)
 
-Цель: «Кнопочный» процесс сборки подписанного и нотарифицированного PKG с автообновлениями (Sparkle), который можно быстро повторять на каждой версии.
+Цель: «Кнопочный» процесс сборки подписанного и нотарифицированного PKG с новой HTTP-системой обновлений, который можно быстро повторять на каждой версии.
 
 ---
 
@@ -12,7 +12,8 @@
 Требуется:
 - Xcode Command Line Tools: `xcode-select --install`
 - Доступ к Apple Developer (Developer ID Application/Installer)
-- Sparkle 2 (через Homebrew) — фреймворк уже обнаружен в проекте
+- Python 3.11+ с зависимостями: `urllib3`, `pynacl`, `packaging`
+- **Архитектура:** Только Apple Silicon (M1+) - Intel Mac не поддерживается
 
 Хранение секретов (рекомендуемые переменные):
 - `DEVELOPER_ID_APP="Developer ID Application: YOUR NAME (TEAMID)"`
@@ -21,7 +22,7 @@
 - `BUNDLE_ID="com.nexy.assistant"`
 - `APP_NAME="Nexy"`
 - `APP_VERSION="2.5.0"` / `APP_BUILD="20500"` (CFBundleVersion)
-- `SPARKLE_FEED_URL="https://api.yourdomain.com/updates/appcast.xml"`
+- `UPDATE_MANIFEST_URL="https://api.yourdomain.com/updates/manifest.json"`
 - `APPLE_NOTARY_PROFILE="NexyNotary"` (сохранённый профиль notarytool)
 
 Создать профиль notarytool (однократно):
@@ -40,7 +41,6 @@ xcrun notarytool store-credentials "$APPLE_NOTARY_PROFILE" \
 - `CFBundleIdentifier = $BUNDLE_ID`
 - `CFBundleShortVersionString = $APP_VERSION`
 - `CFBundleVersion = $APP_BUILD`
-- `SUFeedURL = $SPARKLE_FEED_URL` (Sparkle)
 - `LSBackgroundOnly = 1` (для menubar‑приложений на rumps — опционально)
 - Usage Descriptions (микрофон/скрин/камера/уведомления):
   - `NSMicrophoneUsageDescription`
@@ -50,7 +50,7 @@ xcrun notarytool store-credentials "$APPLE_NOTARY_PROFILE" \
 
 1.2 Entitlements (entitlements.plist):
 - `com.apple.security.app-sandbox` = false (Developer ID, не Mac App Store)
-- `com.apple.security.cs.disable-library-validation` = true (если требуется Sparkle/плагины)
+- `com.apple.security.cs.disable-library-validation` = true (для системных библиотек)
 - Доступность/Automation при необходимости (Accessibility / AppleEvents)
 
 1.3 PyInstaller (.spec шаблон):
@@ -64,10 +64,14 @@ a = Analysis([
     pathex=[],
     binaries=[],
     datas=[
-        # Пример: включить Sparkle.framework, иконки, ресурсы
-        # ('path/to/Sparkle.framework', 'Nexy.app/Contents/Frameworks/Sparkle.framework'),
+        # Конфигурационные файлы и ресурсы
+        ('client/config', 'config'),
+        ('client/assets', 'assets'),
     ],
-    hiddenimports=['rumps'],
+    hiddenimports=[
+        'rumps', 'asyncio', 'grpc', 'pyaudio', 'PIL', 'speech_recognition', 
+        'pynput', 'psutil', 'keyring', 'cryptography', 'urllib3', 'nacl', 'packaging'
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
@@ -78,7 +82,7 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 app = BUNDLE(pyz,
              a.scripts,
              name='Nexy.app',
-             icon=None,
+             icon='client/assets/logo.icns',
              bundle_identifier='com.nexy.assistant',
              info_plist={
                  'CFBundleName': 'Nexy',
@@ -86,10 +90,11 @@ app = BUNDLE(pyz,
                  'CFBundleVersion': '20500',
                  'LSMinimumSystemVersion': '11.0',
                  'LSBackgroundOnly': True,
-                 'SUFeedURL': 'https://api.yourdomain.com/updates/appcast.xml',
+                 'NSMicrophoneUsageDescription': 'Nexy нужен доступ к микрофону для распознавания голосовых команд',
+                 'NSScreenCaptureUsageDescription': 'Nexy делает скриншоты для понимания контекста вашего экрана',
              },
              argv_emulation=False,
-             target_arch=None)
+             target_arch='arm64')
 ```
 Сборка: `pyinstaller --clean -y Nexy.spec` → `dist/Nexy.app`
 
@@ -99,14 +104,7 @@ app = BUNDLE(pyz,
 
 ## 2) Подпись .app (codesign, hardened runtime)
 
-2.1 Подписать вложенные фреймворки (Sparkle.framework и пр.):
-```
-codesign --force --options runtime --timestamp \
-  --sign "$DEVELOPER_ID_APP" \
-  dist/Nexy.app/Contents/Frameworks/Sparkle.framework
-```
-
-2.2 Подписать .app c entitlements:
+2.1 Подписать .app c entitlements:
 ```
 codesign --force --deep --options runtime --timestamp \
   --entitlements entitlements.plist \
@@ -153,28 +151,33 @@ xcrun stapler staple Nexy-$APP_VERSION.pkg
 
 ---
 
-## 5) Sparkle AppCast (обновления)
+## 5) HTTP Update System (обновления)
 
-5.1 Готовим `appcast.xml` (пример записи):
+5.1 Готовим JSON манифест `manifest.json`:
+```json
+{
+  "version": "2.5.0",
+  "build": 20500,
+  "release_date": "2025-09-19T10:00:00Z",
+  "artifact": {
+    "type": "dmg",
+    "url": "https://api.yourdomain.com/updates/Nexy-2.5.0.dmg",
+    "size": 12345678,
+    "sha256": "abc123...",
+    "ed25519": "BASE64_SIGNATURE",
+    "arch": "arm64",
+    "min_os": "11.0"
+  },
+  "notes_url": "https://api.yourdomain.com/changelog/2.5.0"
+}
 ```
-<item>
-  <title>Version 2.5.0</title>
-  <sparkle:releaseNotesLink>https://api.yourdomain.com/updates/notes/2.5.0.html</sparkle:releaseNotesLink>
-  <pubDate>Thu, 19 Sep 2025 18:00:00 +0000</pubDate>
-  <enclosure url="https://api.yourdomain.com/updates/Nexy-2.5.0.pkg"
-             sparkle:version="20500"
-             length="12345678"
-             type="application/octet-stream" />
-</item>
-```
-Для Sparkle 2 рекомендуется использовать `generate_appcast` (включая EdDSA‑подпись). Если используете подпись, добавьте `sparkle:edSignature` в enclosure.
 
 5.2 Публикация:
-- Разместить `appcast.xml` и `Nexy-$APP_VERSION.pkg` по HTTPS (например, Azure Static Site/App Service).
-- Проверить доступность: `https://api.yourdomain.com/updates/appcast.xml`.
+- Разместить `manifest.json` и `Nexy-$APP_VERSION.dmg` по HTTPS (например, Azure Static Site/App Service).
+- Проверить доступность: `https://api.yourdomain.com/updates/manifest.json`.
 
 5.3 Клиент:
-- Убедиться, что `SUFeedURL`/конфиг указывает на правильный appcast URL.
+- Убедиться, что конфиг указывает на правильный manifest URL.
 - Проверить автообновление при выходе новой версии.
 
 ---
@@ -193,8 +196,6 @@ app:
 	pyinstaller --clean -y Nexy.spec
 
 sign-app:
-	codesign --force --options runtime --timestamp \
-	  --sign "$(DEVELOPER_ID_APP)" dist/Nexy.app/Contents/Frameworks/Sparkle.framework
 	codesign --force --deep --options runtime --timestamp \
 	  --entitlements entitlements.plist \
 	  --sign "$(DEVELOPER_ID_APP)" dist/Nexy.app
@@ -220,13 +221,13 @@ clean:
 ## 7) Чек‑лист перед релизом
 
 - [ ] Версии в Info.plist обновлены (ShortVersion/Build)
-- [ ] SUFeedURL указывает на актуальный appcast
+- [ ] Update manifest URL указывает на актуальный manifest.json
 - [ ] Entitlements соответствуют требованиям (Mic/Screen/Notifications/Accessibility)
-- [ ] Sparkle.framework включён и подписан
 - [ ] .app подписан (codesign verify OK)
 - [ ] PKG подписан и нотарифицирован, stapled
-- [ ] AppCast доступен по HTTPS, запись корректна
-- [ ] Автообновление проверено на клиенте (Sparkle)
+- [ ] Manifest.json доступен по HTTPS, запись корректна
+- [ ] DMG файл создан и подписан
+- [ ] Автообновление проверено на клиенте (HTTP система)
 
 ---
 
@@ -234,7 +235,7 @@ clean:
 
 - Ошибка notarization: проверьте, что используете Developer ID, hardened runtime, timestamp, и что PKG подписан Installer‑сертификатом.
 - Gatekeeper ругается: повторно проверьте stapler и целостность подписи.
-- Sparkle не видит обновления: проверьте SUFeedURL и доступность appcast.xml/PKG; корректность версии/даты/подписи.
+- HTTP система не видит обновления: проверьте manifest URL и доступность manifest.json/DMG; корректность версии/даты/подписи.
 - Фреймворки/библиотеки: убедитесь, что все вложенные .dylib/.framework подписаны до подписи .app.
 
 ---

@@ -1,5 +1,5 @@
 # Makefile для сборки и упаковки Nexy
-# Версия: 3.2.0 - Staging Pipeline
+# Версия: 3.4.0 - Local Build in packaging/ Directory
 
 # Переменные
 APP_NAME ?= Nexy
@@ -14,13 +14,16 @@ APPLE_NOTARY_PROFILE ?= NexyNotary
 SPEC ?= Nexy.spec
 STAGE ?= /tmp/nexy-stage
 STAGE_APP := $(STAGE)/$(APP_NAME).app
-DIST_APP := ../dist/$(APP_NAME).app
+DIST_APP := dist/$(APP_NAME).app
 PKG := artifacts/$(APP_NAME)-$(VERSION).pkg
 DMG := artifacts/$(APP_NAME)-$(VERSION).dmg
 
-.PHONY: all doctor sanitize-dist setup-staging app restage-app-root check-xattrs sign-nested sign-app stage-to-dist pkg dmg notarize-app notarize-pkg notarize-dmg staple-all verify verify-dest clean
+.PHONY: all build-only doctor sanitize-dist setup-staging app restage-app-root check-xattrs sign-nested sign-app stage-to-dist pkg dmg notarize-app notarize-pkg notarize-dmg notarize-all staple-all verify verify-dest clean
 
 all: doctor sanitize-dist setup-staging app restage-app-root check-xattrs sign-nested sign-app stage-to-dist pkg dmg notarize-app notarize-pkg notarize-dmg staple-all verify verify-dest
+
+# Быстрая сборка БЕЗ нотаризации (для разработки)
+build-only: doctor sanitize-dist setup-staging app restage-app-root check-xattrs sign-nested sign-app stage-to-dist pkg dmg verify
 
 doctor:
 	@echo "🔍 Проверка готовности к сборке..."
@@ -38,8 +41,8 @@ doctor:
 
 sanitize-dist:
 	@echo "🧹 Очистка dist/ директории..."
-	@rm -rf ../dist
-	@mkdir -p ../dist
+	@rm -rf dist
+	@mkdir -p dist
 	@echo "✅ dist/ директория очищена"
 
 setup-staging:
@@ -49,7 +52,7 @@ setup-staging:
 
 app:
 	@echo "🔨 Сборка приложения в staging..."
-	cd .. && python3 -m PyInstaller --clean -y packaging/$(SPEC)
+	python3 -m PyInstaller --clean -y $(SPEC)
 	@if [ -d "$(DIST_APP)" ]; then \
 		echo "✅ $(APP_NAME).app создан в $(DIST_APP)"; \
 		echo "📦 Переносим в staging: $(STAGE_APP)"; \
@@ -119,7 +122,10 @@ pkg:
 dmg:
 	@echo "💿 Создание DMG..."
 	bash make_dmg.sh "$(DIST_APP)" "$(DMG)"
-	@echo "✅ DMG built: $(DMG)"
+	@echo "🔐 Подпись DMG..."
+	codesign --force --options runtime --timestamp \
+	  --sign "$(DEVELOPER_ID_APP)" "$(DMG)"
+	@echo "✅ DMG built and signed: $(DMG)"
 
 notarize-app:
 	@echo "📋 Нотарификация .app..."
@@ -138,6 +144,9 @@ staple-all:
 	- xcrun stapler staple "$(DIST_APP)"
 	- xcrun stapler staple "$(PKG)"
 	- xcrun stapler staple "$(DMG)"
+
+# Нотаризация уже созданных артефактов
+notarize-all: notarize-app notarize-pkg notarize-dmg staple-all
 
 verify:
 	@echo "🔍 Проверка подписей..."
@@ -158,3 +167,4 @@ clean:
 		echo "🧹 Очистка staging: $(STAGE)"; \
 		rm -rf "$(STAGE)"; \
 	fi
+	@echo "✅ Очистка завершена"

@@ -251,3 +251,4 @@ xcrun notarytool store-credentials "NexyNotary" \
 ---
 
 **💡 Помните:** Staging pipeline (`make all`) решает 95% проблем с подписью автоматически!
+

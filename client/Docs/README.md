@@ -29,7 +29,6 @@
 
 ### **📊 Статус и отчеты**
 - **[CURRENT_STATUS_REPORT.md](CURRENT_STATUS_REPORT.md)** - Текущий статус проекта
-- **[UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)** - Сводка обновлений
 
 ---
 
@@ -41,9 +40,10 @@
 3. Проверьте **[CURRENT_STATUS_REPORT.md](CURRENT_STATUS_REPORT.md)** для текущего статуса
 
 ### Для сборки:
-1. Настройте окружение: `source packaging/setup_env.sh`
-2. Запустите полный пайплайн: `make all`
-3. Проверьте результат: `codesign --verify --deep --strict --verbose=2 dist/Nexy.app`
+1. Перейдите в директорию: `cd packaging/`
+2. Настройте окружение: `source setup_env.sh`
+3. Запустите полный пайплайн: `make all`
+4. Проверьте результат: `codesign --verify --deep --strict --verbose=2 dist/Nexy.app`
 
 ### Для подписи:
 1. Прочитайте **[CODESIGNING_QUICK_GUIDE.md](CODESIGNING_QUICK_GUIDE.md)** для быстрого старта
@@ -66,64 +66,48 @@ Docs/
 ├── CODESIGNING_QUICK_GUIDE.md          # Быстрое руководство по подписи
 ├── TROUBLESHOOTING_CODESIGNING.md      # Troubleshooting подписи
 ├── CURRENT_STATUS_REPORT.md            # Текущий статус
-└── UPDATE_SUMMARY.md                   # Сводка обновлений
+└── UPDATE_SYSTEM_GUIDE.md              # Система обновлений
 ```
 
 ---
 
 ## 🔧 Полезные команды
 
-### Сборка:
 ```bash
-# Полный пайплайн
+cd packaging/
+
+# Полный пайплайн (сборка + подпись + нотаризация)
 make all
 
-# Только сборка
-make app
+# Быстрая сборка БЕЗ нотаризации (для разработки)
+make build-only
 
-# Только подпись
-make sign-app
-```
-
-### Проверка:
-```bash
-# Проверка готовности
+# Проверка готовности системы
 make doctor
 
-# Проверка подписи
-codesign --verify --deep --strict --verbose=2 dist/Nexy.app
-
-# Проверка Gatekeeper
-spctl --assess --type execute --verbose dist/Nexy.app
-```
-
-### Очистка:
-```bash
 # Очистка всех артефактов
 make clean
-
-# Очистка только dist/
-make sanitize-dist
 ```
+
+**Детальные команды:** См. [CODESIGNING_QUICK_GUIDE.md](CODESIGNING_QUICK_GUIDE.md)
 
 ---
 
 ## 🆘 Получение помощи
 
 ### При проблемах с подписью:
-1. Проверьте **[TROUBLESHOOTING_CODESIGNING.md](TROUBLESHOOTING_CODESIGNING.md)**
-2. Используйте `make doctor` для проверки готовности
-3. Запустите `make all` для полной пересборки
+1. **[TROUBLESHOOTING_CODESIGNING.md](TROUBLESHOOTING_CODESIGNING.md)** - Решение типичных проблем
+2. **[CODESIGNING_QUICK_GUIDE.md](CODESIGNING_QUICK_GUIDE.md)** - Быстрое руководство
+3. `make doctor` - Проверка готовности системы
 
 ### При проблемах с архитектурой:
-1. Изучите **[ARCHITECTURE_OVERVIEW.md](ARCHITECTURE_OVERVIEW.md)**
-2. Проверьте **[CURRENT_STATUS_REPORT.md](CURRENT_STATUS_REPORT.md)**
-3. Обратитесь к **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**
+1. **[ARCHITECTURE_OVERVIEW.md](ARCHITECTURE_OVERVIEW.md)** - Полная архитектура
+2. **[CURRENT_STATUS_REPORT.md](CURRENT_STATUS_REPORT.md)** - Текущий статус
+3. **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** - План реализации
 
 ### При подготовке к релизу:
-1. Пройдите **[FINAL_CHECKLIST.md](FINAL_CHECKLIST.md)**
-2. Проверьте **[PACKAGING_PLAN.md](PACKAGING_PLAN.md)**
-3. Убедитесь, что все тесты проходят
+1. **[FINAL_CHECKLIST.md](FINAL_CHECKLIST.md)** - Финальный чек-лист
+2. **[PACKAGING_PLAN.md](PACKAGING_PLAN.md)** - Полный план упаковки
 
 ---
 

@@ -58,7 +58,7 @@ def generate_manifest(artifact_path: str, version: str, build: int,
             "url": artifact_url,
             "size": file_size,
             "sha256": sha256_hash,
-            "arch": "universal2",
+            "arch": "arm64",
             "min_os": "11.0"
         },
         "critical": critical,
