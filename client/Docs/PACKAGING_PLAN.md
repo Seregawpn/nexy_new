@@ -81,7 +81,275 @@ export APPLE_NOTARY_PROFILE="NexyNotary"
 
 ---
 
-## 2) Подготовка .app (PyInstaller)
+## 2) ПОЛНОЕ РУКОВОДСТВО ПО ПОДПИСИ ПРИЛОЖЕНИЙ
+
+### 2.1 Что такое codesigning и зачем он нужен?
+
+**Codesigning** — это процесс цифровой подписи приложения для macOS, который:
+- **Подтверждает авторство** — пользователи знают, кто создал приложение
+- **Обеспечивает целостность** — гарантирует, что приложение не было изменено
+- **Разрешает запуск** — macOS позволяет запускать подписанные приложения
+- **Требуется для распространения** — без подписи приложение заблокируется Gatekeeper
+
+### 2.2 Типы сертификатов для подписи
+
+#### **Developer ID Application** (для распространения вне Mac App Store)
+```bash
+DEVELOPER_ID_APP="Developer ID Application: YOUR NAME (TEAM_ID)"
+```
+- **Назначение:** Подпись приложений для распространения на сайте/по email
+- **Где получить:** Apple Developer Portal → Certificates → Developer ID Application
+- **Срок действия:** 3 года
+- **Требуется для:** .app, .pkg, .dmg файлов
+
+#### **Developer ID Installer** (для PKG инсталляторов)
+```bash
+DEVELOPER_ID_INSTALLER="Developer ID Installer: YOUR NAME (TEAM_ID)"
+```
+- **Назначение:** Подпись PKG инсталляторов
+- **Где получить:** Apple Developer Portal → Certificates → Developer ID Installer
+- **Срок действия:** 3 года
+- **Требуется для:** .pkg файлов
+
+### 2.3 Подготовка к подписи
+
+#### **Шаг 1: Установка Xcode Command Line Tools**
+```bash
+xcode-select --install
+```
+
+#### **Шаг 2: Получение сертификатов**
+1. Войдите в [Apple Developer Portal](https://developer.apple.com)
+2. Перейдите в **Certificates, Identifiers & Profiles**
+3. Создайте сертификаты:
+   - **Developer ID Application** (для .app файлов)
+   - **Developer ID Installer** (для .pkg файлов)
+4. Скачайте и установите сертификаты в Keychain
+
+#### **Шаг 3: Создание App-Specific Password**
+1. Перейдите в [Apple ID Settings](https://appleid.apple.com)
+2. В разделе **Security** создайте **App-Specific Password**
+3. Сохраните пароль для notarytool
+
+#### **Шаг 4: Настройка notarytool профиля**
+```bash
+xcrun notarytool store-credentials "NexyNotary" \
+  --apple-id "your-apple-id@example.com" \
+  --team-id "5NKLL2CLB9" \
+  --password "your-app-specific-password"
+```
+
+### 2.4 Структура entitlements.plist
+
+**Обязательные entitlements для Nexy:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Отключение App Sandbox (для Developer ID) -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- Отключение библиотечной валидации -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Доступность (для управления другими приложениями) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- Микрофон -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    
+    <!-- Камера (если требуется) -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    
+    <!-- Сетевые соединения -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- Файловая система -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+</dict>
+</plist>
+```
+
+### 2.5 Процесс подписи (пошагово)
+
+#### **Этап 1: Подготовка окружения**
+```bash
+# Настройка переменных окружения
+export DEVELOPER_ID_APP="Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)"
+export DEVELOPER_ID_INSTALLER="Developer ID Installer: Sergiy Zasorin (5NKLL2CLB9)"
+export APPLE_NOTARY_PROFILE="NexyNotary"
+
+# Или используйте готовый скрипт
+source packaging/setup_env.sh
+```
+
+#### **Этап 2: Сборка приложения**
+```bash
+# Сборка PyInstaller
+make app
+
+# Очистка staging директории
+make sanitize-dist setup-staging
+```
+
+#### **Этап 3: Подпись всех компонентов**
+```bash
+# 1. Очистка xattrs
+make restage-app-root
+
+# 2. Подпись всех вложений (библиотеки, исполняемые файлы)
+make sign-nested
+
+# 3. Подпись основного .app bundle
+make sign-app
+
+# 4. Перенос в dist/
+make stage-to-dist
+```
+
+#### **Этап 4: Создание PKG/DMG**
+```bash
+# Создание PKG инсталлятора
+make pkg
+
+# Создание DMG образа
+make dmg
+```
+
+#### **Этап 5: Нотаризация**
+```bash
+# Нотаризация всех артефактов
+make notarize-app
+make notarize-pkg
+make notarize-dmg
+
+# Stapling (прикрепление билета нотаризации)
+make staple-all
+```
+
+#### **Этап 6: Проверка**
+```bash
+# Проверка подписей
+make verify
+
+# Детальная проверка
+codesign --verify --deep --strict --verbose=2 dist/Nexy.app
+spctl --assess --type execute --verbose dist/Nexy.app
+```
+
+### 2.6 Типичные ошибки и их решения
+
+#### **Ошибка: "resource fork, Finder information, or similar detritus not allowed"**
+```bash
+# Решение: очистка xattrs
+xattr -cr dist/Nexy.app
+xattr -dr com.apple.FinderInfo dist/Nexy.app
+```
+
+#### **Ошибка: "unsealed contents present in the bundle root"**
+```bash
+# Решение: удаление лишних файлов из корня .app
+rm -rf dist/Nexy.app/Nexy.app  # удалить вложенный .app
+rm -rf dist/Nexy.app/*.txt     # удалить текстовые файлы
+```
+
+#### **Ошибка: "a sealed resource is missing or invalid"**
+```bash
+# Решение: пересборка и подпись в staging
+make clean
+make sanitize-dist setup-staging app restage-app-root sign-nested sign-app stage-to-dist
+```
+
+#### **Ошибка: "code signing failed with exit code 1"**
+```bash
+# Проверка сертификата
+security find-identity -v -p codesigning
+
+# Проверка прав на файл
+ls -la dist/Nexy.app/Contents/MacOS/Nexy
+chmod +x dist/Nexy.app/Contents/MacOS/Nexy
+```
+
+### 2.7 Проверка подписи
+
+#### **Базовые проверки:**
+```bash
+# Проверка подписи .app
+codesign --verify --deep --strict --verbose=2 dist/Nexy.app
+
+# Проверка Gatekeeper
+spctl --assess --type execute --verbose dist/Nexy.app
+
+# Проверка PKG
+pkgutil --check-signature Nexy.pkg
+
+# Проверка DMG
+spctl -a -v Nexy.dmg
+```
+
+#### **Детальная информация о подписи:**
+```bash
+# Информация о подписи
+codesign -dv --verbose=4 dist/Nexy.app
+
+# Список entitlements
+codesign -d --entitlements - dist/Nexy.app
+
+# Проверка нотаризации
+spctl -a -v --type install dist/Nexy.app
+```
+
+### 2.8 Автоматизация с Makefile
+
+**Используйте готовые команды:**
+```bash
+# Полный пайплайн
+make all
+
+# Только подпись
+make sign-app
+
+# Только нотаризация
+make notarize-all
+
+# Проверка готовности
+make doctor
+```
+
+### 2.9 Безопасность и best practices
+
+#### **Хранение секретов:**
+- ✅ Используйте environment variables
+- ✅ Не коммитьте сертификаты в git
+- ✅ Используйте App-Specific Passwords
+- ✅ Ротируйте пароли регулярно
+
+#### **Проверки перед релизом:**
+- ✅ Все артефакты подписаны
+- ✅ Все артефакты нотаризованы
+- ✅ Gatekeeper проходит проверку
+- ✅ Приложение запускается на чистой системе
+
+#### **Мониторинг:**
+- ✅ Проверяйте срок действия сертификатов
+- ✅ Следите за изменениями в Apple требованиях
+- ✅ Тестируйте на разных версиях macOS
+
+---
+
+## 3) Подготовка .app (PyInstaller)
 
 1.1 Info.plist (обязательные ключи):
 - `CFBundleIdentifier = $BUNDLE_ID`

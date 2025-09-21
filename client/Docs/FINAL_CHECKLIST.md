@@ -223,6 +223,12 @@ xcrun stapler staple Nexy.pkg
 xcrun stapler staple Nexy.dmg
 ```
 
+### **📚 Документация по подписи:**
+- **Быстрое руководство:** `Docs/CODESIGNING_QUICK_GUIDE.md`
+- **Полное руководство:** `Docs/PACKAGING_PLAN.md` (раздел 2)
+- **Troubleshooting:** `Docs/TROUBLESHOOTING_CODESIGNING.md`
+- **Настройка окружения:** `packaging/setup_env.sh`
+
 ---
 
 **🎯 СТАТУС:** ✅ **ГОТОВ К ПРОДАКШЕНУ**  
