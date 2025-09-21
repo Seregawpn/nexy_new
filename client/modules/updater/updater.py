@@ -7,12 +7,12 @@ import tempfile
 import os
 import subprocess
 from typing import Optional, Dict, Any
-from config import UpdaterConfig
-from net import UpdateHTTPClient
-from verify import sha256_checksum, verify_ed25519_signature, verify_app_signature
-from dmg import mount_dmg, unmount_dmg, find_app_in_dmg
-from replace import atomic_replace_app
-from migrate import get_user_app_path
+from .config import UpdaterConfig
+from .net import UpdateHTTPClient
+from .verify import sha256_checksum, verify_ed25519_signature, verify_app_signature
+from .dmg import mount_dmg, unmount_dmg, find_app_in_dmg
+from .replace import atomic_replace_app
+from .migrate import get_user_app_path
 import logging
 
 logger = logging.getLogger(__name__)

@@ -29,7 +29,7 @@ async def main():
         # Создаем координатор
         coordinator = SimpleModuleCoordinator()
         
-        # Запускаем (run() сам вызовет initialize())
+        # Запускаем (run() сам вызовет initialize() и проверку дублирования)
         await coordinator.run()
         
     except Exception as e:

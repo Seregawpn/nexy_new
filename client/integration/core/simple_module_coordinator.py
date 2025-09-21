@@ -15,6 +15,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Импорты интеграций (НЕ модулей напрямую!)
+from integrations.instance_manager_integration import InstanceManagerIntegration
+from integrations.autostart_manager_integration import AutostartManagerIntegration
 from integrations.tray_controller_integration import TrayControllerIntegration
 from integrations.mode_management_integration import ModeManagementIntegration
 from integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
@@ -141,6 +143,17 @@ class SimpleModuleCoordinator:
     async def _create_integrations(self):
         """Создание всех интеграций"""
         try:
+            # КРИТИЧНО: InstanceManagerIntegration должен быть ПЕРВЫМ и БЛОКИРУЮЩИМ
+            config_data = self.config._load_config()
+            instance_config = config_data.get('instance_manager', {})
+            
+            self.integrations['instance_manager'] = InstanceManagerIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=instance_config
+            )
+
             # Hardware ID Integration — должен стартовать рано, чтобы ID был доступен всем
             self.integrations['hardware_id'] = HardwareIdIntegration(
                 event_bus=self.event_bus,
@@ -330,7 +343,17 @@ class SimpleModuleCoordinator:
                 config=sig_cfg,
             )
 
-            print("✅ Интеграции созданы: tray, input, permissions, update_manager, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals")
+            # КРИТИЧНО: AutostartManagerIntegration должен быть ПОСЛЕДНИМ и НЕ БЛОКИРУЮЩИМ
+            autostart_config = config_data.get('autostart', {})
+            
+            self.integrations['autostart_manager'] = AutostartManagerIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=autostart_config
+            )
+
+            print("✅ Интеграции созданы: instance_manager, hardware_id, tray, input, permissions, updater, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals, autostart_manager")
             
             # 3. Создаем Workflows (координаторы режимов)
             print("🔧 Создание Workflows...")
@@ -424,6 +447,13 @@ class SimpleModuleCoordinator:
             for name, integration in self.integrations.items():
                 print(f"🚀 Запуск {name}...")
                 success = await integration.start()
+                
+                # КРИТИЧНО: InstanceManagerIntegration может завершить приложение
+                if name == "instance_manager" and not success:
+                    # Дублирование обнаружено - приложение уже завершено
+                    print("❌ Дублирование обнаружено - приложение завершено")
+                    return False
+                
                 if not success:
                     print(f"❌ Ошибка запуска {name}")
                     return False

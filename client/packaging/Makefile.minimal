@@ -1,0 +1,45 @@
+# Минимальный Makefile для тестирования
+APP_NAME ?= Nexy
+BUNDLE_ID ?= com.nexy.assistant
+VERSION ?= 2.5.0
+BUILD ?= 20500
+
+DEVELOPER_ID_APP ?= Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)
+DEVELOPER_ID_INSTALLER ?= Developer ID Installer: Sergiy Zasorin (5NKLL2CLB9)
+
+SPEC ?= Nexy.minimal.spec
+DIST_APP := ../dist/$(APP_NAME).app
+
+.PHONY: clean app sign test
+
+clean:
+	@echo "🧹 Очистка..."
+	rm -rf build dist
+
+app:
+	@echo "🔨 Сборка минимального приложения..."
+	cd .. && python3 -m PyInstaller --clean -y packaging/$(SPEC)
+	@if [ -d "$(DIST_APP)" ]; then \
+		echo "✅ $(APP_NAME).app создан"; \
+	else \
+		echo "❌ Ошибка создания .app"; exit 1; \
+	fi
+
+sign:
+	@echo "🔐 Тест подписи..."
+	@echo "1. Проверяем xattrs:"
+	@xattr -l "$(DIST_APP)" || echo "Нет xattrs"
+	@echo ""
+	@echo "2. Очищаем xattrs:"
+	xattr -rc "$(DIST_APP)"
+	@echo ""
+	@echo "3. Пытаемся подписать БЕЗ entitlements:"
+	codesign --force --sign "$(DEVELOPER_ID_APP)" "$(DIST_APP)/Contents/MacOS/$(APP_NAME)" 2>&1 && echo "✅ Успех БЕЗ entitlements" || echo "❌ Ошибка БЕЗ entitlements"
+	@echo ""
+	@echo "4. Пытаемся подписать С минимальными entitlements:"
+	codesign --force --entitlements entitlements.minimal.plist --sign "$(DEVELOPER_ID_APP)" "$(DIST_APP)/Contents/MacOS/$(APP_NAME)" 2>&1 && echo "✅ Успех С минимальными entitlements" || echo "❌ Ошибка С минимальными entitlements"
+	@echo ""
+	@echo "5. Пытаемся подписать весь .app БЕЗ entitlements:"
+	codesign --force --sign "$(DEVELOPER_ID_APP)" "$(DIST_APP)" 2>&1 && echo "✅ Успех подписи .app БЕЗ entitlements" || echo "❌ Ошибка подписи .app БЕЗ entitlements"
+
+test: clean app sign

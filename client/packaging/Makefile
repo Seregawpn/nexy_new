@@ -30,6 +30,11 @@ doctor:
 	@command -v productbuild >/dev/null 2>&1 || { echo "❌ productbuild не найден. Установите Xcode Command Line Tools"; exit 1; }
 	@command -v xcrun >/dev/null 2>&1 || { echo "❌ xcrun не найден. Установите Xcode Command Line Tools"; exit 1; }
 	@echo "✅ Все инструменты найдены"
+	@echo "🔍 Проверка переменных окружения..."
+	@[ -n "$(DEVELOPER_ID_APP)" ] || { echo "❌ DEVELOPER_ID_APP не установлена"; exit 1; }
+	@[ -n "$(DEVELOPER_ID_INSTALLER)" ] || { echo "❌ DEVELOPER_ID_INSTALLER не установлена"; exit 1; }
+	@[ -n "$(APPLE_NOTARY_PROFILE)" ] || { echo "❌ APPLE_NOTARY_PROFILE не установлена"; exit 1; }
+	@echo "✅ Переменные окружения установлены"
 
 sanitize-dist:
 	@echo "🧹 Очистка dist/ директории..."
@@ -101,7 +106,7 @@ stage-to-dist:
 	@echo "🧹 Очистка xattrs в staging перед переносом..."
 	@xattr -cr "$(STAGE_APP)"
 	@xattr -dr com.apple.FinderInfo "$(STAGE_APP)" 2>/dev/null || true
-	@ditto --norsrc --noqtn "$(STAGE_APP)" "$(DIST_APP)"
+	@cp -R -X "$(STAGE_APP)" "$(DIST_APP)"
 	@echo "✅ Подписанный .app перенесен в dist/"
 
 # PKG — в /Applications (PKG = админ-установка; без-root — через DMG)
