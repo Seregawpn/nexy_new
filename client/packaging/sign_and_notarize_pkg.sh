@@ -58,3 +58,4 @@ echo "📏 Размер: $(du -sh "$SIGNED_PKG_PATH" | awk '{print $1}')"
 echo ""
 echo "🔧 Установка:"
 echo "   sudo installer -pkg $SIGNED_PKG_PATH -target /"
+

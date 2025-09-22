@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 # Глобальная защита от множественного запуска
 _app_running = False
+_user_initiated_shutdown = False
 
 class SimpleModuleCoordinator:
     """Центральный координатор модулей для Nexy AI Assistant"""
@@ -404,6 +405,9 @@ class SimpleModuleCoordinator:
             await self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.HIGH)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
             await self.event_bus.subscribe("app.mode_changed", self._on_mode_changed, EventPriority.MEDIUM)
+            
+            # Подписываемся на события пользовательского завершения
+            await self.event_bus.subscribe("tray.quit_clicked", self._on_user_quit, EventPriority.HIGH)
 
             # Подписываемся на события клавиатуры
             await self.event_bus.subscribe("keyboard.long_press", self._on_keyboard_event, EventPriority.HIGH)
@@ -613,6 +617,25 @@ class SimpleModuleCoordinator:
             
         except Exception as e:
             print(f"❌ Ошибка обработки завершения приложения: {e}")
+    
+    async def _on_user_quit(self, event):
+        """Обработка пользовательского завершения через Quit в меню"""
+        global _user_initiated_shutdown
+        try:
+            print("👤 Пользователь инициировал завершение приложения через Quit")
+            _user_initiated_shutdown = True
+            
+            # Публикуем событие завершения
+            await self.event_bus.publish("app.shutdown", {
+                "source": "user.quit",
+                "user_initiated": True
+            })
+            
+            # Останавливаем приложение
+            await self.stop()
+            
+        except Exception as e:
+            print(f"❌ Ошибка обработки пользовательского завершения: {e}")
     
     async def _on_mode_changed(self, event):
         """Обработка смены режима приложения"""

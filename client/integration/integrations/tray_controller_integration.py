@@ -93,10 +93,6 @@ class TrayControllerIntegration:
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
             
-            # Настраиваем callback для обработки завершения приложения
-            if hasattr(self.tray_controller.tray_menu, 'set_quit_callback'):
-                self.tray_controller.tray_menu.set_quit_callback(self._on_system_quit)
-            
             self.is_initialized = True
             logger.info("✅ TrayControllerIntegration инициализирован")
             return True
@@ -210,25 +206,11 @@ class TrayControllerIntegration:
     async def _on_tray_quit(self, event_type: str, data: Dict[str, Any]):
         """Корректное завершение приложения по пункту меню Quit."""
         try:
-            # Публикуем событие завершения, чтобы интеграции успели отреагировать
-            await self.event_bus.publish("app.shutdown", {"source": "tray.quit"})
+            # Публикуем событие пользовательского завершения
+            await self.event_bus.publish("tray.quit_clicked", {"source": "tray.quit"})
         except Exception:
             pass
         # Завершение приложения выполняет модуль TrayController (см. _on_quit_clicked)
-    
-    def _on_system_quit(self):
-        """Обработчик системного завершения приложения (AppleEvent)"""
-        try:
-            logger.info("🛑 Получен сигнал системного завершения приложения")
-            # Публикуем событие завершения асинхронно
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.event_bus.publish("app.shutdown", {"source": "system.quit"}))
-            else:
-                loop.run_until_complete(self.event_bus.publish("app.shutdown", {"source": "system.quit"}))
-        except Exception as e:
-            logger.error(f"❌ Ошибка обработки системного завершения: {e}")
     
     async def _sync_with_app_mode(self):
         """Синхронизация с текущим режимом приложения"""
