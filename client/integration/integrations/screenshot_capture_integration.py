@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScreenshotCaptureIntegrationConfig:
-    format: str = "webp"  # webp/png/jpeg — маппинг ниже (модуль поддерживает JPEG)
+    format: str = "jpeg"  # только JPEG
     max_width: int = 1920
     max_height: int = 1080
     quality: int = 85
@@ -68,7 +68,7 @@ class ScreenshotCaptureIntegration:
             loader = UnifiedConfigLoader()
             cfg = loader.get_screen_capture_config()
             return ScreenshotCaptureIntegrationConfig(
-                format=str(cfg.get("format", "webp")).lower(),
+                format=str(cfg.get("format", "jpeg")).lower(),
                 max_width=int(cfg.get("max_width", 1920)),
                 max_height=int(cfg.get("max_height", 1080)),
                 quality=int(cfg.get("quality", 85)),
@@ -140,10 +140,8 @@ class ScreenshotCaptureIntegration:
         else:
             quality_enum = ScreenshotQuality.LOW
 
-        # Маппинг формата — модуль поддерживает JPEG/PNG, используем JPEG по умолчанию
-        fmt = (self._config.format or "webp").lower()
-        # На уровне модуля формат JPEG — поэтому выбираем JPEG всегда,
-        # качество/размеры контролируем через конфигурацию
+        # Формат — только JPEG
+        fmt = (self._config.format or "jpeg").lower()
         format_enum = ScreenshotFormat.JPEG
 
         # Регион

@@ -4,6 +4,9 @@
 
 import asyncio
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import Dict, Any
 
 from integration.core.event_bus import EventBus, EventPriority
@@ -36,14 +39,18 @@ class UpdaterIntegration:
         self.updater = Updater(updater_config)
         self.check_task = None
         self.is_running = False
+        # Поведение миграции регулируется конфигом/ENV
+        self._migrate_mode: str = str(config.get("migrate_mode", "auto")).lower()  # auto | never
+        self._migrate_on_start: bool = bool(config.get("migrate_on_start", False)) or (os.getenv("NEXY_MIGRATE_ON_START", "").lower() in {"1","true","yes"})
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
         try:
             logger.info("🔄 Инициализация UpdaterIntegration...")
             
-            # Миграция в пользовательскую папку (один раз)
-            migrate_to_user_directory()
+            # Миграция в пользовательскую папку (только если включено)
+            if self._should_migrate_on_start():
+                migrate_to_user_directory()
             
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
@@ -141,3 +148,57 @@ class UpdaterIntegration:
             self.check_task.cancel()
         self.is_running = False
         logger.info("✅ UpdaterIntegration остановлен")
+
+
+    def _should_migrate_on_start(self) -> bool:
+        """Определяет, нужно ли выполнять миграцию при старте.
+        Режимы:
+        - migrate_on_start=true (или ENV NEXY_MIGRATE_ON_START=1) → принудительно, если не в ~/Applications
+        - migrate_mode=never → никогда
+        - migrate_mode=auto (по умолчанию) → если запущены как .app И не из ~/Applications
+        Всегда игнорируется, если уже запускаемся из ~/Applications.
+        """
+        # Если уже в ~/Applications — миграция не нужна
+        if self._is_in_user_applications():
+            return False
+
+        # Жесткий флаг принудительной миграции
+        if self._migrate_on_start:
+            return True
+
+        # Политика конфигурации
+        if self._migrate_mode == "never":
+            return False
+        # auto: мигрируем только если реально .app вне ~/Applications (например, с DMG)
+        if self._migrate_mode == "auto":
+            return self._is_running_from_app_bundle()
+        try:
+            # Fallback: консервативно не мигрируем
+            return False
+        except Exception:
+            # Если не смогли определить — лучше не мигрировать
+            return False
+
+    def _is_in_user_applications(self) -> bool:
+        """Проверяет, расположен ли бандл в ~/Applications."""
+        try:
+            p = Path(sys.argv[0]).resolve()
+            home_apps = Path.home() / "Applications"
+            return str(p).startswith(str(home_apps))
+        except Exception:
+            return False
+
+    def _is_running_from_app_bundle(self) -> bool:
+        """Определяет, запущены ли мы как .app (PyInstaller бандл), и не из ~/Applications.
+        Сценарии: запуск из DMG (/Volumes/...), из произвольной папки — да; запуск из исходников — нет.
+        """
+        try:
+            exe_path = Path(sys.argv[0]).resolve()
+            s = str(exe_path)
+            if ".app/Contents/MacOS" in s or s.endswith("/MacOS/Nexy"):
+                # .app бандл
+                return not self._is_in_user_applications()
+            # Запуск из исходников / интерпретатора — не мигрируем
+            return False
+        except Exception:
+            return False

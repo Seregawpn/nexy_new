@@ -84,7 +84,7 @@ class SpeechPlaybackIntegration:
             await self.event_bus.subscribe("playback.cancelled", self._on_unified_interrupt, EventPriority.CRITICAL)
             
             # Устаревшие прямые прерывания (для обратной совместимости, но перенаправляем в единый канал)
-            await self.event_bus.subscribe("keyboard.short_press", self._on_legacy_interrupt, EventPriority.CRITICAL)
+            # УБРАНО: keyboard.short_press - прерывания только при переходе в LISTENING
             await self.event_bus.subscribe("interrupt.request", self._on_legacy_interrupt, EventPriority.CRITICAL)
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.HIGH)
             # Реагируем на смену выходного устройства

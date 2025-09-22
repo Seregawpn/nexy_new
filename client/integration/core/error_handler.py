@@ -32,12 +32,31 @@ class ErrorHandler:
         self.error_history = []
         self.max_history = 1000
         
-    async def handle_error(self, severity: ErrorSeverity, category: ErrorCategory, 
+    async def handle_error(self, severity: Any, category: Any, 
                           message: str, context: Dict[str, Any] = None):
         """Обработать ошибку"""
         try:
             if context is None:
                 context = {}
+            
+            # Приведение типов к enum для устойчивости
+            if not isinstance(severity, ErrorSeverity):
+                sev_map = {
+                    "low": ErrorSeverity.LOW,
+                    "debug": ErrorSeverity.LOW,
+                    "medium": ErrorSeverity.MEDIUM,
+                    "info": ErrorSeverity.MEDIUM,
+                    "high": ErrorSeverity.HIGH,
+                    "warning": ErrorSeverity.HIGH,
+                    "critical": ErrorSeverity.CRITICAL,
+                    "error": ErrorSeverity.CRITICAL,
+                }
+                severity = sev_map.get(str(severity).lower(), ErrorSeverity.CRITICAL)
+            if not isinstance(category, ErrorCategory):
+                try:
+                    category = ErrorCategory(str(category).lower())
+                except Exception:
+                    category = ErrorCategory.UNKNOWN
             
             error = {
                 "severity": severity,

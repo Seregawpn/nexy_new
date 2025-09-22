@@ -7,21 +7,22 @@ import logging
 import time
 from typing import Optional, Tuple
 from .types import ScreenshotResult, ScreenshotConfig, ScreenshotRegion, ScreenshotError, ScreenshotTimeoutError
-from .config import get_screenshot_config
 
 logger = logging.getLogger(__name__)
 
 class ScreenshotCapture:
     """Основной класс для захвата скриншотов на macOS"""
     
-    def __init__(self, config: ScreenshotConfig = None):
+    def __init__(self, config: ScreenshotConfig):
         """
         Инициализирует захватчик скриншотов
         
         Args:
-            config: Конфигурация захвата (если None, загружается из файла)
+            config: Конфигурация захвата (обязательная; передаётся интеграцией)
         """
-        self.config = config or get_screenshot_config()
+        if config is None:
+            raise ScreenshotError("ScreenshotCapture: config is required")
+        self.config = config
         self._bridge = None
         self._initialized = False
         
@@ -223,19 +224,4 @@ class ScreenshotCapture:
         self._initialized = False
         logger.info("✅ Ресурсы очищены")
 
-# Глобальный экземпляр для использования в других модулях
-_global_capture = None
-
-def get_global_capture() -> ScreenshotCapture:
-    """Получает глобальный экземпляр захватчика"""
-    global _global_capture
-    if _global_capture is None:
-        _global_capture = ScreenshotCapture()
-    return _global_capture
-
-def cleanup_global_capture():
-    """Очищает глобальный экземпляр"""
-    global _global_capture
-    if _global_capture:
-        _global_capture.cleanup()
-        _global_capture = None
+        

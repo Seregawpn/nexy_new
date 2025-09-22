@@ -15,29 +15,29 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Импорты интеграций (НЕ модулей напрямую!)
-from integrations.instance_manager_integration import InstanceManagerIntegration
-from integrations.autostart_manager_integration import AutostartManagerIntegration
-from integrations.tray_controller_integration import TrayControllerIntegration
-from integrations.mode_management_integration import ModeManagementIntegration
-from integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
-from integrations.grpc_client_integration import GrpcClientIntegration
-from integrations.speech_playback_integration import SpeechPlaybackIntegration
+from integration.integrations.instance_manager_integration import InstanceManagerIntegration
+from integration.integrations.autostart_manager_integration import AutostartManagerIntegration
+from integration.integrations.tray_controller_integration import TrayControllerIntegration
+from integration.integrations.mode_management_integration import ModeManagementIntegration
+from integration.integrations.hardware_id_integration import HardwareIdIntegration, HardwareIdIntegrationConfig
+from integration.integrations.grpc_client_integration import GrpcClientIntegration
+from integration.integrations.speech_playback_integration import SpeechPlaybackIntegration
 from modules.tray_controller.core.tray_types import TrayConfig
-from integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
-from integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
-from integrations.permissions_integration import PermissionsIntegration
+from integration.integrations.input_processing_integration import InputProcessingIntegration, InputProcessingConfig
+from integration.integrations.voice_recognition_integration import VoiceRecognitionIntegration, VoiceRecognitionConfig
+from integration.integrations.permissions_integration import PermissionsIntegration
 from modules.permissions.core.types import PermissionConfig
-from integrations.updater_integration import UpdaterIntegration
-from integrations.network_manager_integration import NetworkManagerIntegration
+from integration.integrations.updater_integration import UpdaterIntegration
+from integration.integrations.network_manager_integration import NetworkManagerIntegration
 from modules.network_manager.core.config import NetworkManagerConfig
-from integrations.audio_device_integration import AudioDeviceIntegration
+from integration.integrations.audio_device_integration import AudioDeviceIntegration
 from modules.audio_device_manager.core.types import AudioDeviceManagerConfig
-from integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
+from integration.integrations.interrupt_management_integration import InterruptManagementIntegration, InterruptManagementIntegrationConfig
 from modules.input_processing.keyboard.types import KeyboardConfig
-from integrations.screenshot_capture_integration import ScreenshotCaptureIntegration
-from integrations.signal_integration import SignalIntegration
+from integration.integrations.screenshot_capture_integration import ScreenshotCaptureIntegration
+from integration.integrations.signal_integration import SignalIntegration
 from modules.signals.config.types import PatternConfig
-from integrations.signal_integration import SignalsIntegrationConfig
+from integration.integrations.signal_integration import SignalsIntegrationConfig
 
 # Импорты core компонентов
 from integration.core.event_bus import EventBus, EventPriority
@@ -343,7 +343,7 @@ class SimpleModuleCoordinator:
                 config=sig_cfg,
             )
 
-            # КРИТИЧНО: AutostartManagerIntegration должен быть ПОСЛЕДНИМ и НЕ БЛОКИРУЮЩИМ
+            # AutostartManagerIntegration - мониторинг LaunchAgent
             autostart_config = config_data.get('autostart', {})
             
             self.integrations['autostart_manager'] = AutostartManagerIntegration(

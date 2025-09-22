@@ -1,0 +1,79 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "🚀 Postinstall: установка Nexy AI Assistant"
+
+# Определяем консольного пользователя (надежный способ)
+CONSOLE_USER="$(/usr/sbin/scutil <<< 'show State:/Users/ConsoleUser' | awk '/Name :/ && $3 != "loginwindow" { print $3 }')"
+if [ -z "$CONSOLE_USER" ]; then
+    echo "❌ Не удалось определить консольного пользователя"
+    exit 1
+fi
+
+echo "👤 Консольный пользователь: $CONSOLE_USER"
+
+# Получаем домашнюю директорию
+USER_HOME="$(dscl . -read /Users/"$CONSOLE_USER" NFSHomeDirectory | awk '{print $2}')"
+if [ ! -d "$USER_HOME" ]; then
+    echo "❌ Домашняя директория не найдена: $USER_HOME"
+    exit 1
+fi
+
+# Получаем UID пользователя
+USER_UID="$(id -u "$CONSOLE_USER")"
+echo "🆔 UID пользователя: $USER_UID"
+
+# Пути к файлам
+APP_SRC="/usr/local/nexy/Nexy.app"
+APP_DST="$USER_HOME/Applications/Nexy.app"
+AGENT_SRC="/usr/local/nexy/resources/com.nexy.assistant.plist"
+AGENT_DST="$USER_HOME/Library/LaunchAgents/com.nexy.assistant.plist"
+
+# Проверяем наличие исходных файлов
+if [ ! -d "$APP_SRC" ]; then
+    echo "❌ Исходное приложение не найдено: $APP_SRC"
+    exit 1
+fi
+
+if [ ! -f "$AGENT_SRC" ]; then
+    echo "❌ LaunchAgent не найден: $AGENT_SRC"
+    exit 1
+fi
+
+# Создаем необходимые директории
+echo "📁 Создание директорий..."
+mkdir -p "$USER_HOME/Applications" "$USER_HOME/Library/LaunchAgents" "$USER_HOME/Library/Logs"
+
+# Останавливаем старый агент, если был
+echo "⏹️ Остановка старого агента..."
+/bin/launchctl bootout "gui/$USER_UID" "$AGENT_DST" >/dev/null 2>&1 || true
+
+# Копируем приложение в пользовательскую папку Applications
+echo "📦 Копирование приложения..."
+rm -rf "$APP_DST"
+cp -R "$APP_SRC" "$APP_DST"
+chown -R "$CONSOLE_USER":staff "$APP_DST"
+
+# Подставляем реальные пути в LaunchAgent
+echo "📋 Настройка LaunchAgent..."
+sed "s|%APP_PATH%|$APP_DST|g; s|%USER_HOME%|$USER_HOME|g" "$AGENT_SRC" > "$AGENT_DST"
+chown "$CONSOLE_USER":staff "$AGENT_DST"
+
+# Запускаем агент для GUI-сессии
+echo "🚀 Запуск LaunchAgent..."
+/bin/launchctl bootstrap "gui/$USER_UID" "$AGENT_DST" || true
+/bin/launchctl enable "gui/$USER_UID/com.nexy.assistant" || true
+
+# Проверяем запуск
+sleep 2
+if /bin/launchctl print "gui/$USER_UID" | grep -q "com.nexy.assistant"; then
+    echo "✅ LaunchAgent успешно запущен"
+else
+    echo "⚠️ LaunchAgent может не запуститься до следующего входа в систему"
+fi
+
+echo "✅ Установка Nexy AI Assistant завершена"
+echo "📍 Приложение установлено в: $APP_DST"
+echo "🔄 Автозапуск настроен через LaunchAgent"
+
+exit 0

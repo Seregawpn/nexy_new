@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>Nexy AI Assistant</title>
+    <options customize="never" require-scripts="false"/>
+    <choices-outline>
+        <line choice="main"/>
+    </choices-outline>
+    <choice id="main" visible="false">
+        <pkg-ref id="com.nexy.assistant.pkg"/>
+    </choice>
+    <pkg-ref id="com.nexy.assistant.pkg" installKBytes="0" version="1.71.0">Nexy-correct-raw.pkg</pkg-ref>
+</installer-gui-script>

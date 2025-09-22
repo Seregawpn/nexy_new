@@ -131,7 +131,7 @@ performance:
   cpu_limit: 0.8
   max_memory: 512MB
 screen_capture:
-  format: webp
+  format: jpeg
   max_height: 720    # Уменьшено с 1080 для экономии трафика
   max_width: 1280    # Уменьшено с 1920 для экономии трафика  
   quality: 85        # Уменьшено с 85 для меньшего размера файла
@@ -152,7 +152,7 @@ stt:
 
 updater:
   enabled: true
-  manifest_url: "https://updates.nexy.ai/manifest.json"
+  manifest_url: "http://localhost:8080/manifest.json"
   check_interval: 3600
   auto_install: true
   security:
@@ -171,13 +171,6 @@ integrations:
     check_interval: 3600
     check_on_startup: true
     auto_install: true
-    security:
-      public_key: "nL2RNmchhsAlEKpqwxJ/caJhFVGmj0GtNM5O5lkA80Q="
-    timeout: 30
-    retries: 3
-    ui:
-      show_notifications: true
-      auto_download: true
   tray_controller:
     icon_size: 16
     show_status_in_menu: true

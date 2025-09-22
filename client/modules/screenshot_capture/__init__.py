@@ -2,7 +2,7 @@
 Модуль захвата скриншотов для macOS
 """
 
-from .core.screenshot_capture import ScreenshotCapture, get_global_capture, cleanup_global_capture
+from .core.screenshot_capture import ScreenshotCapture
 from .core.types import (
     ScreenshotConfig,
     ScreenshotData,
@@ -22,8 +22,7 @@ from .core.config import get_screenshot_config
 __all__ = [
     # Основные классы
     'ScreenshotCapture',
-    'get_global_capture',
-    'cleanup_global_capture',
+    # глобальные синглтоны удалены
     
     # Типы данных
     'ScreenshotConfig',

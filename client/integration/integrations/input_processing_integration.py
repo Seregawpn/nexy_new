@@ -131,15 +131,8 @@ class InputProcessingIntegration:
             logger.debug(f"PRESS: session(before)={self._current_session_id}, recognized={self._session_recognized}")
             print(f"🔑 PRESS EVENT: {event.timestamp} - начинаем запись")  # Для отладки
             
-            # МГНОВЕННОЕ ПРЕРЫВАНИЕ: останавливаем воспроизведение и любые активные процессы
-            try:
-                await self.event_bus.publish("interrupt.request", {
-                    "scope": "playback",
-                    "source": "keyboard",
-                    "reason": "key_press"
-                })
-            except Exception:
-                pass
+            # НЕ ПРЕРЫВАЕМ НА PRESS - только готовим сессию
+            # Прерывание будет только при LONG_PRESS (через секунду)
 
             # Создаем сессию и сбрасываем флаг распознавания
             self._current_session_id = event.timestamp or time.monotonic()

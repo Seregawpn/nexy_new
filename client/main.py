@@ -21,16 +21,14 @@ logger = logging.getLogger(__name__)
 async def main():
     """Главная функция"""
     try:
-        # Импортируем SimpleModuleCoordinator напрямую
-        import sys
-        sys.path.append(str(Path(__file__).parent / "integration" / "core"))
-        from simple_module_coordinator import SimpleModuleCoordinator
+        # Импортируем SimpleModuleCoordinator
+        from integration.core.simple_module_coordinator import SimpleModuleCoordinator
         
         # Создаем координатор
         coordinator = SimpleModuleCoordinator()
         
         # Запускаем (run() сам вызовет initialize() и проверку дублирования)
-        await coordinator.run()
+        await coordinator.run()                               
         
     except Exception as e:
         print(f"💥 Критическая ошибка: {e}")
