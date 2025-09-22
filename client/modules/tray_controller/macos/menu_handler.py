@@ -19,6 +19,8 @@ class MacOSTrayMenu:
         self._status_item: Optional[rumps.MenuItem] = None
         self._output_item: Optional[rumps.MenuItem] = None
         # UI таймер/очередь не используются на уровне модуля (обновления делает интеграция)
+        # Callback для обработки завершения приложения
+        self._quit_callback: Optional[Callable] = None
     
     def create_app(self, icon_path: str) -> rumps.App:
         """Создать приложение с иконкой в трее"""
@@ -41,6 +43,9 @@ class MacOSTrayMenu:
             # Устанавливаем иконку если есть
             if icon_path and os.path.exists(icon_path):
                 self.app.icon = icon_path
+            
+            # Настраиваем обработчик завершения приложения
+            self._setup_quit_handler()
             
             return self.app
             
@@ -193,6 +198,33 @@ class MacOSTrayMenu:
         """Запустить приложение"""
         if self.app:
             self.app.run()
+    
+    def set_quit_callback(self, callback: Callable):
+        """Установить callback для обработки завершения приложения"""
+        self._quit_callback = callback
+    
+    def _setup_quit_handler(self):
+        """Настроить обработчик завершения приложения"""
+        if not self.app:
+            return
+        
+        # Переопределяем метод applicationShouldTerminate для предотвращения автоматического завершения
+        original_should_terminate = self.app.applicationShouldTerminate
+        
+        def custom_should_terminate(sender):
+            """Кастомный обработчик завершения приложения"""
+            try:
+                # Если есть callback, вызываем его
+                if self._quit_callback:
+                    self._quit_callback()
+                # Возвращаем False чтобы предотвратить завершение
+                return False
+            except Exception as e:
+                print(f"Ошибка в обработчике завершения: {e}")
+                return True  # Разрешаем завершение в случае ошибки
+        
+        # Устанавливаем наш обработчик
+        self.app.applicationShouldTerminate = custom_should_terminate
     
     def quit(self):
         """Завершить приложение"""

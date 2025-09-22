@@ -169,7 +169,7 @@ integrations:
     enabled: true
     manifest_url: "http://localhost:8080/manifest.json"
     check_interval: 3600
-    check_on_startup: true
+    check_on_startup: false  # Временно отключено для сборки
     auto_install: true
   tray_controller:
     icon_size: 16

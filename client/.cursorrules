@@ -6,7 +6,7 @@
 ### Концепция продукта и UX
 - `Docs/PRODUCT_CONCEPT.md` - ОСНОВНОЙ концепт продукта, UX-сценарии, 3 режима (SLEEPING/LISTENING/PROCESSING)
 - `Docs/GLOBAL_DELIVERY_PLAN.md` - глобальный план поставки, Azure VM, подпись/нотаризация
-- `Docs/PACKAGING_PLAN.md` - План по упаковке приложения PKG 
+- `Docs/PACKAGING_FINAL_GUIDE.md` - План по упаковке приложения приложения PKG, DMG, APP
 - `Docs/ARCHITECTURE_OVERVIEW.md` - Полный архитектура проекта логика и так далее
 - `Docs/CURRENT_STATUS_REPORT.md` - Пользовательские истории и сценарии использования
 - `Docs/IMPLEMENTATION_PLAN.md` - План по текущему реализации модулей по блокировки и автозапуск

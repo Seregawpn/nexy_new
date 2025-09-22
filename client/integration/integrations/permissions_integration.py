@@ -22,6 +22,16 @@ from integration.core.error_handler import ErrorHandler, ErrorSeverity, ErrorCat
 
 logger = logging.getLogger(__name__)
 
+# macOS системные импорты для триггеров разрешений
+try:
+    from AppKit import NSBundle
+    from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+    from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+    MACOS_IMPORTS_AVAILABLE = True
+except ImportError:
+    MACOS_IMPORTS_AVAILABLE = False
+    logger.warning("macOS системные импорты недоступны - триггеры разрешений отключены")
+
 # Убираем дублированную конфигурацию - используем PermissionConfig из модуля
 
 class PermissionsIntegration:
@@ -216,6 +226,10 @@ class PermissionsIntegration:
         try:
             logger.info("📝 Запрос обязательных разрешений...")
             
+            # Триггерим системные диалоги для macOS
+            if MACOS_IMPORTS_AVAILABLE:
+                await self._trigger_macos_permission_dialogs()
+            
             results = await self.permission_manager.request_required_permissions()
             
             # Обновляем кэш статусов
@@ -234,6 +248,57 @@ class PermissionsIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка запроса обязательных разрешений: {e}")
+    
+    async def _trigger_macos_permission_dialogs(self):
+        """Триггерить системные диалоги macOS для разрешений"""
+        try:
+            if not MACOS_IMPORTS_AVAILABLE:
+                logger.warning("macOS импорты недоступны - пропускаем триггеры")
+                return
+            
+            logger.info("🔔 Триггерим системные диалоги macOS...")
+            
+            # 1. Accessibility (покажет системный диалог)
+            try:
+                logger.info("🔔 Запрос разрешения Accessibility...")
+                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+            except Exception as e:
+                logger.warning(f"Ошибка запроса Accessibility: {e}")
+            
+            # 2. Microphone (покажет системный диалог)
+            try:
+                logger.info("🔔 Запрос разрешения Microphone...")
+                def mic_handler(granted):
+                    logger.info(f"Microphone permission granted: {granted}")
+                
+                AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                    AVMediaTypeAudio, mic_handler
+                )
+            except Exception as e:
+                logger.warning(f"Ошибка запроса Microphone: {e}")
+            
+            # 3. Открываем настройки для Screen Recording и Input Monitoring
+            # (системных диалогов нет, только чекбоксы в настройках)
+            try:
+                logger.info("🔔 Открываем настройки для Screen Recording и Input Monitoring...")
+                import subprocess
+                
+                # Открываем настройки конфиденциальности
+                subprocess.run([
+                    "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                ], check=False)
+                
+                subprocess.run([
+                    "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+                ], check=False)
+                
+            except Exception as e:
+                logger.warning(f"Ошибка открытия настроек: {e}")
+            
+            logger.info("✅ Триггеры системных диалогов завершены")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка триггеров системных диалогов: {e}")
     
     async def _check_critical_permissions(self):
         """Проверить критичные разрешения"""

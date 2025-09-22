@@ -254,10 +254,7 @@ class TrayController:
         # 1) Сообщаем слушателям (например, интеграции), что пользователь инициировал выход
         try:
             asyncio.create_task(self._publish_event("quit_clicked", {}))
-        except Exception:
-            pass
-        # 2) Закрываем приложение трея на уровне модуля (фундаментальная ответственность)
-        try:
+            # 2) Завершаем приложение через rumps
             if self.tray_menu:
                 self.tray_menu.quit()
         except Exception:
