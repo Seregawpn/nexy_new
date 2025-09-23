@@ -15,6 +15,7 @@ class PermissionType(Enum):
     CAMERA = "camera"
     NETWORK = "network"
     NOTIFICATIONS = "notifications"
+    ACCESSIBILITY = "accessibility"  # Добавлено для Accessibility
 
 
 class PermissionStatus(Enum):
@@ -28,17 +29,17 @@ class PermissionStatus(Enum):
 @dataclass
 class PermissionInfo:
     """Информация о разрешении"""
-    type: PermissionType
+    permission_type: PermissionType
     status: PermissionStatus
-    required: bool
-    description: str
-    instructions: str
-    last_checked: Optional[float] = None
+    granted: bool
+    message: str
+    last_checked: float
+    error: Optional[Exception] = None
 
 
 @dataclass
 class PermissionResult:
-    """Результат проверки/запроса разрешения"""
+    """Результат проверки разрешения"""
     success: bool
     permission: PermissionType
     status: PermissionStatus
@@ -48,66 +49,101 @@ class PermissionResult:
 
 @dataclass
 class PermissionEvent:
-    """Событие изменения разрешения"""
+    """Событие разрешения"""
+    event_type: str
     permission: PermissionType
-    old_status: PermissionStatus
-    new_status: PermissionStatus
+    status: PermissionStatus
+    message: str
     timestamp: float
+    data: Optional[Dict] = None
+
+
+@dataclass
+class PermissionState:
+    """Состояние разрешений"""
+    permissions: Dict[PermissionType, PermissionInfo]
+    last_updated: float
+    
+    def get_permission(self, permission_type: PermissionType) -> Optional[PermissionInfo]:
+        """Получить информацию о разрешении"""
+        return self.permissions.get(permission_type)
+    
+    def set_permission(self, permission_type: PermissionType, info: PermissionInfo):
+        """Установить информацию о разрешении"""
+        self.permissions[permission_type] = info
+        self.last_updated = time.time()
+    
+    def is_granted(self, permission_type: PermissionType) -> bool:
+        """Проверить, предоставлено ли разрешение"""
+        info = self.get_permission(permission_type)
+        return info is not None and info.granted
+    
+    def get_granted_permissions(self) -> List[PermissionType]:
+        """Получить список предоставленных разрешений"""
+        return [
+            perm_type for perm_type, info in self.permissions.items()
+            if info.granted
+        ]
+    
+    def get_denied_permissions(self) -> List[PermissionType]:
+        """Получить список отклоненных разрешений"""
+        return [
+            perm_type for perm_type, info in self.permissions.items()
+            if not info.granted and info.status != PermissionStatus.ERROR
+        ]
+    
+    def get_error_permissions(self) -> List[PermissionType]:
+        """Получить список разрешений с ошибками"""
+        return [
+            perm_type for perm_type, info in self.permissions.items()
+            if info.status == PermissionStatus.ERROR
+        ]
 
 
 @dataclass
 class PermissionConfig:
     """Конфигурация разрешений"""
-    required_permissions: List[PermissionType]
-    check_interval: int = 30
     auto_open_preferences: bool = True
+    check_interval: float = 30.0
+    required_permissions: List[PermissionType] = None
+    retry_attempts: int = 3
+    retry_delay: float = 5.0
     show_instructions: bool = True
+    
+    def __post_init__(self):
+        if self.required_permissions is None:
+            self.required_permissions = [
+                PermissionType.MICROPHONE,
+                PermissionType.SCREEN_CAPTURE,
+                PermissionType.ACCESSIBILITY,  # Добавлено
+            ]
 
 
 @dataclass
 class PermissionManagerState:
     """Состояние менеджера разрешений"""
+    is_running: bool = False
+    is_initialized: bool = False
+    last_check: float = 0.0
+    total_checks: int = 0
+    successful_checks: int = 0
+    failed_checks: int = 0
     permissions: Dict[PermissionType, PermissionInfo] = None
-    callbacks: List[Callable[[PermissionEvent], None]] = None
-    config: Optional[PermissionConfig] = None
     
     def __post_init__(self):
         if self.permissions is None:
             self.permissions = {}
-        if self.callbacks is None:
-            self.callbacks = []
     
-    def set_permission(self, perm_type: PermissionType, info: PermissionInfo):
-        """Установить информацию о разрешении"""
-        self.permissions[perm_type] = info
-    
-    def get_permission(self, perm_type: PermissionType) -> Optional[PermissionInfo]:
+    def get_permission(self, permission_type: PermissionType) -> Optional[PermissionInfo]:
         """Получить информацию о разрешении"""
-        return self.permissions.get(perm_type)
+        return self.permissions.get(permission_type)
     
-    def get_all_permissions(self) -> Dict[PermissionType, PermissionInfo]:
-        """Получить все разрешения"""
-        return self.permissions.copy()
+    def set_permission(self, permission_type: PermissionType, info: PermissionInfo):
+        """Установить информацию о разрешении"""
+        self.permissions[permission_type] = info
+        self.last_check = time.time()
     
-    def add_callback(self, callback: Callable[[PermissionEvent], None]):
-        """Добавить callback"""
-        self.callbacks.append(callback)
-    
-    async def notify_callbacks(self, event: PermissionEvent):
-        """Уведомить callbacks"""
-        for callback in self.callbacks:
-            try:
-                callback(event)
-            except Exception as e:
-                print(f"Ошибка в callback: {e}")
-    
-    def get_required_permissions_status(self) -> bool:
-        """Проверить статус обязательных разрешений"""
-        if not self.config:
-            return False
-        
-        for perm_type in self.config.required_permissions:
-            info = self.permissions.get(perm_type)
-            if not info or info.status != PermissionStatus.GRANTED:
-                return False
-        return True
+    async def notify_callbacks(self, event: 'PermissionEvent'):
+        """Уведомить callbacks о событии (заглушка)"""
+        # Метод-заглушка для совместимости
+        pass

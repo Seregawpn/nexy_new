@@ -62,17 +62,23 @@ class SpeechRecognizer:
             self.recognizer.phrase_threshold = self.config.phrase_threshold
             self.recognizer.non_speaking_duration = self.config.non_speaking_duration
             
-            # Настраиваем микрофон для фонового шума
-            with self.microphone as source:
-                logger.info("🔧 Настраиваем микрофон для фонового шума...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                logger.info(f"📊 Энергетический порог установлен: {self.recognizer.energy_threshold}")
+            # Настраиваем микрофон для фонового шума (БЕЗ БЛОКИРОВКИ)
+            try:
+                with self.microphone as source:
+                    logger.info("🔧 Настраиваем микрофон для фонового шума...")
+                    self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                    logger.info(f"📊 Энергетический порог установлен: {self.recognizer.energy_threshold}")
+            except Exception as mic_error:
+                # НЕ блокируем приложение - используем значения по умолчанию
+                logger.warning(f"⚠️ Не удалось настроить микрофон (используем значения по умолчанию): {mic_error}")
+                self.recognizer.energy_threshold = 300  # Значение по умолчанию
             
             logger.info(f"✅ Распознаватель речи инициализирован (язык: {self.config.language})")
             
         except Exception as e:
-            logger.error(f"❌ Ошибка инициализации распознавателя: {e}")
-            self.state = RecognitionState.ERROR
+            logger.warning(f"⚠️ Ошибка инициализации распознавателя (продолжаем работу): {e}")
+            # НЕ устанавливаем ERROR - позволяем работать в degraded режиме
+            self.state = RecognitionState.IDLE
             
     def _pick_input_device(self) -> Optional[int]:
         """Подбирает стабильное входное устройство. Предпочтение: встроенный микрофон."""
@@ -132,9 +138,10 @@ class SpeechRecognizer:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Ошибка начала прослушивания: {e}")
-            self.state = RecognitionState.ERROR
-            await self._notify_state_change(RecognitionState.ERROR, error=str(e))
+            logger.warning(f"⚠️ Ошибка начала прослушивания (продолжаем работу): {e}")
+            # НЕ устанавливаем ERROR - возвращаемся в IDLE для повторных попыток
+            self.state = RecognitionState.IDLE
+            await self._notify_state_change(RecognitionState.IDLE, error=str(e))
             return False
             
     async def stop_listening(self) -> RecognitionResult:

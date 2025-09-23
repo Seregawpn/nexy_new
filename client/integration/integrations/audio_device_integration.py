@@ -48,14 +48,14 @@ class AudioDeviceIntegration:
         if config is None:
             # Создаем конфигурацию модуля из unified_config
             config_data = unified_config._load_config()
-            audio_cfg = config_data['audio']['device_manager']
-            integration_cfg = config_data['integrations']['audio_device']
+            audio_cfg = (config_data.get('audio') or {}).get('device_manager') or {}
+            integration_cfg = (config_data.get('integrations') or {}).get('audio_device') or {}
             
             config = AudioDeviceManagerConfig(
-                auto_switch_enabled=integration_cfg['auto_switch_enabled'],
-                monitoring_interval=integration_cfg['monitoring_interval'],
-                switch_delay=integration_cfg['switch_delay'],
-                device_priorities=audio_cfg['device_priorities'],
+                auto_switch_enabled=integration_cfg.get('auto_switch_enabled', (config_data.get('audio') or {}).get('auto_switch', True)),
+                monitoring_interval=integration_cfg.get('monitoring_interval', audio_cfg.get('monitoring_interval', 3.0)),
+                switch_delay=integration_cfg.get('switch_delay', (config_data.get('audio') or {}).get('switch_delay', 0.5)),
+                device_priorities=audio_cfg.get('device_priorities', {}),
                 user_preferences=None,  # Будет заполнено в __post_init__
                 macos_settings=None     # Будет заполнено в __post_init__
             )
@@ -64,10 +64,10 @@ class AudioDeviceIntegration:
         
         # Дополнительные настройки интеграции из unified_config
         config_data = unified_config._load_config()
-        integration_cfg = config_data['integrations']['audio_device']
-        self.enable_microphone_on_listening = integration_cfg['enable_microphone_on_listening']
-        self.disable_microphone_on_sleeping = integration_cfg['disable_microphone_on_sleeping']
-        self.disable_microphone_on_processing = integration_cfg['disable_microphone_on_processing']
+        integration_cfg = (config_data.get('integrations') or {}).get('audio_device') or {}
+        self.enable_microphone_on_listening = integration_cfg.get('enable_microphone_on_listening', True)
+        self.disable_microphone_on_sleeping = integration_cfg.get('disable_microphone_on_sleeping', True)
+        self.disable_microphone_on_processing = integration_cfg.get('disable_microphone_on_processing', True)
         
         # AudioDeviceManager экземпляр
         self._manager: Optional[AudioDeviceManager] = None
@@ -135,6 +135,9 @@ class AudioDeviceIntegration:
         
         try:
             logger.info("Starting AudioDeviceIntegration...")
+            
+            # Проверяем разрешения перед запуском аудио системы
+            await self._check_audio_permissions()
             
             # Запускаем AudioDeviceManager
             success = await self._manager.start()
@@ -486,3 +489,20 @@ class AudioDeviceIntegration:
         except Exception as e:
             logger.error(f"Error switching to device {device.name}: {e}")
             return False
+    
+    async def _check_audio_permissions(self):
+        """Проверить разрешения для аудио системы"""
+        try:
+            # Пробуем доступ к микрофону через короткий probe без Bundle ID
+            import sounddevice as sd
+            stream = sd.InputStream(channels=1)
+            try:
+                stream.start()
+                stream.stop()
+                logger.info("✅ Microphone accessible (audio probe)")
+            finally:
+                stream.close()
+                
+        except Exception as e:
+            logger.info(f"ℹ️ Audio input not accessible or probe failed: {e}")
+            # Не блокируем запуск, просто информируем

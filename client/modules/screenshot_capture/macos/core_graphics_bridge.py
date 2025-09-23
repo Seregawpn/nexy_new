@@ -25,7 +25,6 @@ from Quartz import (
     CGColorSpaceCreateDeviceRGB,
     CGContextDrawImage,
     kCGImageAlphaPremultipliedLast,
-    CGRectMake,
     CGImageGetWidth,
     CGImageGetHeight,
 )
@@ -62,7 +61,8 @@ class CoreGraphicsBridge:
     ) -> ScreenshotResult:
         start_ts = time.time()
         x, y, w, h = region
-        rect = CGRectMake(x, y, w, h)
+        # Use PyObjC CGRect tuple representation instead of CGRectMake to avoid dlsym/macros issues
+        rect = ((x, y), (w, h))
         cg_image = CGWindowListCreateImage(
             rect,
             kCGWindowListOptionOnScreenOnly,
@@ -154,7 +154,8 @@ class CoreGraphicsBridge:
             cs,
             kCGImageAlphaPremultipliedLast,
         )
-        CGContextDrawImage(ctx, CGRectMake(0, 0, new_w, new_h), cg_image)
+        # Use CGRect tuple representation instead of CGRectMake
+        CGContextDrawImage(ctx, ((0, 0), (new_w, new_h)), cg_image)
         return CGBitmapContextCreateImage(ctx)
 
 

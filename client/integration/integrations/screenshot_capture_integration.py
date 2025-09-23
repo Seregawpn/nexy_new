@@ -119,6 +119,10 @@ class ScreenshotCaptureIntegration:
             return False
         if self._running:
             return True
+        
+        # Проверяем разрешения Screen Capture перед запуском
+        await self._check_screen_capture_permissions()
+        
         self._running = True
         logger.info("ScreenshotCaptureIntegration started")
         return True
@@ -206,7 +210,7 @@ class ScreenshotCaptureIntegration:
                     "session_id": sid,
                     "error": "permissions_denied",
                 })
-                logger.warning("Screenshot skipped: screen recording permission denied")
+                logger.info("Screenshot skipped: screen recording permission denied")
                 return
             await self._capture_once(session_id=sid)
         except Exception as e:
@@ -431,3 +435,39 @@ class ScreenshotCaptureIntegration:
             "last_session_id": self._last_session_id,
             "captured_for_session": self._captured_for_session,
         }
+    
+    async def _check_screen_capture_permissions(self):
+        """Проверить разрешения Screen Capture"""
+        try:
+            # Пробуем системный preflight API, без Bundle ID
+            try:
+                from Quartz import CGPreflightScreenCaptureAccess  # type: ignore
+            except Exception:
+                CGPreflightScreenCaptureAccess = None
+
+            granted = False
+            if CGPreflightScreenCaptureAccess is not None:
+                try:
+                    granted = bool(CGPreflightScreenCaptureAccess())
+                except Exception:
+                    granted = False
+            else:
+                # Фоллбек: пробуем создать изображение всего экрана
+                try:
+                    from Quartz import CGWindowListCreateImage, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, kCGWindowImageDefault  # type: ignore
+                    rect = ((0, 0), (1, 1))
+                    img = CGWindowListCreateImage(rect, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, kCGWindowImageDefault)
+                    granted = bool(img)
+                except Exception:
+                    granted = False
+
+            if not granted:
+                logger.info("ℹ️ Screen Capture not accessible - screenshots will be disabled")
+                self._capture = None
+                logger.info("🔄 ScreenshotCapture disabled due to missing Screen Capture access")
+            else:
+                logger.info("✅ Screen Capture accessible (preflight/probe succeeded)")
+                
+        except Exception as e:
+            logger.info(f"ℹ️ Screen Capture probe failed: {e}")
+            self._capture = None

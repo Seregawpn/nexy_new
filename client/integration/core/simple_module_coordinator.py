@@ -176,30 +176,33 @@ class SimpleModuleCoordinator:
             
             # InputProcessing Integration - загружаем из конфигурации
             config_data = self.config._load_config()
-            kbd_cfg = config_data['integrations']['keyboard']
-            keyboard_config = KeyboardConfig(
-                key_to_monitor=kbd_cfg['key_to_monitor'],
-                short_press_threshold=kbd_cfg['short_press_threshold'],
-                long_press_threshold=kbd_cfg['long_press_threshold'],
-                event_cooldown=kbd_cfg['event_cooldown'],
-                hold_check_interval=kbd_cfg['hold_check_interval'],
-                debounce_time=kbd_cfg['debounce_time']
-            )
-            
-            input_cfg = config_data['integrations']['input_processing']
-            input_config = InputProcessingConfig(
-                keyboard_config=keyboard_config,
-                enable_keyboard_monitoring=input_cfg['enable_keyboard_monitoring'],
-                auto_start=input_cfg['auto_start'],
-                keyboard_backend=kbd_cfg.get('backend', 'auto')
-            )
-            
-            self.integrations['input'] = InputProcessingIntegration(
-                event_bus=self.event_bus,
-                state_manager=self.state_manager,
-                error_handler=self.error_handler,
-                config=input_config
-            )
+            integrations_cfg = (config_data.get('integrations') or {})
+            kbd_cfg = integrations_cfg.get('keyboard')
+            input_cfg = integrations_cfg.get('input_processing') or {}
+
+            if kbd_cfg:
+                keyboard_config = KeyboardConfig(
+                    key_to_monitor=kbd_cfg.get('key_to_monitor', 'space'),
+                    short_press_threshold=kbd_cfg.get('short_press_threshold', 0.1),
+                    long_press_threshold=kbd_cfg.get('long_press_threshold', 0.3),
+                    event_cooldown=kbd_cfg.get('event_cooldown', 0.15),
+                    hold_check_interval=kbd_cfg.get('hold_check_interval', 0.03),
+                    debounce_time=kbd_cfg.get('debounce_time', 0.02)
+                )
+                input_config = InputProcessingConfig(
+                    keyboard_config=keyboard_config,
+                    enable_keyboard_monitoring=input_cfg.get('enable_keyboard_monitoring', True),
+                    auto_start=input_cfg.get('auto_start', True),
+                    keyboard_backend=kbd_cfg.get('backend', 'auto')
+                )
+                self.integrations['input'] = InputProcessingIntegration(
+                    event_bus=self.event_bus,
+                    state_manager=self.state_manager,
+                    error_handler=self.error_handler,
+                    config=input_config
+                )
+            else:
+                logger.warning("Keyboard integration config not found; skipping input integration")
             
             # Permissions Integration - используем конфигурацию модуля
             # Конфигурация будет загружена внутри PermissionsIntegration
@@ -244,16 +247,17 @@ class SimpleModuleCoordinator:
             )
             
             # Interrupt Management Integration - загружаем из конфигурации
-            int_cfg = config_data['integrations']['interrupt_management']
+            int_cfg_all = (config_data.get('integrations') or {})
+            int_cfg = int_cfg_all.get('interrupt_management') or {}
             interrupt_config = InterruptManagementIntegrationConfig(
-                max_concurrent_interrupts=int_cfg['max_concurrent_interrupts'],
-                interrupt_timeout=int_cfg['interrupt_timeout'],
-                retry_attempts=int_cfg['retry_attempts'],
-                retry_delay=int_cfg['retry_delay'],
-                enable_speech_interrupts=int_cfg['enable_speech_interrupts'],
-                enable_recording_interrupts=int_cfg['enable_recording_interrupts'],
-                enable_session_interrupts=int_cfg['enable_session_interrupts'],
-                enable_full_reset=int_cfg['enable_full_reset']
+                max_concurrent_interrupts=int_cfg.get('max_concurrent_interrupts', 1),
+                interrupt_timeout=int_cfg.get('interrupt_timeout', 5.0),
+                retry_attempts=int_cfg.get('retry_attempts', 3),
+                retry_delay=int_cfg.get('retry_delay', 1.0),
+                enable_speech_interrupts=int_cfg.get('enable_speech_interrupts', True),
+                enable_recording_interrupts=int_cfg.get('enable_recording_interrupts', True),
+                enable_session_interrupts=int_cfg.get('enable_session_interrupts', True),
+                enable_full_reset=int_cfg.get('enable_full_reset', False)
             )
             
             self.integrations['interrupt'] = InterruptManagementIntegration(
@@ -447,21 +451,50 @@ class SimpleModuleCoordinator:
             
             print("🚀 Запуск всех интеграций...")
             
-            # Запускаем все интеграции
+            # Запускаем интеграции в правильном порядке (с учетом зависимостей)
+            startup_order = [
+                'permissions',      # 1. Сначала разрешения - КРИТИЧНО!
+                'hardware_id',      # 2. Получить уникальный ID
+                'tray_controller',  # 3. GUI и меню-бар
+                'audio',           # 4. Аудио система (после разрешений)
+                'voice_recognition', # 5. Распознавание речи (зависит от audio)
+                'screenshot_capture', # 6. Захват экрана (зависит от permissions)
+                'network',         # 7. Сетевая система
+                'updater',         # 8. Система обновлений
+                'interrupt_management', # 9. Управление прерываниями
+                'grpc',            # 10. gRPC клиент (зависит от hardware_id)
+                'speech_playback', # 11. Воспроизведение речи (зависит от grpc)
+                'signals',         # 12. Аудио сигналы
+                'autostart_manager', # 13. Автозапуск
+                'instance_manager', # 14. Управление экземплярами (последний)
+            ]
+            
+            # Запускаем в правильном порядке
+            for name in startup_order:
+                if name in self.integrations:
+                    print(f"🚀 Запуск {name}...")
+                    success = await self.integrations[name].start()
+                    
+                    # КРИТИЧНО: InstanceManagerIntegration может завершить приложение
+                    if name == "instance_manager" and not success:
+                        print("❌ Дублирование обнаружено - приложение завершено")
+                        return False
+                    
+                    if not success:
+                        print(f"❌ Ошибка запуска {name}")
+                        return False
+                    print(f"✅ {name} запущен")
+            
+            # Запускаем оставшиеся интеграции (если есть)
             for name, integration in self.integrations.items():
-                print(f"🚀 Запуск {name}...")
-                success = await integration.start()
-                
-                # КРИТИЧНО: InstanceManagerIntegration может завершить приложение
-                if name == "instance_manager" and not success:
-                    # Дублирование обнаружено - приложение уже завершено
-                    print("❌ Дублирование обнаружено - приложение завершено")
-                    return False
-                
-                if not success:
-                    print(f"❌ Ошибка запуска {name}")
-                    return False
-                print(f"✅ {name} запущен")
+                if name not in startup_order:
+                    print(f"🚀 Запуск {name}...")
+                    success = await integration.start()
+                    
+                    if not success:
+                        print(f"❌ Ошибка запуска {name}")
+                        return False
+                    print(f"✅ {name} запущен")
             
             # Запускаем все Workflows
             print("🚀 Запуск Workflows...")

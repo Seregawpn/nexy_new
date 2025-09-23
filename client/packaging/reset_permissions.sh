@@ -41,3 +41,6 @@ echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_
 echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\""
 echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent\""
 
+
+
+

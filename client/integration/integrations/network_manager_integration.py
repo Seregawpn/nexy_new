@@ -45,16 +45,17 @@ class NetworkManagerIntegration:
         # Загружаем конфигурацию из unified_config.yaml
         unified_config = UnifiedConfigLoader()
         if config is None:
-            # Создаем конфигурацию модуля из unified_config
+            # Создаем конфигурацию модуля из unified_config (с безопасными дефолтами)
             config_data = unified_config._load_config()
-            net_cfg = config_data['integrations']['network_manager']
+            integrations_cfg = (config_data.get('integrations') or {})
+            net_cfg = (integrations_cfg.get('network_manager') or {})
             
             config = NetworkManagerConfig(
-                check_interval=net_cfg['check_interval'],
-                ping_timeout=net_cfg['ping_timeout'],
+                check_interval=net_cfg.get('check_interval', (config_data.get('network') or {}).get('keepalive_time', 10)),
+                ping_timeout=net_cfg.get('ping_timeout', (config_data.get('network') or {}).get('keepalive_timeout', 3)),
                 max_retries=3,  # из модуля
                 retry_delay=5.0,  # из модуля
-                ping_hosts=net_cfg['ping_hosts'],
+                ping_hosts=net_cfg.get('ping_hosts', ['1.1.1.1', '8.8.8.8']),
                 test_urls=['https://www.google.com', 'https://www.apple.com']  # из модуля
             )
         

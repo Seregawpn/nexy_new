@@ -122,7 +122,7 @@ class GrpcClientIntegration:
             await self.event_bus.subscribe("hardware.id_obtained", self._on_hardware_id, EventPriority.HIGH)
             await self.event_bus.subscribe("hardware.id_response", self._on_hardware_id_response, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_interrupt, EventPriority.CRITICAL)
-            await self.event_bus.subscribe("interrupt.request", self._on_interrupt, EventPriority.CRITICAL)
+            # УБРАНО: interrupt.request - обрабатывается централизованно в InterruptManagementIntegration
             # Адресная отмена активного запроса по session_id (или последний активный)
             try:
                 await self.event_bus.subscribe("grpc.request_cancel", self._on_request_cancel, EventPriority.HIGH)
@@ -144,6 +144,10 @@ class GrpcClientIntegration:
             return False
         if self._running:
             return True
+        
+        # Проверяем наличие hardware_id перед запуском
+        await self._check_hardware_id_availability()
+        
         # Ленивая коннекция — подключимся при первой отправке
         self._running = True
         logger.info("GrpcClientIntegration started (lazy connect)")
@@ -407,6 +411,21 @@ class GrpcClientIntegration:
             )
         else:
             logger.error(f"gRPC integration error at {where}: {e}")
+
+    async def _check_hardware_id_availability(self):
+        """Проверяем доступность hardware_id перед запуском"""
+        if not self._hardware_id:
+            logger.warning("Hardware ID not available - requesting from hardware_id integration")
+            # Запрашиваем hardware_id через EventBus
+            await self.event_bus.publish("hardware.id_request", {})
+            # Ждем ответ (с таймаутом)
+            try:
+                # Простая проверка - если через 2 секунды нет ID, продолжаем без него
+                await asyncio.sleep(0.1)
+                if not self._hardware_id:
+                    logger.warning("Hardware ID still not available - continuing without it")
+            except Exception as e:
+                logger.warning(f"Hardware ID check failed: {e}")
 
     def get_status(self) -> Dict[str, Any]:
         return {

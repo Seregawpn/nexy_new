@@ -91,7 +91,7 @@ class SignalIntegration:
             await self.event_bus.subscribe("voice.mic_opened", self._on_voice_mic_opened, EventPriority.MEDIUM)
             await self.event_bus.subscribe("playback.completed", self._on_playback_completed, EventPriority.MEDIUM)
             await self.event_bus.subscribe("playback.cancelled", self._on_playback_cancelled, EventPriority.MEDIUM)
-            await self.event_bus.subscribe("interrupt.request", self._on_interrupt, EventPriority.MEDIUM)
+            # УБРАНО: interrupt.request - обрабатывается централизованно в InterruptManagementIntegration
             await self.event_bus.subscribe("grpc.request_failed", self._on_error_like, EventPriority.MEDIUM)
             await self.event_bus.subscribe("voice.recognition_failed", self._on_error_like, EventPriority.MEDIUM)
             self._initialized = True

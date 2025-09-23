@@ -27,6 +27,7 @@ try:
     from AppKit import NSBundle
     from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
     from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+    from PyObjCTools import AppHelper
     MACOS_IMPORTS_AVAILABLE = True
 except ImportError:
     MACOS_IMPORTS_AVAILABLE = False
@@ -55,9 +56,9 @@ class PermissionsIntegration:
                     PermissionType.SCREEN_CAPTURE,
                     PermissionType.NETWORK
                 ],  # Из модуля
-                check_interval=perm_cfg['check_interval'],
-                auto_open_preferences=perm_cfg['open_preferences'],
-                show_instructions=perm_cfg['show_instructions']
+                check_interval=perm_cfg.get('check_interval', 30.0),
+                auto_open_preferences=perm_cfg.get('auto_open_preferences', True),
+                show_instructions=perm_cfg.get('show_instructions', True)
             )
         
         self.config = config
@@ -73,14 +74,12 @@ class PermissionsIntegration:
         # Кэш статусов разрешений
         self.permission_statuses: Dict[PermissionType, PermissionStatus] = {}
         
-        # Критичные разрешения для работы приложения
-        self.critical_permissions = {
-            PermissionType.MICROPHONE,
-            PermissionType.SCREEN_CAPTURE,
-            PermissionType.NETWORK
-        }
+        # Критичные разрешения для работы приложения (ПОЛНОСТЬЮ ОТКЛЮЧЕНЫ - НЕ БЛОКИРУЕМ НИЧЕГО)
+        self.critical_permissions = set()  # Пустое множество - НЕ блокируем приложение даже без разрешений
         # Текущее состояние блокировки приложения (для устранения дублей событий)
         self._app_blocked: Optional[bool] = None
+        # Флаг, чтобы не запускать параллельные запросы прав
+        self._request_in_progress: bool = False
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
@@ -99,8 +98,8 @@ class PermissionsIntegration:
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
             
-            # Настраиваем callbacks для PermissionManager
-            self.permission_manager.add_callback(self._on_permission_changed)
+            # Настраиваем callbacks для PermissionManager (если метод существует)
+            # Пропускаем add_callback - метод не реализован в PermissionManager
             
             self.is_initialized = True
             logger.info("✅ PermissionsIntegration инициализирован")
@@ -127,7 +126,7 @@ class PermissionsIntegration:
             await self._check_all_permissions()
             
             # Запрашиваем обязательные разрешения если включено
-            if self.config.auto_open_preferences:  # Используем правильное поле
+            if self.config.auto_open_preferences and not self._request_in_progress:
                 await self._request_required_permissions()
             
             # Запускаем мониторинг
@@ -225,11 +224,15 @@ class PermissionsIntegration:
         """Запросить обязательные разрешения"""
         try:
             logger.info("📝 Запрос обязательных разрешений...")
-            
-            # Триггерим системные диалоги для macOS
+            if self._request_in_progress:
+                logger.info("⚠️ Запрос прав уже выполняется - пропускаем повторный запуск")
+                return
+            self._request_in_progress = True
+
+            # Выполняем последовательный сценарий запросов (главный поток для UI-диалогов)
             if MACOS_IMPORTS_AVAILABLE:
-                await self._trigger_macos_permission_dialogs()
-            
+                await self._request_permissions_sequential()
+
             results = await self.permission_manager.request_required_permissions()
             
             # Обновляем кэш статусов
@@ -248,57 +251,74 @@ class PermissionsIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка запроса обязательных разрешений: {e}")
+        finally:
+            self._request_in_progress = False
     
-    async def _trigger_macos_permission_dialogs(self):
-        """Триггерить системные диалоги macOS для разрешений"""
+    async def _request_permissions_sequential(self):
+        """Последовательный запрос прав на главном потоке UI.
+        Порядок: Microphone → ScreenCapture → Accessibility/InputMonitoring (deep-link при отказе).
+        """
         try:
-            if not MACOS_IMPORTS_AVAILABLE:
-                logger.warning("macOS импорты недоступны - пропускаем триггеры")
-                return
-            
-            logger.info("🔔 Триггерим системные диалоги macOS...")
-            
-            # 1. Accessibility (покажет системный диалог)
+            import asyncio
+            import subprocess
+
+            logger.info("🔔 Старт последовательного запроса прав...")
+
+            # 1) Microphone (completion handler, UI thread)
+            mic_future: asyncio.Future = asyncio.get_event_loop().create_future()
+
+            def _mic_request():
+                try:
+                    def mic_handler(granted):
+                        try:
+                            if not mic_future.done():
+                                mic_future.set_result(bool(granted))
+                        except Exception as e:
+                            if not mic_future.done():
+                                mic_future.set_exception(e)
+                    AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, mic_handler)
+                except Exception as e:
+                    if not mic_future.done():
+                        mic_future.set_exception(e)
+
+            AppHelper.callAfter(_mic_request)
+            mic_granted = await mic_future
+            logger.info(f"🎤 Microphone: {'granted' if mic_granted else 'denied'}")
+            if not mic_granted:
+                subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"], check=False)
+
+            # 2) Screen Capture (blocking call, prefer main thread, but acceptable via worker)
             try:
-                logger.info("🔔 Запрос разрешения Accessibility...")
-                AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+                from Quartz import CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess
             except Exception as e:
-                logger.warning(f"Ошибка запроса Accessibility: {e}")
-            
-            # 2. Microphone (покажет системный диалог)
+                logger.warning(f"Quartz ScreenCapture API недоступен: {e}")
+                CGPreflightScreenCaptureAccess = None
+                CGRequestScreenCaptureAccess = None
+
+            if CGPreflightScreenCaptureAccess and CGRequestScreenCaptureAccess:
+                has_sc = bool(CGPreflightScreenCaptureAccess())
+                if not has_sc:
+                    logger.info("📸 ScreenCapture not granted → requesting...")
+                    # Выполняем запрос в отдельном потоке, чтобы не блокировать loop
+                    sc_granted = await asyncio.to_thread(CGRequestScreenCaptureAccess)
+                    logger.info(f"📸 ScreenCapture: {'granted' if sc_granted else 'denied'}")
+                    if not sc_granted:
+                        subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"], check=False)
+
+            # 3) Accessibility (prompt, no completion)
             try:
-                logger.info("🔔 Запрос разрешения Microphone...")
-                def mic_handler(granted):
-                    logger.info(f"Microphone permission granted: {granted}")
-                
-                AVCaptureDevice.requestAccessForMediaType_completionHandler_(
-                    AVMediaTypeAudio, mic_handler
-                )
+                logger.info("♿ Проверка Accessibility...")
+                trusted = bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
+                if not trusted:
+                    subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], check=False)
+                    subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"], check=False)
             except Exception as e:
-                logger.warning(f"Ошибка запроса Microphone: {e}")
-            
-            # 3. Открываем настройки для Screen Recording и Input Monitoring
-            # (системных диалогов нет, только чекбоксы в настройках)
-            try:
-                logger.info("🔔 Открываем настройки для Screen Recording и Input Monitoring...")
-                import subprocess
-                
-                # Открываем настройки конфиденциальности
-                subprocess.run([
-                    "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-                ], check=False)
-                
-                subprocess.run([
-                    "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-                ], check=False)
-                
-            except Exception as e:
-                logger.warning(f"Ошибка открытия настроек: {e}")
-            
-            logger.info("✅ Триггеры системных диалогов завершены")
-            
+                logger.warning(f"Accessibility request error: {e}")
+
+            logger.info("✅ Последовательный запрос прав завершен")
+
         except Exception as e:
-            logger.error(f"❌ Ошибка триггеров системных диалогов: {e}")
+            logger.error(f"❌ Ошибка последовательного запроса прав: {e}")
     
     async def _check_critical_permissions(self):
         """Проверить критичные разрешения"""

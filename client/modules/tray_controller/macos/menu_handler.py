@@ -44,6 +44,12 @@ class MacOSTrayMenu:
             if icon_path and os.path.exists(icon_path):
                 self.app.icon = icon_path
             
+            # Добавляем метод applicationShouldTerminate если его нет
+            if not hasattr(self.app, 'applicationShouldTerminate'):
+                def applicationShouldTerminate(sender):
+                    return True
+                self.app.applicationShouldTerminate = applicationShouldTerminate
+            
             # Настраиваем обработчик завершения приложения
             self._setup_quit_handler()
             
@@ -197,6 +203,11 @@ class MacOSTrayMenu:
     def run(self):
         """Запустить приложение"""
         if self.app:
+            # Добавляем метод applicationShouldTerminate если его нет
+            if not hasattr(self.app, 'applicationShouldTerminate'):
+                def applicationShouldTerminate(sender):
+                    return True
+                self.app.applicationShouldTerminate = applicationShouldTerminate
             self.app.run()
     
     def set_quit_callback(self, callback: Callable):

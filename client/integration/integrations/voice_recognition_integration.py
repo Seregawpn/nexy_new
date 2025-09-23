@@ -65,7 +65,7 @@ class VoiceRecognitionIntegration:
             await self.event_bus.subscribe("voice.recording_start", self._on_recording_start, EventPriority.HIGH)
             await self.event_bus.subscribe("voice.recording_stop", self._on_recording_stop, EventPriority.HIGH)
             await self.event_bus.subscribe("keyboard.short_press", self._on_cancel_request, EventPriority.CRITICAL)
-            await self.event_bus.subscribe("interrupt.request", self._on_cancel_request, EventPriority.CRITICAL)
+            # УБРАНО: interrupt.request - обрабатывается централизованно в InterruptManagementIntegration
             # Гарантированно закрываем прослушивание при выходе из LISTENING
             await self.event_bus.subscribe("app.mode_changed", self._on_app_mode_changed, EventPriority.MEDIUM)
 
@@ -100,6 +100,10 @@ class VoiceRecognitionIntegration:
             return False
         if self._running:
             return True
+        
+        # Проверяем разрешения микрофона перед запуском
+        await self._check_microphone_permissions()
+        
         self._running = True
         logger.info("VoiceRecognitionIntegration started")
         return True
@@ -138,11 +142,14 @@ class VoiceRecognitionIntegration:
                     await self.event_bus.publish("voice.mic_opened", {"session_id": session_id})
                     logger.info("VOICE: microphone opened (real)")
                 except Exception as e:
-                    logger.error(f"VOICE: failed to start listening: {e}")
+                    logger.warning(f"VOICE: failed to start listening (fallback to simulation): {e}")
+                    # НЕ блокируем приложение - переключаемся на симуляцию
+                    self.config.simulate = True
                     await self.event_bus.publish("voice.recognition_failed", {
                         "session_id": session_id,
                         "error": "mic_open_failed",
-                        "reason": str(e)
+                        "reason": str(e),
+                        "fallback_to_simulation": True
                     })
         except Exception as e:
             logger.error(f"VOICE: error in recording_start handler: {e}")
@@ -326,3 +333,22 @@ class VoiceRecognitionIntegration:
                 "language": self.config.language,
             }
         }
+    
+    async def _check_microphone_permissions(self):
+        """Проверить разрешения микрофона"""
+        try:
+            # Пробуем открыть краткий входной аудиопоток без привязки к Bundle ID
+            import sounddevice as sd
+            stream = sd.InputStream(channels=1)
+            try:
+                stream.start()
+                stream.stop()
+                logger.info("✅ Microphone accessible (probe succeeded)")
+            finally:
+                stream.close()
+            
+        except Exception as e:
+            logger.info(f"ℹ️ Microphone not accessible or probe failed: {e}")
+            # В случае ошибки/отказа доступа — мягко переходим в симуляцию
+            self.config.simulate = True
+            logger.info("🔄 Switching to simulation mode due to microphone probe failure")

@@ -114,7 +114,7 @@ class ModeManagementIntegration:
             await self.event_bus.subscribe("playback.completed", self._bridge_playback_done, EventPriority.MEDIUM)
             await self.event_bus.subscribe("playback.failed", self._bridge_playback_done, EventPriority.MEDIUM)
 
-            await self.event_bus.subscribe("interrupt.request", self._bridge_interrupt, EventPriority.CRITICAL)
+            # УБРАНО: interrupt.request - обрабатывается централизованно в InterruptManagementIntegration
 
             self._initialized = True
             logger.info("ModeManagementIntegration initialized")

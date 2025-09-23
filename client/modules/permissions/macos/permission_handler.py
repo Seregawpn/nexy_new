@@ -17,13 +17,28 @@ class MacOSPermissionHandler:
     async def check_microphone_permission(self) -> PermissionResult:
         """Проверить разрешение микрофона"""
         try:
-            # Для демо возвращаем GRANTED
-            return PermissionResult(
-                success=True,
-                permission=PermissionType.MICROPHONE,
-                status=PermissionStatus.GRANTED,
-                message="Microphone permission granted"
-            )
+            # Реальная проверка TCC для Microphone
+            import subprocess
+            result = subprocess.run([
+                'tccutil', 'check', 'Microphone', 'com.nexy.assistant'
+            ], capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                # Разрешение предоставлено
+                return PermissionResult(
+                    success=True,
+                    permission=PermissionType.MICROPHONE,
+                    status=PermissionStatus.GRANTED,
+                    message="Microphone permission granted"
+                )
+            else:
+                # Разрешение не предоставлено
+                return PermissionResult(
+                    success=False,
+                    permission=PermissionType.MICROPHONE,
+                    status=PermissionStatus.DENIED,
+                    message="Microphone permission denied"
+                )
         except Exception as e:
             return PermissionResult(
                 success=False,
@@ -36,13 +51,28 @@ class MacOSPermissionHandler:
     async def check_screen_capture_permission(self) -> PermissionResult:
         """Проверить разрешение захвата экрана"""
         try:
-            # Для демо возвращаем GRANTED
-            return PermissionResult(
-                success=True,
-                permission=PermissionType.SCREEN_CAPTURE,
-                status=PermissionStatus.GRANTED,
-                message="Screen capture permission granted"
-            )
+            # Реальная проверка TCC для Screen Capture
+            import subprocess
+            result = subprocess.run([
+                'tccutil', 'check', 'ScreenCapture', 'com.nexy.assistant'
+            ], capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                # Разрешение предоставлено
+                return PermissionResult(
+                    success=True,
+                    permission=PermissionType.SCREEN_CAPTURE,
+                    status=PermissionStatus.GRANTED,
+                    message="Screen capture permission granted"
+                )
+            else:
+                # Разрешение не предоставлено
+                return PermissionResult(
+                    success=False,
+                    permission=PermissionType.SCREEN_CAPTURE,
+                    status=PermissionStatus.DENIED,
+                    message="Screen capture permission denied"
+                )
         except Exception as e:
             return PermissionResult(
                 success=False,

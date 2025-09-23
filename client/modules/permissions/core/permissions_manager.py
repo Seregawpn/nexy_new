@@ -68,11 +68,11 @@ class PermissionManager:
         for perm_type in PermissionType:
             required = perm_type in self.config.required_permissions
             info = PermissionInfo(
-                type=perm_type,
+                permission_type=perm_type,
                 status=PermissionStatus.NOT_DETERMINED,
-                required=required,
-                description=descriptions.get(perm_type, ""),
-                instructions=instructions.get(perm_type, "")
+                granted=False,
+                message=descriptions.get(perm_type, ""),
+                last_checked=time.time()
             )
             self.state.set_permission(perm_type, info)
     
@@ -216,9 +216,10 @@ class PermissionManager:
             
             # Создаем событие
             event = PermissionEvent(
+                event_type="status_changed",
                 permission=permission_type,
-                old_status=old_status,
-                new_status=new_status,
+                status=new_status,
+                message=f"Status changed from {old_status.value} to {new_status.value}",
                 timestamp=time.time()
             )
             

@@ -59,3 +59,6 @@ echo ""
 echo "🔧 Установка:"
 echo "   sudo installer -pkg $SIGNED_PKG_PATH -target /"
 
+
+
+

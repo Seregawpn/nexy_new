@@ -32,3 +32,6 @@ echo ""
 echo "🔍 Текущие сертификаты:"
 security find-identity -p codesigning -v | grep -E "(Application|Installer)" || echo "   Сертификаты не найдены"
 
+
+
+

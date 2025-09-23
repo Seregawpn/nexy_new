@@ -38,21 +38,28 @@ class TrayControllerIntegration:
         # Загружаем конфигурацию из unified_config.yaml
         unified_config = UnifiedConfigLoader()
         if config is None:
-            # Создаем конфигурацию модуля из unified_config
+            # Создаем конфигурацию модуля из unified_config (с безопасными дефолтами)
             config_data = unified_config._load_config()
-            tray_cfg = config_data['integrations']['tray_controller']
-            
+            integrations_cfg = (config_data.get('integrations') or {})
+            tray_cfg = (integrations_cfg.get('tray_controller') or {})
+            tray_basic = (config_data.get('tray') or {})
+
+            icon_size = tray_cfg.get('icon_size', tray_basic.get('icon_size', 18))
+            show_status_in_menu = tray_cfg.get('show_status_in_menu', True)
+            enable_notifications = tray_cfg.get('enable_notifications', tray_basic.get('show_notifications', True))
+            debug_mode = tray_cfg.get('debug_mode', (config_data.get('app') or {}).get('debug', False))
+
             config = TrayConfig(
-                icon_size=tray_cfg['icon_size'],
-                show_status=tray_cfg['show_status_in_menu'],  # Правильное поле
+                icon_size=icon_size,
+                show_status=show_status_in_menu,  # Правильное поле
                 show_menu=True,  # Из модуля
                 enable_click_events=True,  # Из модуля
                 enable_right_click=True,  # Из модуля
                 auto_hide=False,  # Из модуля
                 animation_speed=0.5,  # Из модуля
                 menu_font_size=13,  # Из модуля
-                enable_sound=tray_cfg['enable_notifications'],  # Маппинг
-                debug_mode=tray_cfg['debug_mode']
+                enable_sound=enable_notifications,  # Маппинг
+                debug_mode=debug_mode
             )
         
         self.config = config
