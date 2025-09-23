@@ -73,9 +73,9 @@ grpc:
   max_send_message_length: 4194304
   retry_attempts: 3
   retry_delay: 1.0
-  server_host: 20.151.51.172
+  server_host: 127.0.0.1
   server_port: 50051
-  use_tls: true
+  use_tls: false
 integrations:
   audio_device:
     enabled: true
@@ -86,6 +86,12 @@ integrations:
   grpc_client:
     enabled: true
     priority: 9
+    server: local
+    aggregate_timeout_sec: 1.5
+    request_timeout_sec: 30.0
+    max_retries: 3
+    retry_delay: 1.0
+    use_network_gate: true
   hardware_id:
     enabled: true
     priority: 2

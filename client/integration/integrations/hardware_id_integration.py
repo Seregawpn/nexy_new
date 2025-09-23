@@ -101,6 +101,16 @@ class HardwareIdIntegration:
             return True
         self._running = True
         logger.info("HardwareIdIntegration started")
+        
+        # Принудительно публикуем Hardware ID при старте для gRPC клиента
+        try:
+            await self._ensure_id_ready()
+            if self._id_result:
+                await self._publish_obtained(self._id_result)
+                logger.info(f"Hardware ID published on startup: {self._id_result.uuid[:8]}...")
+        except Exception as e:
+            logger.warning(f"Failed to publish Hardware ID on startup: {e}")
+        
         return True
 
     async def stop(self) -> bool:

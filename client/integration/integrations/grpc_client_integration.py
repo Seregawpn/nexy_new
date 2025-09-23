@@ -32,7 +32,7 @@ class GrpcClientIntegrationConfig:
     request_timeout_sec: float = 30.0
     max_retries: int = 3
     retry_delay_sec: float = 1.0
-    server: str = "production"  # local|production|fallback
+    server: str = "local"  # local|production|fallback
     use_network_gate: bool = True
 
 
@@ -303,13 +303,17 @@ class GrpcClientIntegration:
         if not text:
             return
         # Получаем hardware_id
-        hwid = await self._await_hardware_id(timeout_ms=1500)
+        hwid = await self._await_hardware_id(timeout_ms=3000)
         if not hwid:
+            logger.warning(f"Hardware ID not available for session {session_id} - requesting explicitly")
             await self.event_bus.publish("hardware.id_request", {"request_id": f"grpc-{session_id}", "wait_ready": True})
-            hwid = await self._await_hardware_id(timeout_ms=1500, request_id=f"grpc-{session_id}")
+            hwid = await self._await_hardware_id(timeout_ms=3000, request_id=f"grpc-{session_id}")
         if not hwid:
+            logger.error(f"No Hardware ID available for gRPC request - session {session_id}")
             await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": "no_hardware_id"})
             return
+        
+        logger.info(f"Using Hardware ID: {hwid[:8]}... for session {session_id}")
 
         # Кодируем скриншот (если есть)
         screenshot_b64 = None
@@ -331,22 +335,37 @@ class GrpcClientIntegration:
         # Ленивая коннекция к серверу
         try:
             if self._client and not self._client.is_connected():
+                logger.info(f"Connecting to gRPC server: {self.config.server}")
                 # Явно выбираем окружение из конфигурации интеграции (local|production|fallback)
-                await self._client.connect(self.config.server)
+                success = await self._client.connect(self.config.server)
+                if success:
+                    logger.info(f"✅ gRPC connected to {self.config.server}")
+                else:
+                    logger.error(f"❌ Failed to connect to gRPC server: {self.config.server}")
+                    await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": "connect_failed"})
+                    return
+            else:
+                logger.info(f"gRPC already connected to {self.config.server}")
         except Exception as e:
+            logger.error(f"gRPC connection error: {e}")
             await self._handle_error(e, where="grpc.connect", severity="warning")
             await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": "connect_failed"})
             return
 
         # Стримим ответы
         try:
+            logger.info(f"Starting gRPC stream for session {session_id} with prompt: '{text[:50]}...'")
             got_terminal = False
+            chunk_count = 0
             async for resp in self._client.stream_audio(
                 prompt=text,
                 screenshot_base64=screenshot_b64 or "",
                 screen_info={"width": width, "height": height},
                 hardware_id=hwid,
             ):
+                chunk_count += 1
+                if chunk_count % 10 == 0:  # Логируем каждый 10-й чанк
+                    logger.debug(f"gRPC stream progress: {chunk_count} chunks received")
                 # oneof content
                 if hasattr(resp, 'text_chunk') and resp.text_chunk:
                     await self.event_bus.publish("grpc.response.text", {"session_id": session_id, "text": resp.text_chunk})
@@ -417,11 +436,11 @@ class GrpcClientIntegration:
         if not self._hardware_id:
             logger.warning("Hardware ID not available - requesting from hardware_id integration")
             # Запрашиваем hardware_id через EventBus
-            await self.event_bus.publish("hardware.id_request", {})
+            await self.event_bus.publish("hardware.id_request", {"wait_ready": True})
             # Ждем ответ (с таймаутом)
             try:
-                # Простая проверка - если через 2 секунды нет ID, продолжаем без него
-                await asyncio.sleep(0.1)
+                # Ждем дольше для получения Hardware ID
+                await asyncio.sleep(0.5)
                 if not self._hardware_id:
                     logger.warning("Hardware ID still not available - continuing without it")
             except Exception as e:
