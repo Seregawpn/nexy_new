@@ -248,3 +248,14 @@ voice_recognition:
   timeout: 5.0
   use_google: true
   wake_word: nexy
+welcome_message:
+  enabled: true
+  text: "Hi! Nexy is here. How can I help you?"
+  audio_file: "assets/audio/welcome_en.mp3"
+  fallback_to_tts: true
+  delay_sec: 1.0
+  volume: 0.8
+  voice: "en-US-JennyNeural"
+  sample_rate: 48000
+  channels: 1
+  bit_depth: 16

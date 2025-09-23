@@ -38,6 +38,7 @@ from integration.integrations.screenshot_capture_integration import ScreenshotCa
 from integration.integrations.signal_integration import SignalIntegration
 from modules.signals.config.types import PatternConfig
 from integration.integrations.signal_integration import SignalsIntegrationConfig
+from integration.integrations.welcome_message_integration import WelcomeMessageIntegration
 
 # Импорты core компонентов
 from integration.core.event_bus import EventBus, EventPriority
@@ -358,7 +359,14 @@ class SimpleModuleCoordinator:
                 config=autostart_config
             )
 
-            print("✅ Интеграции созданы: instance_manager, hardware_id, tray, input, permissions, updater, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals, autostart_manager")
+            # Welcome Message Integration - приветствие при запуске
+            self.integrations['welcome_message'] = WelcomeMessageIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+            )
+
+            print("✅ Интеграции созданы: instance_manager, hardware_id, tray, input, permissions, updater, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals, autostart_manager, welcome_message")
             
             # 3. Создаем Workflows (координаторы режимов)
             print("🔧 Создание Workflows...")
@@ -465,8 +473,9 @@ class SimpleModuleCoordinator:
                 'grpc',            # 10. gRPC клиент (зависит от hardware_id)
                 'speech_playback', # 11. Воспроизведение речи (зависит от grpc)
                 'signals',         # 12. Аудио сигналы
-                'autostart_manager', # 13. Автозапуск
-                'instance_manager', # 14. Управление экземплярами (последний)
+                'welcome_message', # 13. Приветственное сообщение (зависит от speech_playback)
+                'autostart_manager', # 14. Автозапуск
+                'instance_manager', # 15. Управление экземплярами (последний)
             ]
             
             # Запускаем в правильном порядке
