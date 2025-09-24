@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Основные права приложения -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    
+    <!-- Права на клавиатуру и ввод -->
+    <key>com.apple.security.device.usb</key>
+    <true/>
+    
+    <!-- Права на доступ к системным событиям -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- Права на доступ к системным настройкам -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    
+    <!-- Права на микрофон для распознавания речи -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    
+    <!-- Права на сеть для Google Speech Recognition -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Права на файловую систему -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    
+    <!-- Права на логирование -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Права на временные файлы -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/tmp/</string>
+        <string>/var/tmp/</string>
+    </array>
+    
+    <!-- Права на доступ к аудиоустройствам -->
+    <key>com.apple.security.device.audio-unit</key>
+    <true/>
+    
+    <!-- Права на доступ к системным событиям клавиатуры -->
+    <key>com.apple.security.device.camera</key>
+    <false/>
+    
+    <!-- Права на доступ к контактам -->
+    <key>com.apple.security.personal-information.addressbook</key>
+    <false/>
+    
+    <!-- Права на доступ к календарю -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <false/>
+    
+    <!-- Права на доступ к напоминаниям -->
+    <key>com.apple.security.personal-information.reminders</key>
+    <false/>
+    
+    <!-- Права на доступ к фотографиям -->
+    <key>com.apple.security.personal-information.photos</key>
+    <false/>
+    
+    <!-- Права на доступ к местоположению -->
+    <key>com.apple.security.personal-information.location</key>
+    <false/>
+</dict>
+</plist>

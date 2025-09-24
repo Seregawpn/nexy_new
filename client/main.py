@@ -5,11 +5,55 @@ Nexy AI Assistant - Главный файл приложения
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
 # Добавляем путь к модулям
 sys.path.append(str(Path(__file__).parent))
+
+# --- Ранняя инициализация pydub/ffmpeg (до любых вызовов pydub) ---
+def init_ffmpeg_for_pydub():
+    """Настраивает путь к встроенному ffmpeg для pydub.
+
+    Порядок поиска:
+    1) PyInstaller onefile: sys._MEIPASS/resources/ffmpeg/ffmpeg
+    2) PyInstaller bundle:  Contents/Resources/resources/ffmpeg/ffmpeg
+    3) Dev-режим:           resources/ffmpeg/ffmpeg (в корне проекта)
+    """
+    try:
+        from pydub import AudioSegment  # noqa: F401
+    except Exception:
+        return
+
+    ffmpeg_path = None
+    # 1) onefile (временная распаковка)
+    if hasattr(sys, "_MEIPASS"):
+        cand = Path(getattr(sys, "_MEIPASS")) / "resources" / "ffmpeg" / "ffmpeg"
+        if cand.exists():
+            ffmpeg_path = cand
+    # 2) bundle (.app): .../Contents/MacOS/main.py -> ../Resources/resources/ffmpeg/ffmpeg
+    if ffmpeg_path is None:
+        macos_dir = Path(__file__).resolve().parent
+        resources_ffmpeg = macos_dir.parent / "Resources" / "resources" / "ffmpeg" / "ffmpeg"
+        if resources_ffmpeg.exists():
+            ffmpeg_path = resources_ffmpeg
+    # 3) dev-режим (репозиторий)
+    if ffmpeg_path is None:
+        dev_ffmpeg = Path(__file__).resolve().parent / "resources" / "ffmpeg" / "ffmpeg"
+        if dev_ffmpeg.exists():
+            ffmpeg_path = dev_ffmpeg
+
+    if ffmpeg_path and ffmpeg_path.exists():
+        try:
+            from pydub import AudioSegment
+            os.environ["FFMPEG_BINARY"] = str(ffmpeg_path)
+            AudioSegment.converter = str(ffmpeg_path)
+        except Exception:
+            pass
+
+# Выполняем инициализацию до импортов модулей, использующих pydub
+init_ffmpeg_for_pydub()
 
 # Настройка логирования
 logging.basicConfig(
@@ -28,7 +72,7 @@ async def main():
         coordinator = SimpleModuleCoordinator()
         
         # Запускаем (run() сам вызовет initialize() и проверку дублирования)
-        await coordinator.run()                               
+        await coordinator.run()                                                         
         
     except Exception as e:
         print(f"💥 Критическая ошибка: {e}")

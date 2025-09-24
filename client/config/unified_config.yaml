@@ -121,13 +121,19 @@ integrations:
     enabled: true
     priority: 6
   permissions:
-    auto_open_preferences: true
+    auto_open_preferences: false
     check_interval: 30.0
     enabled: true
     priority: 0
     retry_attempts: 3
     retry_delay: 5.0
     show_instructions: true
+    required_permissions:
+      - microphone
+      - screen_capture
+      - network
+      - accessibility
+      - input_monitoring
   screenshot_capture:
     enabled: true
     priority: 7
@@ -253,7 +259,7 @@ welcome_message:
   text: "Hi! Nexy is here. How can I help you?"
   audio_file: "assets/audio/welcome_en.mp3"
   fallback_to_tts: true
-  delay_sec: 1.0
+  delay_sec: 1.5
   volume: 0.8
   voice: "en-US-JennyNeural"
   sample_rate: 48000

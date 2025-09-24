@@ -4,12 +4,12 @@
 Перед любыми изменениями ВСЕГДА изучай эти ключевые документы:
 
 ### Концепция продукта и UX
-- `Docs/PRODUCT_CONCEPT.md` - ОСНОВНОЙ концепт продукта, UX-сценарии, 3 режима (SLEEPING/LISTENING/PROCESSING)
-- `Docs/GLOBAL_DELIVERY_PLAN.md` - глобальный план поставки, Azure VM, подпись/нотаризация
-- `Docs/PACKAGING_PLAN.md` - План по упаковке приложения PKG 
-- `Docs/ARCHITECTURE_OVERVIEW.md` - Полный архитектура проекта логика и так далее
-- `Docs/CURRENT_STATUS_REPORT.md` - Пользовательские истории и сценарии использования
-
+- `client/Docs/PRODUCT_CONCEPT.md` - ОСНОВНОЙ концепт продукта, UX-сценарии, 3 режима (SLEEPING/LISTENING/PROCESSING)
+- `client/Docs/GLOBAL_DELIVERY_PLAN.md` - глобальный план поставки, Azure VM, подпись/нотаризация
+- `client/Docs/PACKAGING_FINAL_GUIDE.md` - План по упаковке приложения PKG 
+- `client/Docs/ARCHITECTURE_OVERVIEW.md` - Полный архитектура проекта логика и так далее
+- `client/Docs/CURRENT_STATUS_REPORT.md` - Пользовательские истории и сценарии использования
+- `server/SERVER_MODULARIZATION_PLAN.md` - План модуляризации сервера
 ### Архитектурные принципы
 - Строго 3 режима: SLEEPING (серый), LISTENING (синий пульсирующий), PROCESSING (желтый вращающийся)
 - Push-to-Talk: долгое нажатие ПРОБЕЛ → LISTENING, отпускание → PROCESSING

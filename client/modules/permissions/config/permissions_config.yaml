@@ -1,9 +1,11 @@
-auto_open_preferences: true
+auto_open_preferences: false
 check_interval: 30.0
 required_permissions:
 - microphone
 - screen_capture
 - network
+- accessibility
+- input_monitoring
 retry_attempts: 3
 retry_delay: 5.0
 show_instructions: true

@@ -143,9 +143,11 @@ class UpdateHTTPClient:
             bool: True если соединение успешно
         """
         try:
-            if not url.startswith('https://'):
+            # Разрешаем https и http://localhost для локального тестового сервера,
+            # чтобы поведение соответствовало get_manifest/download_file
+            if not (url.startswith('https://') or url.startswith('http://localhost')):
                 return False
-            
+
             response = self.http.request("HEAD", url, timeout=10)
             return response.status == 200
             

@@ -33,6 +33,8 @@ class WelcomePlayer:
         # Кэш для предзаписанного аудио
         self._prerecorded_audio: Optional[np.ndarray] = None
         self._prerecorded_loaded = False
+        # Последнее подготовленное аудио (prerecorded или tts)
+        self._last_audio: Optional[np.ndarray] = None
     
     def set_callbacks(
         self,
@@ -162,6 +164,8 @@ class WelcomePlayer:
             duration_sec = len(self._prerecorded_audio) / self.config.sample_rate
             
             logger.info(f"🎵 [WELCOME_PLAYER] Предзаписанное аудио готово: {len(self._prerecorded_audio)} сэмплов, {duration_sec:.1f}s")
+            # Сохраняем как последнее подготовленное аудио
+            self._last_audio = self._prerecorded_audio
             
             return WelcomeResult(
                 success=True,
@@ -202,6 +206,8 @@ class WelcomePlayer:
             duration_sec = len(audio_data) / self.config.sample_rate
             
             logger.info(f"🎵 [WELCOME_PLAYER] TTS аудио готово: {len(audio_data)} сэмплов, {duration_sec:.1f}s")
+            # Сохраняем как последнее подготовленное аудио
+            self._last_audio = audio_data
             
             return WelcomeResult(
                 success=True,
@@ -247,6 +253,8 @@ class WelcomePlayer:
             # Конвертируем в numpy массив
             self._prerecorded_audio = np.array(audio_segment.get_array_of_samples(), dtype=np.int16)
             self._prerecorded_loaded = True
+            # Обновляем последний подготовленный буфер
+            self._last_audio = self._prerecorded_audio
             
             duration_sec = len(self._prerecorded_audio) / self.config.sample_rate
             logger.info(f"✅ [WELCOME_PLAYER] Предзаписанное аудио загружено: {len(self._prerecorded_audio)} сэмплов, {duration_sec:.1f}s")
@@ -257,9 +265,7 @@ class WelcomePlayer:
     
     def get_audio_data(self) -> Optional[np.ndarray]:
         """Получить аудио данные для воспроизведения"""
-        if self._prerecorded_audio is not None:
-            return self._prerecorded_audio
-        return None
+        return self._last_audio
     
     def is_ready(self) -> bool:
         """Проверить, готов ли плеер к воспроизведению"""
@@ -270,3 +276,4 @@ class WelcomePlayer:
         self.state = WelcomeState.IDLE
         self._prerecorded_audio = None
         self._prerecorded_loaded = False
+        self._last_audio = None

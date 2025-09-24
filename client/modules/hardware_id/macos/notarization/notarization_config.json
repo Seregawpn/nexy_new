@@ -1,0 +1,61 @@
+{
+  "apple_id": "YOUR_APPLE_ID",
+  "app_specific_password": "YOUR_APP_SPECIFIC_PASSWORD",
+  "team_id": "YOUR_TEAM_ID",
+  "developer_id_application_cert_name": "Developer ID Application: Your Developer ID (XXXXXXXXXX)",
+  "bundle_identifier": "com.nexy.hardware.id",
+  "app_name": "NexyHardwareID",
+  "version": "1.0.0",
+  "description": "Hardware ID module for Nexy voice assistant",
+  "keywords": [
+    "hardware",
+    "uuid",
+    "identification",
+    "macos",
+    "system",
+    "profiler"
+  ],
+  "notarization_notes": {
+    "purpose": "Hardware identification for voice assistant",
+    "data_collection": "Only collects hardware UUID for device identification",
+    "privacy": "No personal data is collected or transmitted",
+    "security": "Uses system_profiler for hardware information retrieval"
+  },
+  "entitlements_required": [
+    "com.apple.security.app-sandbox",
+    "com.apple.security.automation.apple-events",
+    "com.apple.security.files.user-selected.read-write",
+    "com.apple.security.network.client",
+    "com.apple.security.device.usb",
+    "com.apple.security.temporary-exception.apple-events",
+    "com.apple.security.temporary-exception.system-information"
+  ],
+  "system_requirements": {
+    "minimum_macos_version": "10.15",
+    "supported_architectures": ["arm64", "x86_64"],
+    "python_version": "3.9+"
+  },
+  "build_configuration": {
+    "pyinstaller_options": [
+      "--onefile",
+      "--windowed",
+      "--target-architecture universal2",
+      "--osx-bundle-identifier com.nexy.hardware.id"
+    ],
+    "hidden_imports": [
+      "subprocess",
+      "json",
+      "os",
+      "pathlib",
+      "datetime",
+      "uuid",
+      "re",
+      "platform",
+      "sys",
+      "logging",
+      "tempfile",
+      "unittest",
+      "unittest.mock"
+    ]
+  }
+}
