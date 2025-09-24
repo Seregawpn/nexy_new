@@ -242,6 +242,8 @@ xcrun stapler staple "$DIST_DIR/$APP_NAME-signed.pkg"
 echo -e "${BLUE}✅ Шаг 8: Финальная проверка${NC}"
 
 log "Копируем финальное приложение в dist..."
+safe_copy "$CLEAN_APP" "$DIST_DIR/$APP_NAME-final.app"
+clean_xattrs "$DIST_DIR/$APP_NAME-final.app" "финальная копия"
 
 echo "=== ФИНАЛЬНАЯ ПРОВЕРКА ВСЕХ АРТЕФАКТОВ ==="
 echo ""
