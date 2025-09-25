@@ -15,14 +15,10 @@ cd "$TARGET_DIR"
 
 # Prefer Apple Silicon (arm64). Evermeet provides fresh builds.
 # Note: If this URL changes, replace with a known-good static ffmpeg (arm64) URL.
-FFMPEG_URL="https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
+FFMPEG_URL="https://github.com/eugeneware/ffmpeg-static/releases/download/b5.0.1/darwin-arm64"
 
-echo "⬇️  Downloading ffmpeg (zip) from: $FFMPEG_URL"
-curl -L -o ffmpeg.zip "$FFMPEG_URL"
-
-echo "📦 Unpacking..."
-unzip -o ffmpeg.zip >/dev/null
-rm -f ffmpeg.zip
+echo "⬇️  Downloading ffmpeg (binary) from: $FFMPEG_URL"
+curl -L -o ffmpeg "$FFMPEG_URL"
 
 # Ensure executable bit and remove quarantine (if present)
 chmod +x ffmpeg || true
