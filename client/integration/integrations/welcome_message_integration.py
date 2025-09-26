@@ -187,8 +187,13 @@ class WelcomeMessageIntegration:
         try:
             logger.info(f"🎵 [WELCOME_INTEGRATION] Отправляю аудио в SpeechPlaybackIntegration: {len(audio_data)} сэмплов")
             
-            # Конвертируем в PCM s16le mono для SpeechPlaybackIntegration
-            pcm_data = audio_data.astype(np.int16).tobytes()
+            # ОТЛАДКА: Проверяем формат данных
+            logger.info(f"🔍 [WELCOME_INTEGRATION] Формат данных: dtype={audio_data.dtype}, shape={audio_data.shape}")
+            logger.info(f"🔍 [WELCOME_INTEGRATION] Диапазон: min={audio_data.min()}, max={audio_data.max()}")
+            
+            # Данные уже приходят как int16 из audio_generator.py и welcome_player.py
+            # Просто конвертируем в bytes БЕЗ дополнительной конвертации
+            pcm_data = audio_data.tobytes()
             
             # Отправляем через playback.signal событие
             await self.event_bus.publish("playback.signal", {

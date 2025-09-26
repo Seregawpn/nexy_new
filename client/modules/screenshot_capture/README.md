@@ -68,14 +68,15 @@ result = await capture.capture_screenshot()
 
 ## 🔐 **ПРАВА ДОСТУПА**
 
-### macOS Entitlements:
-- ✅ **Screen Recording** - `com.apple.security.device.camera`
-- ✅ **Screen Capture** - `com.apple.security.device.screen-capture`
-- ✅ **System Events** - `com.apple.security.automation.apple-events`
+### macOS Entitlements (по необходимости):
+- ✅ **System Events** — `com.apple.security.automation.apple-events` (если отправляете Apple Events)
+- ✅ **Microphone** — `com.apple.security.device.audio-input` (если модуль использует микрофон и включён Sandbox)
+
+Примечание: для Screen Recording/Screen Capture отдельного entitlement нет. Доступ выдаётся пользователем в Системных настройках → Конфиденциальность и безопасность → Запись экрана.
 
 ### Info.plist:
 - **NSScreenCaptureUsageDescription**: "This app needs access to screen capture for screenshot functionality and visual analysis."
-- **NSCameraUsageDescription**: "This app needs access to screen recording for screenshot functionality."
+- (Опционально) **NSMicrophoneUsageDescription**: если используете микрофон в связке с захватом экрана
 
 ## 📱 **ИНТЕГРАЦИЯ С СУЩЕСТВУЮЩИМИ МОДУЛЯМИ**
 

@@ -1,0 +1,61 @@
+audio:
+  azure_audio_format: riff-48khz-16bit-mono-pcm
+  azure_speech_key: ''
+  azure_speech_pitch: 1.0
+  azure_speech_rate: 1.0
+  azure_speech_region: ''
+  azure_speech_volume: 1.0
+  azure_voice_name: en-US-AriaNeural
+  azure_voice_style: friendly
+  bits_per_sample: 16
+  channels: 1
+  chunk_size: 1024
+  format: int16
+  sample_rate: 48000
+  streaming_chunk_size: 4096
+  streaming_enabled: true
+database:
+  host: localhost
+  name: voice_assistant_db
+  password: ''
+  port: 5432
+  user: postgres
+grpc:
+  host: 0.0.0.0
+  max_workers: 10
+  port: 50051
+interrupt:
+  global_interrupt_timeout: 300
+  max_active_sessions: 50
+  session_interrupt_timeout: 60
+logging:
+  backup_count: 5
+  level: INFO
+  log_file: server.log
+  log_requests: true
+  log_responses: false
+  max_file_size: 10485760
+memory:
+  analysis_timeout: 5.0
+  gemini_api_key: ''
+  max_long_term_memory_size: 10240
+  max_short_term_memory_size: 10240
+  memory_analysis_model: gemini-1.5-flash
+  memory_analysis_temperature: 0.3
+  memory_timeout: 2.0
+session:
+  hardware_id_length: 32
+  max_sessions: 100
+  session_timeout: 3600
+text_processing:
+  circuit_breaker_threshold: 3
+  circuit_breaker_timeout: 300
+  fallback_timeout: 30
+  gemini_api_key: ''
+  gemini_max_tokens: 2048
+  gemini_model: gemini-2.0-flash-exp
+  gemini_temperature: 0.7
+  langchain_model: gemini-pro
+  langchain_temperature: 0.7
+  max_concurrent_requests: 10
+  request_timeout: 60

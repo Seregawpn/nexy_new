@@ -3,7 +3,7 @@ from typing import Optional
 from pathlib import Path
 
 # Загружаем переменные окружения из config.env
-config_path = Path(__file__).parent / "config.env"  # config.env в той же папке
+config_path = Path(__file__).parent.parent / "config.env"  # config.env в корне server/
 if config_path.exists():
     with open(config_path, 'r') as f:
         for line in f:

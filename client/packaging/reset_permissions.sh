@@ -28,7 +28,7 @@ echo ""
 echo "✅ TCC разрешения сброшены"
 echo ""
 echo "📝 Следующие шаги:"
-echo "1. Запустите приложение из ~/Applications/Nexy.app"
+echo "1. Запустите приложение из /Applications/Nexy.app"
 echo "2. Разрешите доступ к микрофону в системном диалоге"
 echo "3. В настройках macOS включите:"
 echo "   - Конфиденциальность → Доступность → Nexy"
@@ -40,7 +40,6 @@ echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_
 echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility\""
 echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture\""
 echo "   open \"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent\""
-
 
 
 

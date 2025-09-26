@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from integration.core.universal_provider_interface import UniversalProviderInterface
+from integrations.core.universal_provider_interface import UniversalProviderInterface
 
 logger = logging.getLogger(__name__)
 

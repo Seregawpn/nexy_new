@@ -1,45 +1,54 @@
 """
 Конфигурация модуля Text Processing
+Использует централизованную конфигурацию
 """
 
 import os
+import sys
 from typing import Dict, Any, Optional
+from pathlib import Path
+
+# Добавляем корневую директорию для импорта централизованной конфигурации
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+from config.unified_config import get_config
 
 class TextProcessingConfig:
     """Конфигурация модуля обработки текста"""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
-        Инициализация конфигурации
+        Инициализация конфигурации из централизованной системы
         
         Args:
-            config: Словарь с конфигурацией (опционально)
+            config: Словарь с конфигурацией (опционально, переопределяет централизованную)
         """
+        # Получаем централизованную конфигурацию
+        unified_config = get_config()
         self.config = config or {}
         
-        # Настройки провайдеров
-        self.gemini_api_key = os.getenv('GEMINI_API_KEY', '')
-        self.gemini_model = self.config.get('gemini_model', 'gemini-2.0-flash-exp')
-        self.gemini_temperature = self.config.get('gemini_temperature', 0.7)
-        self.gemini_max_tokens = self.config.get('gemini_max_tokens', 2048)
+        # Используем централизованные настройки с возможностью переопределения
+        self.gemini_api_key = self.config.get('gemini_api_key', unified_config.text_processing.gemini_api_key)
+        self.gemini_model = self.config.get('gemini_model', unified_config.text_processing.gemini_model)
+        self.gemini_temperature = self.config.get('gemini_temperature', unified_config.text_processing.gemini_temperature)
+        self.gemini_max_tokens = self.config.get('gemini_max_tokens', unified_config.text_processing.gemini_max_tokens)
         
         # Настройки LangChain
-        self.langchain_model = self.config.get('langchain_model', 'gemini-pro')
-        self.langchain_temperature = self.config.get('langchain_temperature', 0.7)
+        self.langchain_model = self.config.get('langchain_model', unified_config.text_processing.langchain_model)
+        self.langchain_temperature = self.config.get('langchain_temperature', unified_config.text_processing.langchain_temperature)
         
         # Настройки fallback
-        self.fallback_timeout = self.config.get('fallback_timeout', 30)
-        self.circuit_breaker_threshold = self.config.get('circuit_breaker_threshold', 3)
-        self.circuit_breaker_timeout = self.config.get('circuit_breaker_timeout', 300)
+        self.fallback_timeout = self.config.get('fallback_timeout', unified_config.text_processing.fallback_timeout)
+        self.circuit_breaker_threshold = self.config.get('circuit_breaker_threshold', unified_config.text_processing.circuit_breaker_threshold)
+        self.circuit_breaker_timeout = self.config.get('circuit_breaker_timeout', unified_config.text_processing.circuit_breaker_timeout)
         
         # Настройки логирования
-        self.log_level = self.config.get('log_level', 'INFO')
-        self.log_requests = self.config.get('log_requests', True)
-        self.log_responses = self.config.get('log_responses', False)
+        self.log_level = self.config.get('log_level', unified_config.logging.level)
+        self.log_requests = self.config.get('log_requests', unified_config.logging.log_requests)
+        self.log_responses = self.config.get('log_responses', unified_config.logging.log_responses)
         
         # Настройки производительности
-        self.max_concurrent_requests = self.config.get('max_concurrent_requests', 10)
-        self.request_timeout = self.config.get('request_timeout', 60)
+        self.max_concurrent_requests = self.config.get('max_concurrent_requests', unified_config.text_processing.max_concurrent_requests)
+        self.request_timeout = self.config.get('request_timeout', unified_config.text_processing.request_timeout)
         
     def get_provider_config(self, provider_name: str) -> Dict[str, Any]:
         """

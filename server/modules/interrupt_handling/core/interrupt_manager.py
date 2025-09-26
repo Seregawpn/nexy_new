@@ -15,7 +15,7 @@ from datetime import datetime
 # Добавляем путь к корневой директории сервера
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
-from integration.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
+from integrations.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
 from modules.interrupt_handling.config import InterruptHandlingConfig
 
 logger = logging.getLogger(__name__)

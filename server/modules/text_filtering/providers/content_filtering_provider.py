@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 # Добавляем путь к корневой директории сервера
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
-from integration.core.universal_provider_interface import UniversalProviderInterface, ProviderStatus
+from integrations.core.universal_provider_interface import UniversalProviderInterface, ProviderStatus
 
 logger = logging.getLogger(__name__)
 

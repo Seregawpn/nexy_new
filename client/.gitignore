@@ -4,6 +4,9 @@ dist/
 packaging/build/
 packaging/dist/
 *.spec
+*.pkg
+*.dmg
+*-app-for-notarization.zip
 
 # Python
 __pycache__/

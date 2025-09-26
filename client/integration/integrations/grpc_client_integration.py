@@ -374,6 +374,9 @@ class GrpcClientIntegration:
                     await self.event_bus.publish("grpc.response.audio", {
                         "session_id": session_id,
                         "dtype": getattr(ch, 'dtype', 'int16'),
+                        # Явно передаём метаданные формата, чтобы избежать искажений при воспроизведении
+                        "sample_rate": getattr(ch, 'sample_rate', None),
+                        "channels": getattr(ch, 'channels', None),
                         "shape": list(getattr(ch, 'shape', [])),
                         "bytes": bytes(getattr(ch, 'audio_data', b"")),
                     })

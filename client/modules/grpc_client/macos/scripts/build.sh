@@ -52,9 +52,9 @@ check_dependencies() {
         pip3 install PyInstaller
     fi
     
-    # Проверяем grpcio
-    if ! python3 -c "import grpcio" &> /dev/null; then
-        warning "grpcio не найден, устанавливаем..."
+    # Проверяем grpc
+    if ! python3 -c "import grpc" &> /dev/null; then
+        warning "grpc не найден, устанавливаем..."
         pip3 install grpcio grpcio-tools
     fi
     
@@ -105,8 +105,8 @@ a = Analysis(
         'grpc_client.core.health_checker',
         'grpc_client.core.connection_manager',
         'grpc_client.config.grpc_config',
-        'grpcio',
-        'grpcio.tools',
+        'grpc',
+        'grpc.tools',
         'asyncio',
         'logging',
         'typing',

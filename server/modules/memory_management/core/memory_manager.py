@@ -35,17 +35,28 @@ class MemoryManager:
         self.config = MemoryConfig()
         self.db_manager = db_manager
         self.memory_analyzer = None
+        self.is_initialized = False
         
-        # Инициализируем MemoryAnalyzer если доступен API ключ
-        if self.config.gemini_api_key and self.config.validate_config():
-            try:
-                self.memory_analyzer = MemoryAnalyzer(self.config.gemini_api_key)
-                logger.info("✅ MemoryAnalyzer initialized successfully")
-            except Exception as e:
-                logger.warning(f"⚠️ MemoryAnalyzer initialization failed: {e}")
-                self.memory_analyzer = None
-        else:
-            logger.warning("⚠️ MemoryAnalyzer not initialized - missing API key or invalid config")
+    async def initialize(self):
+        """Инициализация MemoryManager"""
+        try:
+            # Инициализируем MemoryAnalyzer если доступен API ключ
+            if self.config.gemini_api_key and self.config.validate_config():
+                try:
+                    self.memory_analyzer = MemoryAnalyzer(self.config.gemini_api_key)
+                    logger.info("✅ MemoryAnalyzer initialized successfully")
+                except Exception as e:
+                    logger.warning(f"⚠️ MemoryAnalyzer initialization failed: {e}")
+                    self.memory_analyzer = None
+            else:
+                logger.warning("⚠️ MemoryAnalyzer not initialized - missing API key or invalid config")
+            
+            self.is_initialized = True
+            logger.info("✅ MemoryManager initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ MemoryManager initialization failed: {e}")
+            raise
     
     def set_database_manager(self, db_manager):
         """

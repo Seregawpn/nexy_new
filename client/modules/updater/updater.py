@@ -110,6 +110,7 @@ class Updater:
     def relaunch_app(self):
         """Перезапуск приложения"""
         user_app_path = get_user_app_path()
+        logger.info("🔁 Updater: relaunching app after update, exiting current process")
         subprocess.Popen(["/usr/bin/open", "-a", user_app_path])
         os._exit(0)
     

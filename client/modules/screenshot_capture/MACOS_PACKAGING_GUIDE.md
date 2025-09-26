@@ -99,11 +99,10 @@ cp -r client/grpc_client "${APP_NAME}.app/Contents/Resources/"
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     
-    <!-- КРИТИЧЕСКИ ВАЖНО: Разрешения для screenshot_capture -->
+    <!-- Разрешения для screenshot_capture -->
     <key>NSScreenCaptureUsageDescription</key>
     <string>Nexy needs screen capture access to take screenshots for voice command processing and context analysis.</string>
-    <key>NSCameraUsageDescription</key>
-    <string>Nexy may use camera for visual input processing and context analysis.</string>
+    <!-- Камера не требуется для Screen Recording; добавляйте NSCameraUsageDescription только при реальном использовании камеры -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Nexy needs microphone access for voice recognition and processing.</string>
     <key>NSAppleEventsUsageDescription</key>
@@ -394,16 +393,10 @@ spctl --assess --verbose "${APP_NAME}.app"
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-    <key>com.apple.security.device.camera</key>
-    <true/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     
-    <!-- КРИТИЧЕСКИ ВАЖНО: Разрешения для screenshot_capture -->
-    <key>com.apple.security.device.screen-capture</key>
-    <true/>
-    <key>com.apple.security.device.camera</key>
-    <true/>
+    <!-- Для Screen Recording отдельного entitlement нет; доступ выдаётся пользователем в настройках -->
     
     <!-- Дополнительные разрешения -->
     <key>com.apple.security.files.downloads.read-write</key>

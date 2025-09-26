@@ -123,16 +123,26 @@ fi
 
 log "Сборка завершена успешно"
 
-# Шаг 2: Создание ЧИСТОЙ копии (КРИТИЧНО!)
-echo -e "${BLUE}📋 Шаг 2: Создание чистой копии${NC}"
-
-log "Создаем полностью чистую копию без extended attributes..."
-rm -rf "$CLEAN_APP"
-safe_copy "dist/$APP_NAME.app" "$CLEAN_APP"
-
-log "Проверяем и очищаем extended attributes..."
-clean_xattrs "$CLEAN_APP" "создание чистой копии"
-log "Extended attributes успешно очищены"
+    # Шаг 2: Создание ЧИСТОЙ копии (КРИТИЧНО!)
+    echo -e "${BLUE}📋 Шаг 2: Создание чистой копии${NC}"
+    
+    log "Создаем полностью чистую копию без extended attributes..."
+    rm -rf "$CLEAN_APP"
+    safe_copy "dist/$APP_NAME.app" "$CLEAN_APP"
+    
+    log "Проверяем и очищаем extended attributes..."
+    clean_xattrs "$CLEAN_APP" "создание чистой копии"
+    
+    # Дополнительная агрессивная очистка
+    log "Выполняем дополнительную очистку extended attributes..."
+    xattr -d com.apple.FinderInfo "$CLEAN_APP" 2>/dev/null || true
+    xattr -d com.apple.ResourceFork "$CLEAN_APP" 2>/dev/null || true
+    xattr -d com.apple.quarantine "$CLEAN_APP" 2>/dev/null || true
+    xattr -cr "$CLEAN_APP" || true
+    find "$CLEAN_APP" -name '._*' -delete || true
+    find "$CLEAN_APP" -name '.DS_Store' -delete || true
+    
+    log "Extended attributes успешно очищены"
 
 # Шаг 3: Подпись приложения (ПРАВИЛЬНЫЙ ПОРЯДОК!)
 echo -e "${BLUE}🔐 Шаг 3: Подпись приложения${NC}"
@@ -198,8 +208,34 @@ xcrun notarytool submit "$DIST_DIR/$APP_NAME-app-for-notarization.zip" \
 log "Прикрепляем нотаризационную печать..."
 xcrun stapler staple "$CLEAN_APP"
 
-# Шаг 6: Создание PKG (ПРАВИЛЬНЫЙ СПОСОБ!)
-echo -e "${BLUE}📦 Шаг 6: Создание PKG${NC}"
+# Шаг 6: Создание DMG
+echo -e "${BLUE}💿 Шаг 6: Создание DMG${NC}"
+
+DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
+TEMP_DMG="$DIST_DIR/$APP_NAME-temp.dmg"
+VOLUME_NAME="$APP_NAME"
+
+log "Создаем временный DMG..."
+APP_SIZE_KB=$(du -sk "$CLEAN_APP" | awk '{print $1}')
+DMG_SIZE_MB=$(( APP_SIZE_KB/1024 + 200 ))
+
+hdiutil create -volname "$VOLUME_NAME" -srcfolder "$CLEAN_APP" \
+    -fs HFS+ -format UDRW -size "${DMG_SIZE_MB}m" "$TEMP_DMG"
+
+MOUNT_DIR="/Volumes/$VOLUME_NAME"
+hdiutil attach "$TEMP_DMG" -readwrite -noverify -noautoopen >/dev/null
+ln -s /Applications "$MOUNT_DIR/Applications" || true
+hdiutil detach "$MOUNT_DIR" >/dev/null
+
+log "Финализируем DMG..."
+rm -f "$DMG_PATH"
+hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" >/dev/null
+rm -f "$TEMP_DMG"
+
+log "DMG создан: $DMG_PATH"
+
+# Шаг 7: Создание PKG (ПРАВИЛЬНЫЙ СПОСОБ!)
+echo -e "${BLUE}📦 Шаг 7: Создание PKG${NC}"
 
 log "Создаем временную папку для PKG..."
 rm -rf /tmp/nexy_pkg_clean_final
@@ -210,10 +246,14 @@ safe_copy "$CLEAN_APP" /tmp/nexy_pkg_clean_final/$APP_NAME.app
 clean_xattrs "/tmp/nexy_pkg_clean_final/$APP_NAME.app" "создание PKG"
 
 log "Создаем component PKG..."
+# Устанавливаем строго в системную папку приложений
+INSTALL_LOCATION="/Applications"
+log "Устанавливаем в: $INSTALL_LOCATION (системный домен)"
+
 pkgbuild --root /tmp/nexy_pkg_clean_final \
-    --identifier "$BUNDLE_ID" \
+    --identifier "${BUNDLE_ID}.pkg" \
     --version "$VERSION" \
-    --install-location /Applications \
+    --install-location "$INSTALL_LOCATION" \
     "$DIST_DIR/$APP_NAME-raw.pkg"
 
 log "Создаем distribution PKG..."
@@ -226,8 +266,8 @@ productsign --sign "$INSTALLER_IDENTITY" \
     "$DIST_DIR/$APP_NAME-distribution.pkg" \
     "$DIST_DIR/$APP_NAME-signed.pkg"
 
-# Шаг 7: Нотаризация PKG
-echo -e "${BLUE}📤 Шаг 7: Нотаризация PKG${NC}"
+# Шаг 8: Нотаризация PKG
+echo -e "${BLUE}📤 Шаг 8: Нотаризация PKG${NC}"
 
 log "Отправляем PKG на нотаризацию..."
 xcrun notarytool submit "$DIST_DIR/$APP_NAME-signed.pkg" \
@@ -238,12 +278,21 @@ xcrun notarytool submit "$DIST_DIR/$APP_NAME-signed.pkg" \
 log "Прикрепляем нотаризационную печать к PKG..."
 xcrun stapler staple "$DIST_DIR/$APP_NAME-signed.pkg"
 
-# Шаг 8: Финальная проверка
-echo -e "${BLUE}✅ Шаг 8: Финальная проверка${NC}"
-
-log "Копируем финальное приложение в dist..."
-safe_copy "$CLEAN_APP" "$DIST_DIR/$APP_NAME-final.app"
-clean_xattrs "$DIST_DIR/$APP_NAME-final.app" "финальная копия"
+    # Шаг 9: Финальная проверка
+    echo -e "${BLUE}✅ Шаг 9: Финальная проверка${NC}"
+    
+    log "Копируем финальное приложение в dist..."
+    safe_copy "$CLEAN_APP" "$DIST_DIR/$APP_NAME-final.app"
+    clean_xattrs "$DIST_DIR/$APP_NAME-final.app" "финальная копия"
+    
+    # Дополнительная агрессивная очистка перед финальной проверкой
+    log "Выполняем дополнительную очистку extended attributes..."
+    xattr -d com.apple.FinderInfo "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+    xattr -d com.apple.ResourceFork "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+    xattr -d com.apple.quarantine "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+    xattr -cr "$DIST_DIR/$APP_NAME-final.app" || true
+    find "$DIST_DIR/$APP_NAME-final.app" -name '._*' -delete || true
+    find "$DIST_DIR/$APP_NAME-final.app" -name '.DS_Store' -delete || true
 
 echo "=== ФИНАЛЬНАЯ ПРОВЕРКА ВСЕХ АРТЕФАКТОВ ==="
 echo ""
@@ -293,21 +342,24 @@ log "Очищаем временные файлы..."
 rm -rf /tmp/nexy_pkg_clean_final /tmp/nexy_final_check /tmp/nexy_final_extracted
 
 echo ""
-echo -e "${BLUE}🔄 Обновляем финальную копию без extended attributes...${NC}"
-rm -rf "$DIST_DIR/$APP_NAME-final.app"
-safe_copy "$CLEAN_APP" "$DIST_DIR/$APP_NAME-final.app"
-clean_xattrs "$DIST_DIR/$APP_NAME-final.app" "финальная копия"
+echo -e "${BLUE}🧹 Чистим лишние артефакты, оставляем только PKG и DMG...${NC}"
+# Удаляем промежуточные и лишние артефакты из dist
+rm -f "$DIST_DIR/$APP_NAME-app-for-notarization.zip" 2>/dev/null || true
+rm -f "$DIST_DIR/$APP_NAME-raw.pkg" 2>/dev/null || true
+rm -f "$DIST_DIR/$APP_NAME-distribution.pkg" 2>/dev/null || true
+rm -rf "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+rm -rf "$DIST_DIR/$APP_NAME.app" 2>/dev/null || true
 
 echo -e "${GREEN}🎉 УПАКОВКА ЗАВЕРШЕНА УСПЕШНО!${NC}"
 echo -e "${BLUE}📁 Результаты:${NC}"
-echo "  • Приложение: $DIST_DIR/$APP_NAME-final.app"
 echo "  • PKG: $DIST_DIR/$APP_NAME-signed.pkg"
-echo "  • Размер приложения: $(du -h "$DIST_DIR/$APP_NAME-final.app" | cut -f1)"
+echo "  • DMG: $DMG_PATH"
 echo "  • Размер PKG: $(du -h "$DIST_DIR/$APP_NAME-signed.pkg" | cut -f1)"
+echo "  • Размер DMG: $(du -h "$DMG_PATH" | cut -f1)"
 echo ""
 echo -e "${YELLOW}📋 Следующие шаги:${NC}"
-echo "  1. Протестируйте приложение: $DIST_DIR/$APP_NAME-final.app"
-echo "  2. Установите PKG: $DIST_DIR/$APP_NAME-signed.pkg"
+echo "  1. Установите приложение: ./install_nexy.sh"
+echo "  2. Или установите PKG: open $DIST_DIR/$APP_NAME-signed.pkg"
 echo "  3. Распространяйте PKG пользователям"
 echo ""
 echo -e "${GREEN}✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ!${NC}"

@@ -98,6 +98,10 @@ class PermissionsIntegration:
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
             
+            # КРИТИЧНО: Централизованно запрашиваем ВСЕ необходимые разрешения
+            logger.info("🔐 Запрашиваем все необходимые разрешения...")
+            await self._request_all_required_permissions()
+            
             # Настраиваем callbacks для PermissionManager (если метод существует)
             # Пропускаем add_callback - метод не реализован в PermissionManager
             
@@ -529,3 +533,37 @@ class PermissionsIntegration:
             if status != PermissionStatus.GRANTED:
                 return False
         return True
+    
+    async def _request_all_required_permissions(self):
+        """Централизованно запрашиваем все необходимые разрешения"""
+        try:
+            if not self.permission_manager:
+                logger.error("❌ PermissionManager не инициализирован")
+                return
+            
+            logger.info("🔐 Запрашиваем все необходимые разрешения централизованно...")
+            
+            # Получаем список необходимых разрешений из конфигурации
+            required_permissions = self.config.required_permissions if self.config else [
+                PermissionType.MICROPHONE,
+                PermissionType.SCREEN_CAPTURE,
+                PermissionType.NETWORK
+            ]
+            
+            # Запрашиваем все разрешения последовательно
+            for permission_type in required_permissions:
+                logger.info(f"🔐 Запрашиваем разрешение: {permission_type.value}")
+                result = await self.permission_manager.request_permission(permission_type)
+                
+                if result.success:
+                    logger.info(f"✅ Разрешение {permission_type.value} получено")
+                else:
+                    logger.warning(f"⚠️ Разрешение {permission_type.value} не получено: {result.message}")
+                
+                # Небольшая пауза между запросами
+                await asyncio.sleep(1)
+            
+            logger.info("✅ Централизованный запрос разрешений завершен")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка централизованного запроса разрешений: {e}")

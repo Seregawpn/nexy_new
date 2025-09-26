@@ -61,6 +61,7 @@ def migrate_to_user_directory() -> bool:
         logger.info("✅ Приложение запущено из ~/Applications")
         
         # Завершаем текущий процесс
+        logger.info("🔚 Migration: exiting current process after relaunch")
         os._exit(0)
         
     except Exception as e:

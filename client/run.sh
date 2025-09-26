@@ -8,8 +8,13 @@ echo "🚀 Запуск Nexy AI Assistant..."
 # Переходим в директорию скрипта
 cd "$(dirname "$0")"
 
-# Проверяем наличие виртуального окружения
-if [ ! -d "venv" ]; then
+# Проверяем наличие виртуального окружения (venv или .venv)
+VENV_DIR=""
+if [ -d "venv" ]; then
+    VENV_DIR="venv"
+elif [ -d ".venv" ]; then
+    VENV_DIR=".venv"
+else
     echo "❌ Виртуальное окружение не найдено!"
     echo "Создайте виртуальное окружение: python3 -m venv venv"
     echo "Установите зависимости: pip install -r requirements.txt"
@@ -17,10 +22,10 @@ if [ ! -d "venv" ]; then
 fi
 
 # Активируем виртуальное окружение
-source venv/bin/activate
+source "$VENV_DIR"/bin/activate
 
 # Проверяем, что зависимости установлены
-if ! python3 -c "import rumps, pynput, grpcio" 2>/dev/null; then
+if ! python3 -c "import rumps, pynput, grpc" 2>/dev/null; then
     echo "❌ Не все зависимости установлены!"
     echo "Установите зависимости: pip install -r requirements.txt"
     exit 1

@@ -135,6 +135,8 @@ class SpeechPlaybackIntegration:
             audio_bytes: bytes = data.get("bytes") or b""
             dtype: str = (data.get("dtype") or 'int16').lower()
             shape = data.get("shape") or []
+            src_sample_rate: Optional[int] = data.get("sample_rate")
+            src_channels: Optional[int] = data.get("channels")
             if not audio_bytes:
                 return
 
@@ -181,6 +183,7 @@ class SpeechPlaybackIntegration:
                     scaled = np.clip(arr, -1.0, 1.0) * 32767.0
                     arr = scaled.astype(np.int16)
                 # Если уже int16 - оставляем как есть (убираем лишние конвертации)
+                # Прочее приведение формата (ресемплинг/каналы) выполняет плеер на основе metadata
 
                 # Диагностика: логируем основы формата (без спамма)
                 try:
@@ -196,7 +199,15 @@ class SpeechPlaybackIntegration:
             # Добавляем чанк и запускаем/возобновляем воспроизведение
             try:
                 if self._player:
-                    self._player.add_audio_data(arr, priority=0, metadata={"session_id": sid})
+                    self._player.add_audio_data(
+                        arr,
+                        priority=0,
+                        metadata={
+                            "session_id": sid,
+                            "sample_rate": src_sample_rate,
+                            "channels": src_channels,
+                        },
+                    )
                     # Определяем текущее состояние плеера и корректно управляем
                     state = self._player.state_manager.get_state()
                     if state == PlaybackState.PAUSED:

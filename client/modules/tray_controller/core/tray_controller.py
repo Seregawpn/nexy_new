@@ -253,6 +253,7 @@ class TrayController:
         """Обработчик клика по выходу"""
         # 1) Сообщаем слушателям (например, интеграции), что пользователь инициировал выход
         try:
+            logger.info("🔚 Quit requested via tray menu (user action)")
             asyncio.create_task(self._publish_event("quit_clicked", {}))
             # 2) Завершаем приложение через rumps
             if self.tray_menu:

@@ -1,7 +1,6 @@
+#!/usr/bin/env python3
 """
-Основной координатор gRPC Service Module
-
-Интегрирует все модули через универсальный стандарт взаимодействия
+Новый GrpcServiceManager с интеграцией всех service интеграций
 """
 
 import asyncio
@@ -13,38 +12,65 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
 
-from integration.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
-from integration.core.universal_grpc_integration import UniversalGrpcIntegration
+from integrations.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
+from integrations.service_integrations.grpc_service_integration import GrpcServiceIntegration
+from integrations.service_integrations.module_coordinator_integration import ModuleCoordinatorIntegration
+from integrations.workflow_integrations.streaming_workflow_integration import StreamingWorkflowIntegration
+from integrations.workflow_integrations.memory_workflow_integration import MemoryWorkflowIntegration
+from integrations.workflow_integrations.interrupt_workflow_integration import InterruptWorkflowIntegration
+
+# Импорты модулей
+from modules.text_processing import TextProcessor
+from modules.audio_generation import AudioProcessor
+from modules.memory_management import MemoryManager
+from modules.database import DatabaseManager
+from modules.session_management import SessionManager
+from modules.interrupt_handling import InterruptManager
+
 from modules.grpc_service.config import GrpcServiceConfig
 
 logger = logging.getLogger(__name__)
 
-class GrpcServiceManager:
+class GrpcServiceManager(UniversalModuleInterface):
     """
-    Основной координатор gRPC сервиса
+    Новый GrpcServiceManager с полной интеграцией всех service интеграций
     
-    Управляет всеми модулями через универсальный стандарт взаимодействия
+    Использует новую архитектуру:
+    - Service интеграции для координации
+    - Workflow интеграции для потоков данных
+    - Модули для бизнес-логики
     """
     
     def __init__(self, config: Optional[GrpcServiceConfig] = None):
         """
-        Инициализация менеджера gRPC сервиса
+        Инициализация нового менеджера gRPC сервиса
         
         Args:
             config: Конфигурация gRPC сервиса
         """
+        # Инициализируем базовый класс
+        config_dict = config.__dict__ if config else {}
+        super().__init__("grpc_service", config_dict)
+        
         self.config = config or GrpcServiceConfig()
+        
+        # Модули
         self.modules: Dict[str, UniversalModuleInterface] = {}
-        self.integrations: Dict[str, UniversalGrpcIntegration] = {}
-        self.active_sessions: Dict[str, Dict[str, Any]] = {}
-        self.global_interrupt_flag = False
-        self.interrupt_hardware_id: Optional[str] = None
+        
+        # Workflow интеграции
+        self.streaming_workflow: Optional[StreamingWorkflowIntegration] = None
+        self.memory_workflow: Optional[MemoryWorkflowIntegration] = None
+        self.interrupt_workflow: Optional[InterruptWorkflowIntegration] = None
+        
+        # Service интеграции
+        self.grpc_service_integration: Optional[GrpcServiceIntegration] = None
+        self.module_coordinator: Optional[ModuleCoordinatorIntegration] = None
         
         logger.info("gRPC Service Manager created")
     
     async def initialize(self) -> bool:
         """
-        Инициализация всех модулей и интеграций
+        Инициализация нового менеджера gRPC сервиса
         
         Returns:
             True если инициализация успешна, False иначе
@@ -52,11 +78,21 @@ class GrpcServiceManager:
         try:
             logger.info("Initializing gRPC Service Manager...")
             
-            # Инициализируем все модули
+            # 1. Инициализируем все модули
             await self._initialize_modules()
             
-            # Инициализируем все интеграции
+            # 2. Создаем workflow интеграции
+            await self._create_workflow_integrations()
+            
+            # 3. Создаем service интеграции
+            await self._create_service_integrations()
+            
+            # 4. Инициализируем все интеграции
             await self._initialize_integrations()
+            
+            # Устанавливаем флаг инициализации и статус
+            self.is_initialized = True
+            self.set_status(ModuleStatus.READY)
             
             logger.info("gRPC Service Manager initialized successfully")
             return True
@@ -67,253 +103,292 @@ class GrpcServiceManager:
     
     async def _initialize_modules(self):
         """Инициализация всех модулей"""
-        # Импортируем и инициализируем модули
+        logger.info("Initializing modules...")
+        
         try:
-            # Text Processing Module
-            if self.config.is_module_enabled("text_processing"):
-                from modules.text_processing import TextProcessor
-                text_processor = TextProcessor()
-                await text_processor.initialize()
-                self.modules["text_processing"] = text_processor
-                logger.info("Text Processing Module initialized")
+            # Создаем модули
+            self.modules['text_processing'] = TextProcessor()
+            self.modules['audio_generation'] = AudioProcessor()
+            self.modules['memory_management'] = MemoryManager()
+            self.modules['database'] = DatabaseManager()
+            self.modules['session_management'] = SessionManager()
+            self.modules['interrupt_handling'] = InterruptManager()
             
-            # Audio Generation Module
-            if self.config.is_module_enabled("audio_generation"):
-                from modules.audio_generation import AudioProcessor
-                audio_processor = AudioProcessor()
-                await audio_processor.initialize()
-                self.modules["audio_generation"] = audio_processor
-                logger.info("Audio Generation Module initialized")
+            # Инициализируем модули
+            for name, module in self.modules.items():
+                try:
+                    await module.initialize()
+                    logger.info(f"✅ Module {name} initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize module {name}: {e}")
             
-            # Session Management Module
-            if self.config.is_module_enabled("session_management"):
-                from modules.session_management import SessionManager
-                session_manager = SessionManager()
-                await session_manager.initialize()
-                self.modules["session_management"] = session_manager
-                logger.info("Session Management Module initialized")
-            
-            # Database Module
-            if self.config.is_module_enabled("database"):
-                from modules.database import DatabaseManager
-                database_manager = DatabaseManager()
-                await database_manager.initialize()
-                self.modules["database"] = database_manager
-                logger.info("Database Module initialized")
-            
-            # Memory Management Module
-            if self.config.is_module_enabled("memory_management"):
-                from modules.memory_management import MemoryManager
-                memory_manager = MemoryManager()
-                await memory_manager.initialize()
-                self.modules["memory_management"] = memory_manager
-                logger.info("Memory Management Module initialized")
-                
         except Exception as e:
-            logger.error(f"Failed to initialize modules: {e}")
+            logger.error(f"❌ Error initializing modules: {e}")
+            raise
+    
+    async def _create_workflow_integrations(self):
+        """Создание workflow интеграций"""
+        logger.info("Creating workflow integrations...")
+        
+        try:
+            # Создаем workflow интеграции с модулями
+            self.streaming_workflow = StreamingWorkflowIntegration(
+                text_processor=self.modules.get('text_processing'),
+                audio_processor=self.modules.get('audio_generation'),
+                memory_workflow=None  # Будет установлен ниже
+            )
+            
+            self.memory_workflow = MemoryWorkflowIntegration(
+                memory_manager=self.modules.get('memory_management')
+            )
+            
+            self.interrupt_workflow = InterruptWorkflowIntegration(
+                interrupt_manager=self.modules.get('interrupt_handling')
+            )
+            
+            # Устанавливаем memory_workflow в streaming_workflow
+            self.streaming_workflow.memory_workflow = self.memory_workflow
+            
+            logger.info("✅ Workflow integrations created")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating workflow integrations: {e}")
+            raise
+    
+    async def _create_service_integrations(self):
+        """Создание service интеграций"""
+        logger.info("Creating service integrations...")
+        
+        try:
+            # Создаем service интеграции
+            self.grpc_service_integration = GrpcServiceIntegration(
+                streaming_workflow=self.streaming_workflow,
+                memory_workflow=self.memory_workflow,
+                interrupt_workflow=self.interrupt_workflow
+            )
+            
+            self.module_coordinator = ModuleCoordinatorIntegration(self.modules)
+            
+            logger.info("✅ Service integrations created")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating service integrations: {e}")
             raise
     
     async def _initialize_integrations(self):
         """Инициализация всех интеграций"""
+        logger.info("Initializing integrations...")
+        
         try:
-            # Создаем интеграции для каждого модуля
-            for module_name, module in self.modules.items():
-                integration = await self._create_integration(module_name, module)
-                if integration:
-                    await integration.initialize()
-                    self.integrations[module_name] = integration
-                    logger.info(f"Integration for {module_name} initialized")
-                    
+            # Инициализируем workflow интеграции
+            if self.streaming_workflow:
+                await self.streaming_workflow.initialize()
+                logger.info("✅ StreamingWorkflowIntegration initialized")
+            
+            if self.memory_workflow:
+                await self.memory_workflow.initialize()
+                logger.info("✅ MemoryWorkflowIntegration initialized")
+            
+            if self.interrupt_workflow:
+                await self.interrupt_workflow.initialize()
+                logger.info("✅ InterruptWorkflowIntegration initialized")
+            
+            # Инициализируем service интеграции
+            if self.grpc_service_integration:
+                await self.grpc_service_integration.initialize()
+                logger.info("✅ GrpcServiceIntegration initialized")
+            
+            if self.module_coordinator:
+                await self.module_coordinator.initialize()
+                logger.info("✅ ModuleCoordinatorIntegration initialized")
+            
         except Exception as e:
-            logger.error(f"Failed to initialize integrations: {e}")
+            logger.error(f"❌ Error initializing integrations: {e}")
             raise
     
-    async def _create_integration(self, module_name: str, module: UniversalModuleInterface) -> Optional[UniversalGrpcIntegration]:
-        """Создание интеграции для модуля"""
+    async def start(self) -> bool:
+        """Запуск gRPC сервиса"""
         try:
-            if module_name == "text_processing":
-                from modules.grpc_service.integrations.text_processing_integration import TextProcessingIntegration
-                return TextProcessingIntegration(module_name, module)
-            elif module_name == "audio_generation":
-                from modules.grpc_service.integrations.audio_generation_integration import AudioGenerationIntegration
-                return AudioGenerationIntegration(module_name, module)
-            elif module_name == "session_management":
-                from modules.grpc_service.integrations.session_management_integration import SessionManagementIntegration
-                return SessionManagementIntegration(module_name, module)
-            elif module_name == "database":
-                from modules.grpc_service.integrations.database_integration import DatabaseIntegration
-                return DatabaseIntegration(module_name, module)
-            elif module_name == "memory_management":
-                from modules.grpc_service.integrations.memory_management_integration import MemoryManagementIntegration
-                return MemoryManagementIntegration(module_name, module)
-            else:
-                logger.warning(f"No integration found for module: {module_name}")
-                return None
-                
+            logger.info("Starting gRPC Service Manager...")
+            
+            # Запускаем все модули через ModuleCoordinatorIntegration
+            if self.module_coordinator:
+                start_result = await self.module_coordinator.start_all_modules()
+                if not start_result.get('success', False):
+                    logger.error("Failed to start some modules")
+                    return False
+            
+            logger.info("gRPC Service Manager started successfully")
+            return True
+            
         except Exception as e:
-            logger.error(f"Failed to create integration for {module_name}: {e}")
-            return None
+            logger.error(f"Error starting gRPC Service Manager: {e}")
+            return False
     
-    async def process_stream_request(self, request_data: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    async def stop(self) -> bool:
+        """Остановка gRPC сервиса"""
+        try:
+            logger.info("Stopping gRPC Service Manager...")
+            
+            # Останавливаем все модули через ModuleCoordinatorIntegration
+            if self.module_coordinator:
+                stop_result = await self.module_coordinator.stop_all_modules()
+                if not stop_result.get('success', False):
+                    logger.error("Failed to stop some modules")
+                    return False
+            
+            logger.info("gRPC Service Manager stopped successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error stopping gRPC Service Manager: {e}")
+            return False
+    
+    async def process(self, input_data: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Обработка StreamRequest через все модули
+        Основная обработка данных через gRPC сервис
         
         Args:
-            request_data: Данные запроса
+            input_data: Входные данные для обработки
             
         Yields:
             Результаты обработки
         """
-        session_id = request_data.get("session_id", "unknown")
-        hardware_id = request_data.get("hardware_id", "unknown")
-        
         try:
-            # Регистрируем сессию
-            await self._register_session(session_id, hardware_id, request_data)
+            self.set_status(ModuleStatus.PROCESSING)
             
-            # Обрабатываем через Text Processing
-            if "text_processing" in self.integrations:
-                async for result in self.integrations["text_processing"].process_request(request_data):
-                    if self._should_interrupt(hardware_id):
-                        break
+            # Обрабатываем через GrpcServiceIntegration
+            if self.grpc_service_integration:
+                async for result in self.grpc_service_integration.process_request_complete(input_data):
                     yield result
-            
-            # Обрабатываем через Audio Generation
-            if "audio_generation" in self.integrations:
-                async for result in self.integrations["audio_generation"].process_request(request_data):
-                    if self._should_interrupt(hardware_id):
-                        break
-                    yield result
-            
-            # Обновляем память в фоне
-            if "memory_management" in self.integrations:
-                asyncio.create_task(
-                    self._update_memory_background(hardware_id, request_data)
-                )
+            else:
+                logger.error("GrpcServiceIntegration not available")
+                yield {
+                    'success': False,
+                    'text_response': '',
+                    'audio_chunks': [],
+                    'error': 'GrpcServiceIntegration not available'
+                }
                 
         except Exception as e:
-            logger.error(f"Error processing stream request: {e}")
-            yield {"error": str(e)}
+            logger.error(f"Error in gRPC Service Manager process: {e}")
+            yield {
+                'success': False,
+                'text_response': '',
+                'audio_chunks': [],
+                'error': str(e)
+            }
         finally:
-            # Очищаем сессию
-            await self._cleanup_session(session_id)
+            self.set_status(ModuleStatus.READY)
     
-    async def interrupt_session(self, hardware_id: str) -> Dict[str, Any]:
+    async def process_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Прерывание сессии для указанного hardware_id
+        Обработка запроса через новые интеграции (для совместимости)
         
         Args:
-            hardware_id: ID оборудования для прерывания
+            request_data: Данные запроса
             
         Returns:
-            Результат прерывания
+            Результат обработки
         """
         try:
-            logger.warning(f"Interrupting session for hardware_id: {hardware_id}")
+            logger.info(f"🔄 Processing request through integrated architecture...")
             
-            # Устанавливаем глобальный флаг прерывания
-            self.global_interrupt_flag = True
-            self.interrupt_hardware_id = hardware_id
-            
-            # Прерываем все интеграции
-            interrupted_sessions = []
-            for integration_name, integration in self.integrations.items():
-                try:
-                    success = await integration.interrupt(hardware_id)
-                    if success:
-                        interrupted_sessions.append(integration_name)
-                except Exception as e:
-                    logger.error(f"Error interrupting {integration_name}: {e}")
-            
-            # Очищаем активные сессии для этого hardware_id
-            sessions_to_remove = [
-                session_id for session_id, session_data in self.active_sessions.items()
-                if session_data.get("hardware_id") == hardware_id
-            ]
-            
-            for session_id in sessions_to_remove:
-                await self._cleanup_session(session_id)
-            
-            return {
-                "success": True,
-                "interrupted_sessions": interrupted_sessions,
-                "message": f"Session interrupted for hardware_id: {hardware_id}"
-            }
-            
+            # Получаем первый результат из process()
+            async for result in self.process(request_data):
+                return result
+                
         except Exception as e:
-            logger.error(f"Error interrupting session: {e}")
+            logger.error(f"Error in process_request: {e}")
             return {
-                "success": False,
-                "interrupted_sessions": [],
-                "message": f"Error interrupting session: {e}"
+                'success': False,
+                'text_response': '',
+                'audio_chunks': [],
+                'error': str(e)
             }
     
-    async def _register_session(self, session_id: str, hardware_id: str, request_data: Dict[str, Any]):
-        """Регистрация активной сессии"""
-        self.active_sessions[session_id] = {
-            "hardware_id": hardware_id,
-            "start_time": datetime.now(),
-            "request_data": request_data
-        }
-        logger.info(f"Session {session_id} registered for hardware_id: {hardware_id}")
-    
-    async def _cleanup_session(self, session_id: str):
-        """Очистка сессии"""
-        if session_id in self.active_sessions:
-            del self.active_sessions[session_id]
-            logger.info(f"Session {session_id} cleaned up")
-    
-    async def _update_memory_background(self, hardware_id: str, request_data: Dict[str, Any]):
-        """Обновление памяти в фоновом режиме"""
+    async def get_status(self) -> Dict[str, Any]:
+        """
+        Получение статуса gRPC сервиса
+        
+        Returns:
+            Словарь со статусом
+        """
         try:
-            if "memory_management" in self.integrations:
-                # Здесь можно добавить логику обновления памяти
-                pass
+            status = {
+                'module_name': 'grpc_service',
+                'is_initialized': self.is_initialized,
+                'status': 'ready' if self.is_initialized else 'not_initialized',
+                'modules_count': len(self.modules),
+                'modules_status': {}
+            }
+            
+            # Получаем статус модулей
+            for name, module in self.modules.items():
+                try:
+                    if hasattr(module, 'get_status'):
+                        module_status = await module.get_status()
+                        status['modules_status'][name] = module_status
+                    else:
+                        status['modules_status'][name] = 'no_status_method'
+                except Exception as e:
+                    status['modules_status'][name] = f'error: {str(e)}'
+            
+            # Получаем статус service интеграций
+            if self.grpc_service_integration:
+                status['grpc_service_integration'] = await self.grpc_service_integration.get_status()
+            
+            if self.module_coordinator:
+                status['module_coordinator'] = await self.module_coordinator.get_status()
+            
+            return status
+            
         except Exception as e:
-            logger.error(f"Error updating memory in background: {e}")
+            logger.error(f"Error getting status: {e}")
+            return {
+                'module_name': 'grpc_service',
+                'is_initialized': False,
+                'error': str(e)
+            }
     
-    def _should_interrupt(self, hardware_id: str) -> bool:
-        """Проверка, нужно ли прерывать обработку"""
-        return (
-            self.global_interrupt_flag and 
-            self.interrupt_hardware_id == hardware_id
-        )
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Получение статуса gRPC сервиса"""
-        return {
-            "active_sessions": len(self.active_sessions),
-            "modules": {
-                name: module.get_status() 
-                for name, module in self.modules.items()
-            },
-            "integrations": {
-                name: integration.get_status() 
-                for name, integration in self.integrations.items()
-            },
-            "global_interrupt_flag": self.global_interrupt_flag,
-            "interrupt_hardware_id": self.interrupt_hardware_id
-        }
-    
-    async def cleanup(self) -> bool:
-        """Очистка всех ресурсов"""
+    async def cleanup(self):
+        """Очистка ресурсов gRPC сервиса"""
         try:
             logger.info("Cleaning up gRPC Service Manager...")
             
-            # Очищаем все интеграции
-            for integration in self.integrations.values():
-                await integration.cleanup()
+            # Очищаем service интеграции
+            if self.grpc_service_integration:
+                await self.grpc_service_integration.cleanup()
+                logger.info("✅ GrpcServiceIntegration cleaned up")
             
-            # Очищаем все модули
-            for module in self.modules.values():
-                await module.cleanup()
+            if self.module_coordinator:
+                await self.module_coordinator.cleanup()
+                logger.info("✅ ModuleCoordinatorIntegration cleaned up")
             
-            # Очищаем активные сессии
-            self.active_sessions.clear()
+            # Очищаем модули
+            for name, module in self.modules.items():
+                try:
+                    if hasattr(module, 'cleanup'):
+                        await module.cleanup()
+                        logger.info(f"✅ Module {name} cleaned up")
+                except Exception as e:
+                    logger.error(f"❌ Error cleaning up module {name}: {e}")
             
-            logger.info("gRPC Service Manager cleaned up successfully")
-            return True
+            # Очищаем workflow интеграции
+            if self.streaming_workflow:
+                await self.streaming_workflow.cleanup()
+                logger.info("✅ StreamingWorkflowIntegration cleaned up")
+            
+            if self.memory_workflow:
+                await self.memory_workflow.cleanup()
+                logger.info("✅ MemoryWorkflowIntegration cleaned up")
+            
+            if self.interrupt_workflow:
+                await self.interrupt_workflow.cleanup()
+                logger.info("✅ InterruptWorkflowIntegration cleaned up")
+            
+            self.is_initialized = False
+            logger.info("✅ gRPC Service Manager cleaned up")
             
         except Exception as e:
-            logger.error(f"Error cleaning up gRPC Service Manager: {e}")
-            return False
+            logger.error(f"❌ Error cleaning up gRPC Service Manager: {e}")

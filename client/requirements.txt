@@ -48,7 +48,6 @@ pynput
 urllib3
 pynacl
 PyYAML            # ← Для чтения конфигурации
-pystray
 
 # =====================================================
 # PyObjC - ВСЕ НЕОБХОДИМЫЕ ФРЕЙМВОРКИ ДЛЯ macOS
@@ -56,6 +55,7 @@ pystray
 pyobjc-core
 pyobjc-framework-CoreAudio
 pyobjc-framework-AVFoundation
+pyobjc-framework-AppKit
 pyobjc-framework-Quartz
 pyobjc-framework-ApplicationServices
 pyobjc-framework-SystemConfiguration
@@ -73,5 +73,4 @@ aiohttp           # ← Для HTTP запросов и скачивания о�
 # =====================================================
 # ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ
 # =====================================================
-pathlib2          # ← Для совместимости с Python 3.6+
 psutil

@@ -1,50 +1,59 @@
 """
 Конфигурация модуля Audio Generation
+Использует централизованную конфигурацию
 """
 
 import os
+import sys
 from typing import Dict, Any, Optional
+from pathlib import Path
+
+# Добавляем корневую директорию для импорта централизованной конфигурации
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+from config.unified_config import get_config
 
 class AudioGenerationConfig:
     """Конфигурация модуля генерации аудио"""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
-        Инициализация конфигурации
+        Инициализация конфигурации из централизованной системы
         
         Args:
-            config: Словарь с конфигурацией (опционально)
+            config: Словарь с конфигурацией (опционально, переопределяет централизованную)
         """
+        # Получаем централизованную конфигурацию
+        unified_config = get_config()
         self.config = config or {}
         
-        # Настройки Azure TTS
-        self.azure_speech_key = os.getenv('AZURE_SPEECH_KEY', '')
-        self.azure_speech_region = os.getenv('AZURE_SPEECH_REGION', '')
-        self.azure_voice_name = self.config.get('azure_voice_name', 'en-US-AriaNeural')
-        self.azure_voice_style = self.config.get('azure_voice_style', 'friendly')
-        self.azure_speech_rate = self.config.get('azure_speech_rate', 1.0)
-        self.azure_speech_pitch = self.config.get('azure_speech_pitch', 1.0)
-        self.azure_speech_volume = self.config.get('azure_speech_volume', 1.0)
+        # Используем централизованные настройки с возможностью переопределения
+        self.azure_speech_key = self.config.get('azure_speech_key', unified_config.audio.azure_speech_key)
+        self.azure_speech_region = self.config.get('azure_speech_region', unified_config.audio.azure_speech_region)
+        self.azure_voice_name = self.config.get('azure_voice_name', unified_config.audio.azure_voice_name)
+        self.azure_voice_style = self.config.get('azure_voice_style', unified_config.audio.azure_voice_style)
+        self.azure_speech_rate = self.config.get('azure_speech_rate', unified_config.audio.azure_speech_rate)
+        self.azure_speech_pitch = self.config.get('azure_speech_pitch', unified_config.audio.azure_speech_pitch)
+        self.azure_speech_volume = self.config.get('azure_speech_volume', unified_config.audio.azure_speech_volume)
         
         # Настройки аудио формата
-        self.audio_format = self.config.get('audio_format', 'riff-16khz-16bit-mono-pcm')
-        self.sample_rate = self.config.get('sample_rate', 16000)
-        self.channels = self.config.get('channels', 1)
-        self.bits_per_sample = self.config.get('bits_per_sample', 16)
+        self.audio_format = self.config.get('audio_format', unified_config.audio.azure_audio_format)
+        self.sample_rate = self.config.get('sample_rate', unified_config.audio.sample_rate)
+        self.channels = self.config.get('channels', unified_config.audio.channels)
+        self.bits_per_sample = self.config.get('bits_per_sample', unified_config.audio.bits_per_sample)
         
         # Настройки производительности
-        self.max_concurrent_requests = self.config.get('max_concurrent_requests', 10)
-        self.request_timeout = self.config.get('request_timeout', 60)
+        self.max_concurrent_requests = self.config.get('max_concurrent_requests', unified_config.text_processing.max_concurrent_requests)
+        self.request_timeout = self.config.get('request_timeout', unified_config.text_processing.request_timeout)
         self.connection_timeout = self.config.get('connection_timeout', 30)
         
         # Настройки streaming
-        self.streaming_chunk_size = self.config.get('streaming_chunk_size', 4096)
-        self.streaming_enabled = self.config.get('streaming_enabled', True)
+        self.streaming_chunk_size = self.config.get('streaming_chunk_size', unified_config.audio.streaming_chunk_size)
+        self.streaming_enabled = self.config.get('streaming_enabled', unified_config.audio.streaming_enabled)
         
         # Настройки логирования
-        self.log_level = self.config.get('log_level', 'INFO')
-        self.log_requests = self.config.get('log_requests', True)
-        self.log_responses = self.config.get('log_responses', False)
+        self.log_level = self.config.get('log_level', unified_config.logging.level)
+        self.log_requests = self.config.get('log_requests', unified_config.logging.log_requests)
+        self.log_responses = self.config.get('log_responses', unified_config.logging.log_responses)
         
     def get_azure_config(self) -> Dict[str, Any]:
         """

@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import AsyncGenerator, Dict, Any, Optional, Set
 from dataclasses import dataclass, field
-from integration.core.universal_provider_interface import UniversalProviderInterface
+from integrations.core.universal_provider_interface import UniversalProviderInterface
 
 logger = logging.getLogger(__name__)
 

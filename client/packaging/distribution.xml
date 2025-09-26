@@ -2,9 +2,8 @@
 <installer-gui-script minSpecVersion="1">
     <title>Nexy</title>
     <options customize="never" require-scripts="false"/>
-    <!-- Разрешаем установку в профиль пользователя (без запроса пароля).
-         Для этого компонентный PKG должен быть собран с install-location "~/Applications". -->
-    <domains enable_localSystem="false" enable_currentUserHome="true"/>
+    <!-- Форсируем установку только в системный домен (/Applications) -->
+    <domains enable_localSystem="true" enable_currentUserHome="false"/>
     <choices-outline>
         <line choice="main"/>
     </choices-outline>

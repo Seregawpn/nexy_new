@@ -4,8 +4,8 @@ Fallback Manager для модуля Text Processing
 
 import logging
 from typing import List, Dict, Any, Optional, AsyncGenerator
-from integration.core.universal_fallback_manager import UniversalFallbackManager
-from integration.core.universal_provider_interface import UniversalProviderInterface
+from integrations.core.universal_fallback_manager import UniversalFallbackManager
+from integrations.core.universal_provider_interface import UniversalProviderInterface
 
 logger = logging.getLogger(__name__)
 

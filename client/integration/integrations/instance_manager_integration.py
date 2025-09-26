@@ -7,12 +7,15 @@ Instance Manager Integration
 
 import sys
 import asyncio
+import logging
 from typing import Optional, Dict, Any
 
 from modules.instance_manager import InstanceManager, InstanceStatus, InstanceManagerConfig
 from integration.core.error_handler import ErrorHandler
 from integration.core.state_manager import ApplicationStateManager
 from integration.core.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
 class InstanceManagerIntegration:
@@ -70,6 +73,10 @@ class InstanceManagerIntegration:
             if status == InstanceStatus.DUPLICATE:
                 # ДУБЛИРОВАНИЕ ОБНАРУЖЕНО - ЗАВЕРШАЕМ РАБОТУ
                 print("❌ Nexy уже запущен! Завершаем дубликат.")
+                try:
+                    logger.warning("🚫 InstanceManager: duplicate instance detected — exiting with code 1")
+                except Exception:
+                    pass
                 
                 # АУДИО-СИГНАЛ ДЛЯ НЕЗРЯЧИХ ПОЛЬЗОВАТЕЛЕЙ
                 try:
