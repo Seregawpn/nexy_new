@@ -4,6 +4,9 @@ StreamingWorkflowIntegration - управляет потоком: текст →
 """
 
 import logging
+import os
+import re
+import unicodedata
 from typing import Dict, Any, AsyncGenerator, Optional
 from datetime import datetime
 
@@ -15,7 +18,7 @@ class StreamingWorkflowIntegration:
     Управляет потоком обработки: получение текста → обработка → генерация аудио → стриминг клиенту
     """
     
-    def __init__(self, text_processor=None, audio_processor=None, memory_workflow=None):
+    def __init__(self, text_processor=None, audio_processor=None, memory_workflow=None, text_filter_manager=None):
         """
         Инициализация StreamingWorkflowIntegration
         
@@ -23,11 +26,26 @@ class StreamingWorkflowIntegration:
             text_processor: Модуль обработки текста
             audio_processor: Модуль генерации аудио
             memory_workflow: Workflow интеграция для работы с памятью
+            text_filter_manager: Менеджер фильтрации текста
         """
         self.text_processor = text_processor
         self.audio_processor = audio_processor
         self.memory_workflow = memory_workflow
+        self.text_filter_manager = text_filter_manager
         self.is_initialized = False
+        
+        # Единая неблокирующая буферизация и критерии флашинга (для текста и TTS одновременно)
+        self._stream_buffer: str = ""
+        self._has_emitted: bool = False
+        self._pending_segment: str = ""
+        self._processed_sentences: set = set()  # Для дедупликации
+        # Централизованные пороги (STREAM_*), с бэквард-фоллбеком на TTS_* (уменьшены для естественного воспроизведения)
+        self.stream_min_chars: int = int(os.getenv("STREAM_MIN_CHARS", os.getenv("TTS_MIN_CHARS", "15")))
+        self.stream_min_words: int = int(os.getenv("STREAM_MIN_WORDS", os.getenv("TTS_MIN_WORDS", "3")))
+        self.stream_first_sentence_min_words: int = int(os.getenv("STREAM_FIRST_SENTENCE_MIN_WORDS", os.getenv("TTS_FIRST_SENTENCE_MIN_WORDS", "2")))
+        self.stream_punct_flush_strict: bool = os.getenv("STREAM_PUNCT_FLUSH_STRICT", os.getenv("TTS_PUNCT_FLUSH_STRICT", "true")).lower() == "true"
+        self.sentence_joiner: str = " "
+        self.end_punctuations = ('.', '!', '?')
         
         logger.info("StreamingWorkflowIntegration создан")
     
@@ -50,6 +68,9 @@ class StreamingWorkflowIntegration:
             
             if not self.memory_workflow:
                 logger.warning("⚠️ MemoryWorkflow не предоставлен")
+            
+            if not self.text_filter_manager:
+                logger.warning("⚠️ TextFilterManager не предоставлен")
             
             self.is_initialized = True
             logger.info("✅ StreamingWorkflowIntegration инициализирован успешно")
@@ -87,8 +108,16 @@ class StreamingWorkflowIntegration:
             hardware_id = request_data.get('hardware_id', 'unknown')
             memory_context = await self._get_memory_context_parallel(hardware_id)
 
-            captured_sentences: list[str] = []
-            sentence_counter = 0
+            # Сбрасываем состояние перед новой сессией,
+            # иначе остатки из предыдущей обработки вызывают дублирование чанков
+            self._stream_buffer = ""
+            self._pending_segment = ""
+            self._has_emitted = False
+            self._processed_sentences.clear()
+
+            captured_segments: list[str] = []
+            input_sentence_counter = 0
+            emitted_segment_counter = 0
             total_audio_chunks = 0
             total_audio_bytes = 0
             sentence_audio_map: dict[int, int] = {}
@@ -98,43 +127,135 @@ class StreamingWorkflowIntegration:
                 request_data.get('screenshot'),
                 memory_context
             ):
-                sentence_counter += 1
+                input_sentence_counter += 1
+                logger.info(f"📝 In sentence #{input_sentence_counter}: '{sentence[:120]}{'...' if len(sentence) > 120 else ''}' (len={len(sentence)})")
+
+                # Единая буферизация: накапливаем, извлекаем завершенные предложения, агрегируем короткие
+                sanitized = await self._sanitize_for_tts(sentence)
+                if sanitized:
+                    # Дедупликация только на уровне очищенного текста (более мягкая)
+                    sanitized_hash = hash(sanitized.strip())
+                    if sanitized_hash in self._processed_sentences:
+                        logger.debug(f"🔄 Пропускаем дублированный очищенный текст: '{sanitized[:50]}...'")
+                        continue
+                    self._processed_sentences.add(sanitized_hash)
+                    
+                    self._stream_buffer = (f"{self._stream_buffer}{self.sentence_joiner}{sanitized}" if self._stream_buffer else sanitized)
+
+                complete_sentences, remainder = await self._split_complete_sentences(self._stream_buffer)
+                self._stream_buffer = remainder
+
+                for complete in complete_sentences:
+                    # Агрегируем короткие завершенные предложения до порогов
+                    candidate = complete if not self._pending_segment else f"{self._pending_segment}{self.sentence_joiner}{complete}"
+                    words_count = await self._count_meaningful_words(candidate)
+                    if (not self._has_emitted and (words_count >= self.stream_first_sentence_min_words or len(candidate) >= self.stream_min_chars)) or \
+                       (self._has_emitted and (words_count >= self.stream_min_words or len(candidate) >= self.stream_min_chars)):
+                        # Дедупликация финальных сегментов (только для очень коротких повторений)
+                        to_emit = candidate.strip()
+                        if len(to_emit) > 10:  # Только для длинных текстов применяем дедупликацию
+                            complete_hash = hash(to_emit)
+                            if complete_hash in self._processed_sentences:
+                                logger.debug(f"🔄 Пропускаем дублированный финальный сегмент: '{to_emit[:50]}...'")
+                                continue
+                            self._processed_sentences.add(complete_hash)
+                        
+                        # Готов к эмиссии
+                        emitted_segment_counter += 1
+                        self._pending_segment = ""
+                        self._has_emitted = True
+
+                        # Текст
+                        captured_segments.append(to_emit)
+                        yield {
+                            'success': True,
+                            'text_response': to_emit,
+                            'sentence_index': emitted_segment_counter
+                        }
+
+                        # Аудио (гарантируем завершающую пунктуацию для TTS)
+                        tts_text = to_emit if to_emit.endswith(self.end_punctuations) else f"{to_emit}."
+                        sentence_audio_chunks = 0
+                        async for audio_chunk in self._stream_audio_for_sentence(tts_text, emitted_segment_counter):
+                            if not audio_chunk:
+                                continue
+                            sentence_audio_chunks += 1
+                            total_audio_chunks += 1
+                            total_audio_bytes += len(audio_chunk)
+                            yield {
+                                'success': True,
+                                'audio_chunk': audio_chunk,
+                                'sentence_index': emitted_segment_counter,
+                                'audio_chunk_index': sentence_audio_chunks
+                            }
+
+                        sentence_audio_map[emitted_segment_counter] = sentence_audio_chunks
+                        logger.info(
+                            f"🎧 Segment #{emitted_segment_counter} → audio_chunks={sentence_audio_chunks}, total_audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}"
+                        )
+                    else:
+                        # Продолжаем копить
+                        self._pending_segment = candidate
+
+            # Финальный флаш: сначала обработаем завершенные предложения из буфера
+            if self._stream_buffer:
+                complete_sentences, remainder = await self._split_complete_sentences(self._stream_buffer)
+                self._stream_buffer = remainder
+                for complete in complete_sentences:
+                    candidate = complete if not self._pending_segment else f"{self._pending_segment}{self.sentence_joiner}{complete}"
+                    words_count = await self._count_meaningful_words(candidate)
+                    if (not self._has_emitted and (words_count >= self.stream_first_sentence_min_words or len(candidate) >= self.stream_min_chars)) or \
+                       (self._has_emitted and (words_count >= self.stream_min_words or len(candidate) >= self.stream_min_chars)):
+                        emitted_segment_counter += 1
+                        to_emit = candidate.strip()
+                        self._pending_segment = ""
+                        self._has_emitted = True
+                        captured_segments.append(to_emit)
+                        yield {'success': True, 'text_response': to_emit, 'sentence_index': emitted_segment_counter}
+                        tts_text = to_emit if to_emit.endswith(self.end_punctuations) else f"{to_emit}."
+                        sentence_audio_chunks = 0
+                        async for audio_chunk in self._stream_audio_for_sentence(tts_text, emitted_segment_counter):
+                            if not audio_chunk:
+                                continue
+                            sentence_audio_chunks += 1
+                            total_audio_chunks += 1
+                            total_audio_bytes += len(audio_chunk)
+                            yield {'success': True, 'audio_chunk': audio_chunk, 'sentence_index': emitted_segment_counter, 'audio_chunk_index': sentence_audio_chunks}
+                        sentence_audio_map[emitted_segment_counter] = sentence_audio_chunks
+                        logger.info(f"🎧 Final segment #{emitted_segment_counter} → audio_chunks={sentence_audio_chunks}, total_audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}")
+                    else:
+                        self._pending_segment = candidate
+
+            # Если остался незавершенный агрегат, можно форс-флаш, если очень длинный
+            force_max = int(os.getenv("STREAM_FORCE_FLUSH_MAX_CHARS", "0") or 0)
+            if self._pending_segment and force_max > 0 and len(self._pending_segment) >= force_max:
+                emitted_segment_counter += 1
+                to_emit = self._pending_segment
+                self._pending_segment = ""
+                self._has_emitted = True
+                captured_segments.append(to_emit)
+                yield {'success': True, 'text_response': to_emit, 'sentence_index': emitted_segment_counter}
+                tts_text = to_emit if to_emit.endswith(self.end_punctuations) else f"{to_emit}."
                 sentence_audio_chunks = 0
-                captured_sentences.append(sentence)
-
-                logger.info(f"📝 Sentence #{sentence_counter}: '{sentence[:120]}{'...' if len(sentence) > 120 else ''}'")
-                yield {
-                    'success': True,
-                    'text_response': sentence,
-                    'sentence_index': sentence_counter
-                }
-
-                async for audio_chunk in self._stream_audio_for_sentence(sentence, sentence_counter):
+                async for audio_chunk in self._stream_audio_for_sentence(tts_text, emitted_segment_counter):
                     if not audio_chunk:
                         continue
                     sentence_audio_chunks += 1
                     total_audio_chunks += 1
                     total_audio_bytes += len(audio_chunk)
-                    yield {
-                        'success': True,
-                        'audio_chunk': audio_chunk,
-                        'sentence_index': sentence_counter,
-                        'audio_chunk_index': sentence_audio_chunks
-                    }
+                    yield {'success': True, 'audio_chunk': audio_chunk, 'sentence_index': emitted_segment_counter, 'audio_chunk_index': sentence_audio_chunks}
+                sentence_audio_map[emitted_segment_counter] = sentence_audio_chunks
+                logger.info(f"🎧 Forced final segment #{emitted_segment_counter} → audio_chunks={sentence_audio_chunks}, total_audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}")
 
-                sentence_audio_map[sentence_counter] = sentence_audio_chunks
-                logger.info(
-                    f"🎧 Sentence #{sentence_counter} → audio_chunks={sentence_audio_chunks}, total_audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}"
-                )
+            full_text = " ".join(captured_segments).strip()
 
-            full_text = " ".join(captured_sentences).strip()
             logger.info(
-                f"✅ Запрос обработан успешно: sentences={sentence_counter}, audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}"
+                f"✅ Запрос обработан успешно: segments={emitted_segment_counter}, audio_chunks={total_audio_chunks}, total_bytes={total_audio_bytes}"
             )
             yield {
                 'success': True,
                 'text_full_response': full_text,
-                'sentences_processed': sentence_counter,
+                'sentences_processed': emitted_segment_counter,
                 'audio_chunks_processed': total_audio_chunks,
                 'audio_bytes_processed': total_audio_bytes,
                 'sentence_audio_map': sentence_audio_map,
@@ -213,6 +334,84 @@ class StreamingWorkflowIntegration:
                 if fallback_sentence:
                     yield fallback_sentence
 
+    async def _sanitize_for_tts(self, text: str) -> str:
+        """
+        Очистка текста для синтеза речи через модуль фильтрации
+        """
+        try:
+            if not text:
+                return ""
+            # Используем модуль фильтрации текста
+            if self.text_filter_manager:
+                result = await self.text_filter_manager.clean_text(text, {
+                    "remove_special_chars": True,
+                    "remove_extra_whitespace": True,
+                    "normalize_unicode": True,
+                    "remove_control_chars": True
+                })
+                if result.get("success"):
+                    return result.get("cleaned_text", text)
+            
+            # Fallback к простой очистке
+            import unicodedata
+            t = unicodedata.normalize("NFKC", text)
+            t = re.sub(r"[\u0000-\u001F\u007F]", "", t)
+            t = re.sub(r"\*\*?", "", t)
+            t = re.sub(r"(^|\s)[•\-\u2022]\s+", " ", t)
+            t = re.sub(r"[`~^_=+#|\\]", " ", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            return t
+        except Exception:
+            return (text or "").strip()
+
+    async def _split_complete_sentences(self, text: str) -> tuple[list[str], str]:
+        """
+        Разбиение текста на предложения через модуль фильтрации
+        """
+        try:
+            if not text:
+                return [], ""
+            
+            # Используем модуль фильтрации текста
+            if self.text_filter_manager:
+                result = await self.text_filter_manager.split_sentences(text)
+                if result.get("success"):
+                    return result.get("sentences", []), result.get("remainder", "")
+            
+            # Fallback к простому разбиению
+            import re
+            parts = re.split(r'([.!?]+)', text)
+            sentences = []
+            current = ""
+            for part in parts:
+                if part in '.!?':
+                    current += part
+                    if current.strip():
+                        sentences.append(current.strip())
+                    current = ""
+                else:
+                    current += part
+            return sentences, current.strip()
+        except Exception:
+            return [], text
+
+    async def _count_meaningful_words(self, text: str) -> int:
+        """
+        Подсчёт значимых слов через модуль фильтрации
+        """
+        try:
+            if not text:
+                return 0
+            
+            # Используем модуль фильтрации текста
+            if self.text_filter_manager:
+                return self.text_filter_manager.count_meaningful_words(text)
+            
+            # Fallback к простому подсчёту
+            return len([w for w in text.split() if w.strip()])
+        except Exception:
+            return len([w for w in text.split() if w.strip()])
+
     def _enrich_with_memory(self, text: str, memory_context: Optional[Dict[str, Any]]) -> str:
         """
         Объединение текста с контекстом памяти
@@ -250,12 +449,16 @@ class StreamingWorkflowIntegration:
             return
 
         try:
-            logger.debug(f"🔊 Генерация аудио для предложения #{sentence_index}: '{sentence[:80]}...'")
+            logger.info(f"🔊 Генерация аудио для предложения #{sentence_index}: '{sentence[:80]}...'")
+            chunk_count = 0
             async for audio_chunk in self.audio_processor.generate_speech_streaming(sentence):
                 if audio_chunk:
+                    chunk_count += 1
+                    logger.info(f"🔊 Audio chunk #{chunk_count} для предложения #{sentence_index}: {len(audio_chunk)} bytes")
                     yield audio_chunk
+            logger.info(f"✅ Аудио генерация завершена для предложения #{sentence_index}: {chunk_count} чанков")
         except Exception as audio_error:
-            logger.warning(f"⚠️ Ошибка генерации аудио для предложения #{sentence_index}: {audio_error}")
+            logger.error(f"❌ Ошибка генерации аудио для предложения #{sentence_index}: {audio_error}")
     
     def _split_into_sentences(self, text: str) -> list[str]:
         """

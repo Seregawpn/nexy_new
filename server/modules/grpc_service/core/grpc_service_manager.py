@@ -26,6 +26,7 @@ from modules.memory_management import MemoryManager
 from modules.database import DatabaseManager
 from modules.session_management import SessionManager
 from modules.interrupt_handling import InterruptManager
+from modules.text_filtering import TextFilterManager
 
 from modules.grpc_service.config import GrpcServiceConfig
 
@@ -113,6 +114,7 @@ class GrpcServiceManager(UniversalModuleInterface):
             self.modules['database'] = DatabaseManager()
             self.modules['session_management'] = SessionManager()
             self.modules['interrupt_handling'] = InterruptManager()
+            self.modules['text_filtering'] = TextFilterManager()
             
             # Инициализируем модули
             for name, module in self.modules.items():
@@ -157,10 +159,12 @@ class GrpcServiceManager(UniversalModuleInterface):
                 logger.info(f"   → audio_processor.is_initialized: {getattr(audio_processor, 'is_initialized', 'NO_ATTR')}")
             
             # Создаем workflow интеграции с модулями
+            text_filter_manager = self.modules.get('text_filtering')
             self.streaming_workflow = StreamingWorkflowIntegration(
                 text_processor=text_processor,
                 audio_processor=audio_processor,
-                memory_workflow=None  # Будет установлен ниже
+                memory_workflow=None,  # Будет установлен ниже
+                text_filter_manager=text_filter_manager
             )
             
             self.memory_workflow = MemoryWorkflowIntegration(

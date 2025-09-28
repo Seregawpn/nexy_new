@@ -98,9 +98,9 @@ class PermissionsIntegration:
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
             
-            # КРИТИЧНО: Централизованно запрашиваем ВСЕ необходимые разрешения
-            logger.info("🔐 Запрашиваем все необходимые разрешения...")
-            await self._request_all_required_permissions()
+            # КРИТИЧНО: Только проверяем разрешения, НЕ запрашиваем автоматически
+            logger.info("🔐 Проверяем статус разрешений...")
+            await self._check_all_permissions()
             
             # Настраиваем callbacks для PermissionManager (если метод существует)
             # Пропускаем add_callback - метод не реализован в PermissionManager
@@ -126,12 +126,12 @@ class PermissionsIntegration:
             
             logger.info("🚀 Запуск PermissionsIntegration...")
             
-            # Проверяем все разрешения
+            # Проверяем все разрешения (только статус, без запросов)
             await self._check_all_permissions()
             
-            # Запрашиваем обязательные разрешения если включено
-            if self.config.auto_open_preferences and not self._request_in_progress:
-                await self._request_required_permissions()
+            # НЕ запрашиваем разрешения автоматически - пользователь должен сделать это вручную
+            # if self.config.auto_open_preferences and not self._request_in_progress:
+            #     await self._request_required_permissions()
             
             # Запускаем мониторинг
             await self.permission_manager.start_monitoring()
@@ -233,9 +233,9 @@ class PermissionsIntegration:
                 return
             self._request_in_progress = True
 
-            # Выполняем последовательный сценарий запросов (главный поток для UI-диалогов)
-            if MACOS_IMPORTS_AVAILABLE:
-                await self._request_permissions_sequential()
+            # НЕ выполняем автоматические запросы - только проверяем статус
+            # if MACOS_IMPORTS_AVAILABLE:
+            #     await self._request_permissions_sequential()
 
             results = await self.permission_manager.request_required_permissions()
             
@@ -288,8 +288,9 @@ class PermissionsIntegration:
             AppHelper.callAfter(_mic_request)
             mic_granted = await mic_future
             logger.info(f"🎤 Microphone: {'granted' if mic_granted else 'denied'}")
-            if not mic_granted:
-                subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"], check=False)
+            # НЕ открываем настройки автоматически
+            # if not mic_granted:
+            #     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"], check=False)
 
             # 2) Screen Capture (blocking call, prefer main thread, but acceptable via worker)
             try:
@@ -306,16 +307,18 @@ class PermissionsIntegration:
                     # Выполняем запрос в отдельном потоке, чтобы не блокировать loop
                     sc_granted = await asyncio.to_thread(CGRequestScreenCaptureAccess)
                     logger.info(f"📸 ScreenCapture: {'granted' if sc_granted else 'denied'}")
-                    if not sc_granted:
-                        subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"], check=False)
+                    # НЕ открываем настройки автоматически
+                    # if not sc_granted:
+                    #     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"], check=False)
 
             # 3) Accessibility (prompt, no completion)
             try:
                 logger.info("♿ Проверка Accessibility...")
-                trusted = bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
-                if not trusted:
-                    subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], check=False)
-                    subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"], check=False)
+                trusted = bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: False}))  # НЕ показываем prompt
+                # НЕ открываем настройки автоматически
+                # if not trusted:
+                #     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], check=False)
+                #     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"], check=False)
             except Exception as e:
                 logger.warning(f"Accessibility request error: {e}")
 

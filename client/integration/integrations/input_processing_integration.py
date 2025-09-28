@@ -387,6 +387,24 @@ class InputProcessingIntegration:
                 "session_id": self._current_session_id
             })
 
+            # МГНОВЕННО останавливаем воспроизведение через единый канал прерывания
+            # Публикуем только если мы реально в PROCESSING, чтобы избежать дублей в LISTENING/SLEEPING
+            try:
+                current_mode = None
+                try:
+                    current_mode = self.state_manager.get_current_mode()
+                except Exception:
+                    current_mode = None
+                if current_mode == AppMode.PROCESSING:
+                    await self.event_bus.publish("playback.cancelled", {
+                        "session_id": self._current_session_id,
+                        "reason": "keyboard",
+                        "source": "input_processing"
+                    })
+                    logger.debug("SHORT_PRESS: playback.cancelled опубликовано (PROCESSING)")
+            except Exception:
+                pass
+
             # При коротком нажатии: только прерывание (уже выполнено на PRESS) и переход в SLEEPING
             await self.event_bus.publish("mode.request", {
                 "target": AppMode.SLEEPING,

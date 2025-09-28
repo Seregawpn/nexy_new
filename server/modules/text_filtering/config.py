@@ -22,7 +22,8 @@ class TextFilteringConfig:
                 "remove_special_chars": True,
                 "allowed_chars": r'[^\w\s\.\,\!\?\-\:\;\(\)\[\]\{\}\"\'@#$%&*+=<>/\\|~`]',
                 "normalize_unicode": True,
-                "remove_control_chars": True
+                "remove_control_chars": True,
+                "remove_markdown": True
             },
             
             # Настройки фильтрации контента

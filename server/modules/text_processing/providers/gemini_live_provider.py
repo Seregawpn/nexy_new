@@ -55,6 +55,7 @@ class GeminiLiveProvider(UniversalProviderInterface):
         self.max_tokens = config.get('max_tokens', 2048)
         self.media_resolution = config.get('media_resolution', 'MEDIA_RESOLUTION_HIGH')
         self.tools = config.get('tools', [])
+        self.system_prompt = config.get('system_prompt', '')
         self.api_key = config.get('api_key', '')
         
         # JPEG настройки
@@ -95,6 +96,22 @@ class GeminiLiveProvider(UniversalProviderInterface):
             config = {
                 "response_modalities": ["TEXT"]
             }
+            # Добавляем system_instruction если задан
+            if self.system_prompt:
+                logger.info(f"🔍 System prompt: '{self.system_prompt[:100]}...'")
+                try:
+                    # Если доступен types.Content, используем его, иначе строку
+                    if types and hasattr(types, 'Content') and hasattr(types, 'Part'):
+                        config["system_instruction"] = types.Content(
+                            parts=[types.Part.from_text(text=self.system_prompt)],
+                            role="user"
+                        )
+                        logger.info(f"✅ System instruction добавлен с role='user'")
+                    else:
+                        config["system_instruction"] = self.system_prompt
+                        logger.info(f"✅ System instruction добавлен как строка")
+                except Exception:
+                    config["system_instruction"] = self.system_prompt
             
             # Добавляем инструменты если есть (Google Search для этапа 3)
             if self.tools and "google_search" in self.tools:
@@ -147,6 +164,17 @@ class GeminiLiveProvider(UniversalProviderInterface):
             config = {
                 "response_modalities": ["TEXT"]
             }
+            if self.system_prompt:
+                try:
+                    if types and hasattr(types, 'Content') and hasattr(types, 'Part'):
+                        config["system_instruction"] = types.Content(
+                            parts=[types.Part.from_text(text=self.system_prompt)],
+                            role="user"
+                        )
+                    else:
+                        config["system_instruction"] = self.system_prompt
+                except Exception:
+                    config["system_instruction"] = self.system_prompt
             
             # Добавляем инструменты если есть (Google Search для этапа 3)
             if self.tools and "google_search" in self.tools:
@@ -162,10 +190,8 @@ class GeminiLiveProvider(UniversalProviderInterface):
                 # Получаем ответ
                 async for response in session.receive():
                     if response.text:
-                        sentences = self._split_into_sentences(response.text)
-                        for sentence in sentences:
-                            if sentence.strip():
-                                yield sentence.strip() + " "
+                        # НЕ разбиваем на предложения здесь - это делает StreamingWorkflowIntegration
+                        yield response.text
                     
                     # Обрабатываем инструменты (Google Search) - проверяем наличие атрибута
                     if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -201,6 +227,17 @@ class GeminiLiveProvider(UniversalProviderInterface):
             config = {
                 "response_modalities": ["TEXT"]
             }
+            if self.system_prompt:
+                try:
+                    if types and hasattr(types, 'Content') and hasattr(types, 'Part'):
+                        config["system_instruction"] = types.Content(
+                            parts=[types.Part.from_text(text=self.system_prompt)],
+                            role="user"
+                        )
+                    else:
+                        config["system_instruction"] = self.system_prompt
+                except Exception:
+                    config["system_instruction"] = self.system_prompt
             
             # НЕ добавляем media_resolution - модель не поддерживает
             
@@ -224,10 +261,8 @@ class GeminiLiveProvider(UniversalProviderInterface):
                 # Получаем ответ
                 async for response in session.receive():
                     if response.text:
-                        sentences = self._split_into_sentences(response.text)
-                        for sentence in sentences:
-                            if sentence.strip():
-                                yield sentence.strip() + " "
+                        # НЕ разбиваем на предложения здесь - это делает StreamingWorkflowIntegration
+                        yield response.text
                     
                     # Обрабатываем инструменты (Google Search) - проверяем наличие атрибута
                     if hasattr(response, 'tool_calls') and response.tool_calls:

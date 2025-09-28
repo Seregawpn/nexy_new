@@ -54,6 +54,9 @@ class MemoryAnalyzer:
         USER INPUT: {prompt}
         AI RESPONSE: {response}
         
+        CRITICAL: You MUST respond ONLY in English. Never use any other language.
+        If the conversation is in another language, understand it but respond in English.
+        
         Extract and categorize information into:
         
         1. SHORT-TERM MEMORY (current conversation context):
@@ -75,6 +78,7 @@ class MemoryAnalyzer:
         - Don't include generic information
         - Focus on what would be useful for future conversations
         - Separate short-term and long-term clearly
+        - ALWAYS write memory in English, regardless of the original language
         
         Return in this format:
         SHORT_TERM: [extracted short-term memory or empty]

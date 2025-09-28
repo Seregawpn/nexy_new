@@ -53,7 +53,7 @@ class MemoryManager:
             
             self.is_initialized = True
             logger.info("✅ MemoryManager initialized successfully")
-            
+            return True
         except Exception as e:
             logger.error(f"❌ MemoryManager initialization failed: {e}")
             raise
@@ -165,6 +165,10 @@ class MemoryManager:
             
             # Если есть что сохранять
             if short_memory or long_memory:
+                # Проверяем наличие менеджера базы данных
+                if not self.db_manager:
+                    logger.warning("⚠️ DatabaseManager is not set in MemoryManager; skipping memory update")
+                    return
                 # Обновляем память в базе данных
                 success = await asyncio.to_thread(
                     self.db_manager.update_user_memory,

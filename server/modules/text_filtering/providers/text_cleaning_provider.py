@@ -121,6 +121,17 @@ class TextCleaningProvider(UniversalProviderInterface):
                 cleaned_text = re.sub(allowed_chars, '', cleaned_text)
                 operations.append("remove_special_chars")
             
+            # Убираем markdown символы
+            if self.cleaning_config.get("remove_markdown", True):
+                # Удаляем markdown маркеры
+                cleaned_text = re.sub(r'\*\*?', '', cleaned_text)  # ** и *
+                cleaned_text = re.sub(r'`+', '', cleaned_text)     # ```
+                cleaned_text = re.sub(r'#+', '', cleaned_text)     # ###
+                cleaned_text = re.sub(r'_{2,}', '', cleaned_text)  # __
+                cleaned_text = re.sub(r'-{2,}', '', cleaned_text)  # --
+                cleaned_text = re.sub(r'={2,}', '', cleaned_text)  # ==
+                operations.append("remove_markdown")
+            
             # Нормализация Unicode
             if self.cleaning_config.get("normalize_unicode", True):
                 import unicodedata

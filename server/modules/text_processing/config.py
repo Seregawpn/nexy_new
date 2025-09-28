@@ -28,6 +28,7 @@ class TextProcessingConfig:
         
         # Используем централизованные настройки с возможностью переопределения
         self.gemini_api_key = self.config.get('gemini_api_key', unified_config.text_processing.gemini_api_key)
+        self.gemini_system_prompt = self.config.get('gemini_system_prompt', getattr(unified_config.text_processing, 'gemini_system_prompt', ''))
         
         # Live API настройки
         self.gemini_live_model = self.config.get('gemini_live_model', 'gemini-live-2.5-flash-preview')
@@ -73,6 +74,7 @@ class TextProcessingConfig:
                 'temperature': self.gemini_live_temperature,
                 'max_tokens': self.gemini_live_max_tokens,
                 'tools': self.gemini_live_tools,
+                'system_prompt': self.gemini_system_prompt,
                 'image_mime_type': self.image_mime_type,
                 'image_max_size': self.image_max_size,
                 'streaming_chunk_size': self.streaming_chunk_size,

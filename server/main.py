@@ -2,10 +2,14 @@ import asyncio
 import logging
 from aiohttp import web
 from grpc_server import run_server as serve
+from dotenv import load_dotenv
+
+# Загружаем config.env
+load_dotenv('config.env')
 
 # Импорт системы обновлений
 try:
-    from update_server import start_update_server, stop_update_server
+    from update_server import start_update_server, stop_update_server  # type: ignore[reportMissingImports]
     UPDATE_SERVER_AVAILABLE = True
     print("✅ Update Server импортирован успешно")
 except ImportError as e:
@@ -15,7 +19,7 @@ except ImportError as e:
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
+ 
 async def health_handler(request):
     """Health check для Container Apps"""
     return web.Response(text="OK", status=200)

@@ -239,9 +239,9 @@ class ContentFilteringProvider(UniversalProviderInterface):
             return "unknown"
         
         if cyrillic_count / total_alpha > 0.5:
-            return "ru"  # Русский/украинский
+            return "other"  # Other languages
         elif latin_count / total_alpha > 0.5:
-            return "en"  # Английский
+            return "en"  # English
         else:
             return "mixed"
     

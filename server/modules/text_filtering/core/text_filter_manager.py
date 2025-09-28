@@ -267,7 +267,7 @@ class TextFilterManager(UniversalModuleInterface):
     
     async def split_sentences(self, text: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Разбиение текста на предложения
+        Разбиение текста на предложения с учётом технических фраз
         
         Args:
             text: Текст для разбиения
@@ -278,7 +278,7 @@ class TextFilterManager(UniversalModuleInterface):
         """
         try:
             if not text:
-                return {"success": True, "sentences": [], "operations": []}
+                return {"success": True, "sentences": [], "remainder": "", "operations": []}
             
             # Если провайдер не инициализирован, используем простое разбиение
             if not hasattr(self, 'sentence_processing_provider'):
@@ -290,6 +290,31 @@ class TextFilterManager(UniversalModuleInterface):
         except Exception as e:
             logger.error(f"Error splitting sentences: {e}")
             return {"success": False, "error": str(e)}
+    
+    def count_meaningful_words(self, text: str) -> int:
+        """
+        Умный подсчёт значимых слов в тексте
+        
+        Args:
+            text: Текст для подсчёта
+            
+        Returns:
+            Количество значимых слов
+        """
+        try:
+            if not text:
+                return 0
+            
+            # Если провайдер инициализирован, используем его метод
+            if hasattr(self, 'sentence_processing_provider'):
+                return self.sentence_processing_provider.count_meaningful_words(text)
+            
+            # Fallback к простому подсчёту
+            return len([w for w in text.split() if w.strip()])
+            
+        except Exception as e:
+            logger.error(f"Error counting words: {e}")
+            return len([w for w in text.split() if w.strip()])
     
     async def validate_text(self, text: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
         """

@@ -246,9 +246,9 @@ class PermissionManager:
             print(instructions)
             print(f"{'='*60}\n")
             
-            # Открываем настройки если включено
-            if self.config.auto_open_preferences:
-                await self.macos_handler.open_privacy_preferences(permission_type)
+            # НЕ открываем настройки автоматически - пользователь должен сделать это вручную
+            # if self.config.auto_open_preferences:
+            #     await self.macos_handler.open_privacy_preferences(permission_type)
             
         except Exception as e:
             logger.error(f"❌ Ошибка показа инструкций {permission_type.value}: {e}")

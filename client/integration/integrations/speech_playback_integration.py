@@ -143,7 +143,10 @@ class SpeechPlaybackIntegration:
             src_sample_rate: Optional[int] = data.get("sample_rate")
             src_channels: Optional[int] = data.get("channels")
             if not audio_bytes:
+                logger.debug(f"🔇 Пустой аудио чанк для сессии {sid}")
                 return
+            
+            logger.info(f"🔊 Получен аудио чанк: {len(audio_bytes)} bytes, dtype={dtype}, shape={shape}, sr={src_sample_rate}, ch={src_channels} для сессии {sid}")
 
             # Инициализация плеера при первом чанке
             if self._player and not self._player.state_manager.is_playing and not self._player.state_manager.is_paused:
@@ -272,12 +275,10 @@ class SpeechPlaybackIntegration:
                         await self.event_bus.publish("playback.started", {"session_id": sid})
                 self._had_audio_for_session[sid] = True
 
-                # Обновляем метку времени последнего аудио и запускаем таймер тишины
+                # Обновляем метку времени последнего аудио (НЕ запускаем таймер тишины при каждом чанке)
                 try:
                     self._last_audio_ts = asyncio.get_event_loop().time()
-                    if self._silence_task and not self._silence_task.done():
-                        self._silence_task.cancel()
-                    self._silence_task = asyncio.create_task(self._finalize_on_silence(sid, timeout=1.0))
+                    # Таймер тишины запускается только после завершения gRPC потока
                 except Exception:
                     pass
             except Exception as e:
@@ -315,34 +316,10 @@ class SpeechPlaybackIntegration:
             sid = data.get("session_id")
             if sid is not None:
                 self._grpc_done_sessions[sid] = True
-            # Даем плееру доиграть буфер асинхронно
-            async def _drain_and_stop():
-                try:
-                    if self._player:
-                        # ожидаем опустошения буфера в отдельном потоке
-                        loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, self._player.wait_for_completion)
-                        # Небольшая задержка для дренажа устройства вывода
-                        try:
-                            drain_sec = max(0.05, min(0.25, (self.config['buffer_size'] / self.config['sample_rate']) * 4.0))
-                            await asyncio.sleep(drain_sec)
-                        except Exception:
-                            pass
-                        # Корректно останавливаем поток воспроизведения
-                        self._player.stop_playback()
-                    await self.event_bus.publish("playback.completed", {"session_id": sid})
-                    self._finalized_sessions[sid] = True
-                    # Возвращаем приложение в SLEEPING централизованно
-                    try:
-                        await self.event_bus.publish("mode.request", {
-                            "target": AppMode.SLEEPING,
-                            "source": "speech_playback"
-                        })
-                    except Exception:
-                        pass
-                except Exception as e:
-                    await self._handle_error(e, where="speech.drain_stop", severity="warning")
-            asyncio.create_task(_drain_and_stop())
+            # Запускаем таймер тишины для завершения воспроизведения
+            if self._silence_task and not self._silence_task.done():
+                self._silence_task.cancel()
+            self._silence_task = asyncio.create_task(self._finalize_on_silence(sid, timeout=3.0))
         except Exception as e:
             await self._handle_error(e, where="speech.on_grpc_completed", severity="warning")
 
@@ -394,8 +371,8 @@ class SpeechPlaybackIntegration:
             except Exception:
                 pass
             
-            # Останавливаем воспроизведение
-            if self._player:
+            # Останавливаем воспроизведение только если реально играем/на паузе
+            if self._player and self._player.state_manager.current_state in (PlaybackState.PLAYING, PlaybackState.PAUSED):
                 self._player.stop_playback()
             
             # Очищаем все сессии
@@ -555,7 +532,7 @@ class SpeechPlaybackIntegration:
             await self._handle_error(e, where="speech.on_grpc_cancel", severity="warning")
 
     # -------- Utils --------
-    async def _finalize_on_silence(self, sid, timeout: float = 1.5):
+    async def _finalize_on_silence(self, sid, timeout: float = 3.0):
         """Фолбэк: если после последнего чанка наступила тишина и плеер остановился — завершаем PROCESSING."""
         try:
             start = self._last_audio_ts

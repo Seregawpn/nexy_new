@@ -272,15 +272,16 @@ class SequentialSpeechPlayer:
             # Останавливаем поток воспроизведения
             self._stop_event.set()
             
-            # Ждем завершения потока
-            if self._playback_thread and self._playback_thread.is_alive():
-                self._playback_thread.join(timeout=5.0)
-            
-            # Останавливаем аудио поток
+            # МГНОВЕННО прерываем аудио: очищаем буферы и останавливаем поток до ожидания join
+            try:
+                self.chunk_buffer.clear_all()
+            except Exception:
+                pass
             self._stop_audio_stream()
             
-            # Очищаем буферы
-            self.chunk_buffer.clear_all()
+            # Ждем завершения потока
+            if self._playback_thread and self._playback_thread.is_alive():
+                self._playback_thread.join(timeout=1.0)
             
             # Переходим в состояние STOPPED
             self.state_manager.set_state(PlaybackState.IDLE)
@@ -490,6 +491,10 @@ class SequentialSpeechPlayer:
         # Ожидаем, пока буфер воспроизведения не будет пустым
         # Это означает, что весь чанк был воспроизведен
         while time.time() - start_time < timeout:
+            # Немедленный выход при запросе остановки
+            if self._stop_event.is_set():
+                logger.info(f"⏹️ Прерывание чанка {chunk_info.id} по stop_event")
+                return
             if not self.chunk_buffer.has_data:
                 logger.info(f"✅ Чанк {chunk_info.id} полностью воспроизведен")
                 return
