@@ -47,11 +47,11 @@ class AzureTTSProvider(UniversalProviderInterface):
         self.speech_pitch = config.get('speech_pitch', 1.0)
         self.speech_volume = config.get('speech_volume', 1.0)
         
-        # Аудио настройки
-        self.audio_format = config.get('audio_format', 'riff-16khz-16bit-mono-pcm')
-        self.sample_rate = config.get('sample_rate', 16000)
-        self.channels = config.get('channels', 1)
-        self.bits_per_sample = config.get('bits_per_sample', 16)
+        # Аудио настройки - используем централизованную конфигурацию
+        self.audio_format = config.get('audio_format')
+        self.sample_rate = config.get('sample_rate')
+        self.channels = config.get('channels')
+        self.bits_per_sample = config.get('bits_per_sample')
         
         # Таймауты
         self.timeout = config.get('timeout', 60)
@@ -86,9 +86,9 @@ class AzureTTSProvider(UniversalProviderInterface):
             # Настраиваем голос
             self.speech_config.speech_synthesis_voice_name = self.voice_name
             
-            # Настраиваем аудио формат
+            # Настраиваем аудио формат - стандартный формат 48kHz mono
             self.speech_config.set_speech_synthesis_output_format(
-                speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
+                speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm
             )
             
             # Создаем synthesizer
@@ -126,25 +126,25 @@ class AzureTTSProvider(UniversalProviderInterface):
             if not self.is_initialized or not self.synthesizer:
                 raise Exception("Azure TTS Provider not initialized")
             
-            # Создаем SSML для лучшего контроля голоса
-            ssml = self._create_ssml(input_data)
-            
-            # Выполняем синтез речи
-            result = self.synthesizer.speak_ssml_async(ssml).get()
+            # Используем простой текст вместо SSML для избежания ошибок парсинга
+            # result = self.synthesizer.speak_ssml_async(ssml).get()
+            result = self.synthesizer.speak_text_async(input_data).get()
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 # Получаем аудио данные
                 audio_data = result.audio_data
                 
                 if audio_data:
-                    # Разбиваем на chunks для streaming
-                    chunk_size = 4096  # 4KB chunks
-                    for i in range(0, len(audio_data), chunk_size):
-                        chunk = audio_data[i:i + chunk_size]
-                        if chunk:
-                            yield chunk
-                    
-                    logger.debug(f"Azure TTS Provider generated {len(audio_data)} bytes of audio")
+                    total_bytes = len(audio_data)
+                    logger.info(
+                        "AzureTTS → emitting full sentence audio: bytes=%s",
+                        total_bytes,
+                    )
+                    yield audio_data
+                    logger.info(
+                        "AzureTTS → total bytes=%s, chunks=1 (no internal split)",
+                        total_bytes,
+                    )
                 else:
                     raise Exception("No audio data generated")
                     
@@ -192,14 +192,13 @@ class AzureTTSProvider(UniversalProviderInterface):
         # Экранируем специальные символы
         escaped_text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
+        # Упрощенный SSML без mstts элементов
         ssml = f"""
         <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
             <voice name="{self.voice_name}">
-                <mstts:express-as style="{self.voice_style}" styledegree="1.0">
-                    <prosody rate="{self.speech_rate}" pitch="{self.speech_pitch}" volume="{self.speech_volume}">
-                        {escaped_text}
-                    </prosody>
-                </mstts:express-as>
+                <prosody rate="{self.speech_rate}" pitch="{self.speech_pitch}" volume="{self.speech_volume}">
+                    {escaped_text}
+                </prosody>
             </voice>
         </speak>
         """

@@ -117,10 +117,22 @@ class GrpcServiceManager(UniversalModuleInterface):
             # Инициализируем модули
             for name, module in self.modules.items():
                 try:
-                    await module.initialize()
+                    logger.info(f"🔍 ДИАГНОСТИКА: Инициализация модуля {name}")
+                    logger.info(f"   → module type: {type(module)}")
+                    logger.info(f"   → module object: {module}")
+                    
+                    result = await module.initialize()
+                    logger.info(f"   → initialize() result: {result}")
+                    
+                    # Проверяем состояние после инициализации
+                    if hasattr(module, 'is_initialized'):
+                        logger.info(f"   → module.is_initialized: {module.is_initialized}")
+                    
                     logger.info(f"✅ Module {name} initialized")
                 except Exception as e:
                     logger.error(f"❌ Failed to initialize module {name}: {e}")
+                    import traceback
+                    logger.error(f"❌ Traceback: {traceback.format_exc()}")
             
         except Exception as e:
             logger.error(f"❌ Error initializing modules: {e}")
@@ -131,10 +143,23 @@ class GrpcServiceManager(UniversalModuleInterface):
         logger.info("Creating workflow integrations...")
         
         try:
+            # ДИАГНОСТИКА: проверяем модули перед созданием интеграций
+            logger.info(f"🔍 ДИАГНОСТИКА: Создание workflow интеграций")
+            text_processor = self.modules.get('text_processing')
+            audio_processor = self.modules.get('audio_generation')
+            
+            logger.info(f"   → text_processor: {text_processor}")
+            logger.info(f"   → audio_processor: {audio_processor}")
+            
+            if text_processor:
+                logger.info(f"   → text_processor.is_initialized: {getattr(text_processor, 'is_initialized', 'NO_ATTR')}")
+            if audio_processor:
+                logger.info(f"   → audio_processor.is_initialized: {getattr(audio_processor, 'is_initialized', 'NO_ATTR')}")
+            
             # Создаем workflow интеграции с модулями
             self.streaming_workflow = StreamingWorkflowIntegration(
-                text_processor=self.modules.get('text_processing'),
-                audio_processor=self.modules.get('audio_generation'),
+                text_processor=text_processor,
+                audio_processor=audio_processor,
                 memory_workflow=None  # Будет установлен ниже
             )
             

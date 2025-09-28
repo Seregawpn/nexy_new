@@ -78,22 +78,9 @@ class ChunkBuffer:
         with self._buffer_lock:
             if new_ch == self._channels:
                 return
-            # Конвертируем существующий буфер, если он не пуст
-            if len(self._playback_buffer) > 0:
-                if new_ch == 1 and self._playback_buffer.shape[1] > 1:
-                    # downmix стерео → моно
-                    mixed = self._playback_buffer.mean(axis=1)
-                    self._playback_buffer = mixed.reshape(-1, 1).astype(self._dtype, copy=False)
-                elif new_ch == 2 and self._playback_buffer.shape[1] == 1:
-                    # дублирование моно → стерео
-                    mono = self._playback_buffer.reshape(-1)
-                    self._playback_buffer = np.column_stack([mono, mono]).astype(self._dtype, copy=False)
-                else:
-                    # Уже нужное количество
-                    pass
-            else:
-                # Переинициализируем пустой буфер
-                self._playback_buffer = np.zeros((0, new_ch), dtype=self._dtype)
+            # ✅ ПРАВИЛЬНО: Убраны конвертации каналов
+            # Буфер переинициализируется при смене каналов
+            self._playback_buffer = np.zeros((0, new_ch), dtype=self._dtype)
             self._channels = new_ch
     
     @property
@@ -210,24 +197,14 @@ class ChunkBuffer:
                 old_size = len(self._playback_buffer)
 
                 data = chunk_info.data
-                # Приводим dtype к буферному
-                if data.dtype != self._dtype:
-                    data = data.astype(self._dtype)
-                # Приводим форму к 2D (frames, channels)
+                # ✅ ПРАВИЛЬНО: Данные уже в правильном формате из SequentialSpeechPlayer
+                # Убраны все конвертации - плеер уже подготовил данные
+                
+                # Только проверяем форму (должна быть 2D)
                 if data.ndim == 1:
                     data = data.reshape(-1, 1)
-                # Приводим число каналов к буферному
-                if data.shape[1] != self._channels:
-                    if self._channels == 1 and data.shape[1] > 1:
-                        data = data.mean(axis=1).reshape(-1, 1).astype(self._dtype, copy=False)
-                    elif self._channels == 2 and data.shape[1] == 1:
-                        mono = data.reshape(-1)
-                        data = np.column_stack([mono, mono]).astype(self._dtype, copy=False)
-                    elif self._channels == 2 and data.shape[1] > 2:
-                        data = data[:, :2]
-                    else:
-                        # Нестандартный случай — последняя страховка
-                        data = np.column_stack([data[:, 0]] * self._channels).astype(self._dtype, copy=False)
+                elif data.ndim > 2:
+                    data = data.reshape(data.shape[0], -1)
 
                 # Добавляем в буфер (по rows)
                 if len(self._playback_buffer) == 0:

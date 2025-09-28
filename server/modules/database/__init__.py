@@ -15,3 +15,6 @@ from .config import DatabaseConfig
 
 __all__ = ['DatabaseManager', 'DatabaseConfig']
 __version__ = '1.0.0'
+
+
+

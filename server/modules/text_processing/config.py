@@ -28,13 +28,19 @@ class TextProcessingConfig:
         
         # Используем централизованные настройки с возможностью переопределения
         self.gemini_api_key = self.config.get('gemini_api_key', unified_config.text_processing.gemini_api_key)
-        self.gemini_model = self.config.get('gemini_model', unified_config.text_processing.gemini_model)
-        self.gemini_temperature = self.config.get('gemini_temperature', unified_config.text_processing.gemini_temperature)
-        self.gemini_max_tokens = self.config.get('gemini_max_tokens', unified_config.text_processing.gemini_max_tokens)
         
-        # Настройки LangChain
-        self.langchain_model = self.config.get('langchain_model', unified_config.text_processing.langchain_model)
-        self.langchain_temperature = self.config.get('langchain_temperature', unified_config.text_processing.langchain_temperature)
+        # Live API настройки
+        self.gemini_live_model = self.config.get('gemini_live_model', 'gemini-live-2.5-flash-preview')
+        self.gemini_live_temperature = self.config.get('gemini_live_temperature', 0.7)
+        self.gemini_live_max_tokens = self.config.get('gemini_live_max_tokens', 2048)
+        self.gemini_live_tools = self.config.get('gemini_live_tools', ['google_search'])
+        
+        # Настройки изображений
+        self.image_format = self.config.get('image_format', 'jpeg')
+        self.image_mime_type = self.config.get('image_mime_type', 'image/jpeg')
+        self.image_max_size = self.config.get('image_max_size', 10 * 1024 * 1024)
+        self.streaming_chunk_size = self.config.get('streaming_chunk_size', 8192)
+        
         
         # Настройки fallback
         self.fallback_timeout = self.config.get('fallback_timeout', unified_config.text_processing.fallback_timeout)
@@ -63,17 +69,15 @@ class TextProcessingConfig:
         provider_configs = {
             'gemini_live': {
                 'api_key': self.gemini_api_key,
-                'model': self.gemini_model,
-                'temperature': self.gemini_temperature,
-                'max_tokens': self.gemini_max_tokens,
+                'model': self.gemini_live_model,
+                'temperature': self.gemini_live_temperature,
+                'max_tokens': self.gemini_live_max_tokens,
+                'tools': self.gemini_live_tools,
+                'image_mime_type': self.image_mime_type,
+                'image_max_size': self.image_max_size,
+                'streaming_chunk_size': self.streaming_chunk_size,
                 'timeout': self.request_timeout
             },
-            'langchain': {
-                'model': self.langchain_model,
-                'temperature': self.langchain_temperature,
-                'api_key': self.gemini_api_key,
-                'timeout': self.request_timeout
-            }
         }
         
         return provider_configs.get(provider_name, {})
@@ -105,12 +109,12 @@ class TextProcessingConfig:
             return False
             
         # Проверяем корректность параметров
-        if not (0 <= self.gemini_temperature <= 2):
-            print("❌ gemini_temperature должен быть между 0 и 2")
+        if not (0 <= self.gemini_live_temperature <= 2):
+            print("❌ gemini_live_temperature должен быть между 0 и 2")
             return False
             
-        if self.gemini_max_tokens <= 0:
-            print("❌ gemini_max_tokens должен быть положительным")
+        if self.gemini_live_max_tokens <= 0:
+            print("❌ gemini_live_max_tokens должен быть положительным")
             return False
             
         if self.fallback_timeout <= 0:
@@ -128,11 +132,14 @@ class TextProcessingConfig:
         """
         return {
             'gemini_api_key_set': bool(self.gemini_api_key),
-            'gemini_model': self.gemini_model,
-            'gemini_temperature': self.gemini_temperature,
-            'gemini_max_tokens': self.gemini_max_tokens,
-            'langchain_model': self.langchain_model,
-            'langchain_temperature': self.langchain_temperature,
+            'gemini_live_model': self.gemini_live_model,
+            'gemini_live_temperature': self.gemini_live_temperature,
+            'gemini_live_max_tokens': self.gemini_live_max_tokens,
+            'gemini_live_tools': self.gemini_live_tools,
+            'image_format': self.image_format,
+            'image_mime_type': self.image_mime_type,
+            'image_max_size': self.image_max_size,
+            'streaming_chunk_size': self.streaming_chunk_size,
             'fallback_timeout': self.fallback_timeout,
             'circuit_breaker_threshold': self.circuit_breaker_threshold,
             'circuit_breaker_timeout': self.circuit_breaker_timeout,

@@ -25,8 +25,7 @@ import streaming_pb2_grpc
 from modules.grpc_service.core.grpc_service_manager import GrpcServiceManager
 from modules.interrupt_handling.core.interrupt_manager import InterruptManager
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Логирование настроено в main.py
 logger = logging.getLogger(__name__)
 
 def _get_dtype_string(dtype) -> str:
@@ -116,6 +115,7 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         hardware_id = request.hardware_id or "unknown"
         
         logger.info(f"📨 Получен StreamRequest: session={session_id}, hardware_id={hardware_id}")
+        logger.info(f"📨 StreamRequest данные: prompt_len={len(request.prompt)}, screenshot_len={len(request.screenshot) if request.screenshot else 0}")
         
         try:
             # В новом protobuf нет interrupt_flag в StreamRequest
@@ -142,51 +142,44 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 'session_id': session_id,
                 'interrupt_flag': False  # В новом protobuf нет interrupt_flag в StreamRequest
             }
+            logger.info(f"🔄 Request data подготовлен: text='{request.prompt[:50]}...', screenshot_exists={bool(request.screenshot)}")
             
-            # Получаем результат обработки
-            processing_result = await self.grpc_service_manager.process_request(request_data)
-            
-            if processing_result.get('success', False):
-                logger.info(f"✅ Запрос {session_id} успешно обработан")
-                
-                # Возвращаем текстовый ответ
-                text_response = processing_result.get('text_response', '')
-                if text_response:
-                    response = streaming_pb2.StreamResponse(
-                        text_chunk=text_response
+            # Потоковая обработка: передаём результаты по мере готовности
+            sent_any = False
+            logger.info(f"🔄 Начинаем потоковую обработку для {session_id}")
+            async for item in self.grpc_service_manager.process(request_data):
+                logger.info(f"🔄 Получен item от grpc_service_manager: {list(item.keys())}")
+                success = item.get('success', False)
+                if not success:
+                    err = item.get('error') or 'Ошибка обработки запроса'
+                    logger.error(f"❌ Ошибка обработки запроса {session_id}: {err}")
+                    yield streaming_pb2.StreamResponse(error_message=err)
+                    return
+                # Текст
+                txt = item.get('text_response')
+                if txt:
+                    logger.info(f"→ StreamAudio: sending text_chunk len={len(txt)} for session={session_id}")
+                    yield streaming_pb2.StreamResponse(text_chunk=txt)
+                    sent_any = True
+                # Одиночный аудио-чанк
+                ch = item.get('audio_chunk')
+                if isinstance(ch, (bytes, bytearray)) and len(ch) > 0:
+                    logger.info(f"→ StreamAudio: sending audio_chunk bytes={len(ch)} for session={session_id}")
+                    yield streaming_pb2.StreamResponse(
+                        audio_chunk=streaming_pb2.AudioChunk(audio_data=ch, dtype='int16', shape=[])
                     )
-                    yield response
-                
-                # Возвращаем аудио чанки если есть
-                audio_chunks = processing_result.get('audio_chunks', [])
-                for chunk_data in audio_chunks:
+                    sent_any = True
+                # Список аудио-чанков (на случай, если интеграция вернёт массив)
+                for idx, chunk_data in enumerate(item.get('audio_chunks') or []):
                     if chunk_data:
-                        # Преобразуем аудио данные в правильный формат
-                        audio_chunk = streaming_pb2.AudioChunk(
-                            audio_data=chunk_data,
-                            dtype="int16",
-                            shape=[len(chunk_data) if isinstance(chunk_data, (list, tuple)) else 1, 1]
+                        logger.info(f"→ StreamAudio: sending audio_chunk[{idx}] bytes={len(chunk_data)} for session={session_id}")
+                        yield streaming_pb2.StreamResponse(
+                            audio_chunk=streaming_pb2.AudioChunk(audio_data=chunk_data, dtype='int16', shape=[])
                         )
-                        
-                        response = streaming_pb2.StreamResponse(
-                            audio_chunk=audio_chunk
-                        )
-                        yield response
-                
-                # Отправляем сообщение о завершении
-                response = streaming_pb2.StreamResponse(
-                    end_message="Обработка завершена"
-                )
-                yield response
-                
-            else:
-                logger.error(f"❌ Ошибка обработки запроса {session_id}: {processing_result.get('error', 'Unknown error')}")
-                
-                response = streaming_pb2.StreamResponse(
-                    error_message=processing_result.get('error', 'Ошибка обработки запроса')
-                )
-                yield response
-        
+                        sent_any = True
+            # Завершение стрима
+            logger.info(f"→ StreamAudio: end_message for session={session_id} (sent_any={sent_any})")
+            yield streaming_pb2.StreamResponse(end_message="Обработка завершена")
         except Exception as e:
             logger.error(f"💥 Критическая ошибка в StreamRequest: {e}")
             import traceback

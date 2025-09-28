@@ -1,5 +1,6 @@
 """
-Миграция приложения из /Applications в ~/Applications
+Вспомогательные функции путей приложения.
+Политика установки: системный домен /Applications.
 """
 
 import os
@@ -24,11 +25,8 @@ def get_current_app_path() -> str:
     return "/Applications/Nexy.app"
 
 def get_user_app_path() -> str:
-    """Получение пути к пользовательской папке Applications"""
-    user_home = Path.home()
-    user_apps = user_home / "Applications"
-    user_apps.mkdir(exist_ok=True)
-    return str(user_apps / "Nexy.app")
+    """Возвращает целевой путь установки приложения (системный домен)."""
+    return "/Applications/Nexy.app"
 
 def migrate_to_user_directory() -> bool:
     """

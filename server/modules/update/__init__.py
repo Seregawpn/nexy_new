@@ -16,3 +16,6 @@ from .config import UpdateConfig
 
 __all__ = ['UpdateManager', 'UpdateConfig']
 __version__ = '1.0.0'
+
+
+

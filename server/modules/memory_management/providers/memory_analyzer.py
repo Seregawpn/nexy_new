@@ -44,7 +44,7 @@ class MemoryAnalyzer:
         genai.configure(api_key=gemini_api_key)
         
         # Настройки модели
-        self.model_name = "gemini-1.5-flash"
+        self.model_name = "gemini-2.5-flash-lite"
         self.temperature = 0.3
         
         # Промпт для анализа памяти

@@ -1,13 +1,13 @@
 """
-Text Processing Module - Обработка текста с использованием AI
+Text Processing Module - Обработка текста с использованием Live API
 
 Модуль предоставляет функциональность для:
-- Обработки текстовых запросов через Gemini Live API
-- Fallback на LangChain + Google Gemini
-- Универсальный интерфейс для всех провайдеров
-- Система fallback для надежности
+- Стриминговой обработки текстовых запросов через Gemini Live API
+- Поддержки JPEG изображений
+- Интеграции Google Search
+- Универсального интерфейса для Live API провайдера
 
-Совместим с существующим text_processor.py
+Реализован только со стриминговыми методами.
 """
 
 from .core.text_processor import TextProcessor

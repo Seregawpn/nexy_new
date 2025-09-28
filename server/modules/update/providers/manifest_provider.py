@@ -304,3 +304,6 @@ class ManifestProvider:
                 "provider": "manifest",
                 "error": str(e)
             }
+
+
+

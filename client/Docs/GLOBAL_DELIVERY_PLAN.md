@@ -271,8 +271,8 @@ xcrun notarytool store-credentials nexy-notary \
 
 Нотарификация с использованием профиля:
 ```bash
-xcrun notarytool submit Nexy-signed.pkg --keychain-profile nexy-notary --wait
-xcrun stapler staple Nexy-signed.pkg
+xcrun notarytool submit Nexy.pkg --keychain-profile nexy-notary --wait
+xcrun stapler staple Nexy.pkg
 ```
 
 ### Подпись .app и .pkg (шаблон команд)
@@ -284,11 +284,11 @@ codesign --deep --force --options runtime \
 
 # Сборка и подпись инсталлятора (.pkg)
 productbuild --component Nexy.app /Applications Nexy.pkg
-productsign --sign "Developer ID Installer: <Your Name> (5NKLL2CLB9)" Nexy.pkg Nexy-signed.pkg
+productsign --sign "Developer ID Installer: <Your Name> (5NKLL2CLB9)" Nexy.pkg Nexy.pkg
 
 # Нотарификация и степлинг
-xcrun notarytool submit Nexy-signed.pkg --keychain-profile nexy-notary --wait
-xcrun stapler staple Nexy-signed.pkg
+xcrun notarytool submit Nexy.pkg --keychain-profile nexy-notary --wait
+xcrun stapler staple Nexy.pkg
 ```
 
 ### Sparkle (обновления)

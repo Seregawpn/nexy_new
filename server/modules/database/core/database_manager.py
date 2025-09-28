@@ -635,7 +635,7 @@ class DatabaseManager:
         """
         summary = {
             "is_initialized": self.is_initialized,
-            "postgresql_provider_available": self.postgresql_provider.is_available if self.postgresql_provider else False,
+            "postgresql_provider_available": self.postgresql_provider.is_initialized if self.postgresql_provider else False,
             "config_valid": self.config.validate(),
             "security_settings": self.get_security_settings(),
             "performance_settings": self.get_performance_settings()
@@ -652,6 +652,6 @@ class DatabaseManager:
         return (
             f"DatabaseManager("
             f"initialized={self.is_initialized}, "
-            f"postgresql_provider_available={self.postgresql_provider.is_available if self.postgresql_provider else False}"
+            f"postgresql_provider_available={self.postgresql_provider.is_initialized if self.postgresql_provider else False}"
             f")"
         )

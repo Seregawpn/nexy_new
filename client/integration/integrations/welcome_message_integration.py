@@ -191,16 +191,13 @@ class WelcomeMessageIntegration:
             logger.info(f"🔍 [WELCOME_INTEGRATION] Формат данных: dtype={audio_data.dtype}, shape={audio_data.shape}")
             logger.info(f"🔍 [WELCOME_INTEGRATION] Диапазон: min={audio_data.min()}, max={audio_data.max()}")
             
-            # Данные уже приходят как int16 из audio_generator.py и welcome_player.py
-            # Просто конвертируем в bytes БЕЗ дополнительной конвертации
-            pcm_data = audio_data.tobytes()
-            
-            # Отправляем через playback.signal событие
-            await self.event_bus.publish("playback.signal", {
-                "pcm": pcm_data,
+            # ✅ ПРАВИЛЬНО: Передаем numpy массив напрямую в плеер
+            # БЕЗ конвертации в bytes - плеер сам разберется с форматом
+            await self.event_bus.publish("playback.raw_audio", {
+                "audio_data": audio_data,  # numpy array
                 "sample_rate": self.config.sample_rate,
                 "channels": self.config.channels,
-                "gain": self.config.volume,
+                "dtype": "int16",  # для информации
                 "priority": 5,  # Высокий приоритет для приветствия
                 "pattern": "welcome_message"
             })

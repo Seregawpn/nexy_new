@@ -234,21 +234,34 @@ rm -f "$TEMP_DMG"
 
 log "DMG создан: $DMG_PATH"
 
-# Шаг 7: Создание PKG (ПРАВИЛЬНЫЙ СПОСОБ!)
-echo -e "${BLUE}📦 Шаг 7: Создание PKG${NC}"
+# Шаг 7: Нотаризация DMG
+echo -e "${BLUE}📤 Шаг 7: Нотаризация DMG${NC}"
+
+log "Отправляем DMG на нотаризацию..."
+xcrun notarytool submit "$DMG_PATH" \
+    --keychain-profile "nexy-notary" \
+    --apple-id "seregawpn@gmail.com" \
+    --wait
+
+log "Прикрепляем нотаризационную печать к DMG..."
+xcrun stapler staple "$DMG_PATH"
+
+# Шаг 8: Создание PKG (ПРАВИЛЬНЫЙ СПОСОБ!)
+echo -e "${BLUE}📦 Шаг 8: Создание PKG${NC}"
 
 log "Создаем временную папку для PKG..."
 rm -rf /tmp/nexy_pkg_clean_final
 mkdir -p /tmp/nexy_pkg_clean_final
 
-log "Копируем нотаризованное приложение..."
-safe_copy "$CLEAN_APP" /tmp/nexy_pkg_clean_final/$APP_NAME.app
-clean_xattrs "/tmp/nexy_pkg_clean_final/$APP_NAME.app" "создание PKG"
+log "Копируем нотаризованное приложение в правильную структуру..."
+mkdir -p /tmp/nexy_pkg_clean_final/Applications
+safe_copy "$CLEAN_APP" /tmp/nexy_pkg_clean_final/Applications/$APP_NAME.app
+clean_xattrs "/tmp/nexy_pkg_clean_final/Applications/$APP_NAME.app" "создание PKG"
 
 log "Создаем component PKG..."
-# Устанавливаем строго в системную папку приложений
-INSTALL_LOCATION="/Applications"
-log "Устанавливаем в: $INSTALL_LOCATION (системный домен)"
+# Устанавливаем в корень, так как приложение уже в папке Applications/
+INSTALL_LOCATION="/"
+log "Устанавливаем в: $INSTALL_LOCATION (приложение уже в Applications/)"
 
 pkgbuild --root /tmp/nexy_pkg_clean_final \
     --identifier "${BUNDLE_ID}.pkg" \
@@ -264,22 +277,22 @@ productbuild --package-path "$DIST_DIR" \
 log "Подписываем PKG правильным сертификатом..."
 productsign --sign "$INSTALLER_IDENTITY" \
     "$DIST_DIR/$APP_NAME-distribution.pkg" \
-    "$DIST_DIR/$APP_NAME-signed.pkg"
+    "$DIST_DIR/$APP_NAME.pkg"
 
-# Шаг 8: Нотаризация PKG
-echo -e "${BLUE}📤 Шаг 8: Нотаризация PKG${NC}"
+# Шаг 9: Нотаризация PKG
+echo -e "${BLUE}📤 Шаг 9: Нотаризация PKG${NC}"
 
 log "Отправляем PKG на нотаризацию..."
-xcrun notarytool submit "$DIST_DIR/$APP_NAME-signed.pkg" \
+xcrun notarytool submit "$DIST_DIR/$APP_NAME.pkg" \
     --keychain-profile "nexy-notary" \
     --apple-id "seregawpn@gmail.com" \
     --wait
 
 log "Прикрепляем нотаризационную печать к PKG..."
-xcrun stapler staple "$DIST_DIR/$APP_NAME-signed.pkg"
+xcrun stapler staple "$DIST_DIR/$APP_NAME.pkg"
 
-    # Шаг 9: Финальная проверка
-    echo -e "${BLUE}✅ Шаг 9: Финальная проверка${NC}"
+    # Шаг 10: Финальная проверка
+    echo -e "${BLUE}✅ Шаг 10: Финальная проверка${NC}"
     
     log "Копируем финальное приложение в dist..."
     safe_copy "$CLEAN_APP" "$DIST_DIR/$APP_NAME-final.app"
@@ -312,13 +325,13 @@ fi
 
 echo ""
 echo "2. PKG:"
-if pkgutil --check-signature "$DIST_DIR/$APP_NAME-signed.pkg"; then
+if pkgutil --check-signature "$DIST_DIR/$APP_NAME.pkg"; then
     log "Подпись PKG корректна"
 else
     error "Подпись PKG не прошла проверку"
 fi
 
-if xcrun stapler validate "$DIST_DIR/$APP_NAME-signed.pkg"; then
+if xcrun stapler validate "$DIST_DIR/$APP_NAME.pkg"; then
     log "Нотаризация PKG корректна"
 else
     error "Нотаризация PKG не прошла проверку"
@@ -326,12 +339,42 @@ fi
 
 echo ""
 echo "3. ПРОВЕРКА СОДЕРЖИМОГО PKG:"
-pkgutil --expand "$DIST_DIR/$APP_NAME-signed.pkg" /tmp/nexy_final_check
-tar -xf /tmp/nexy_final_check/Payload -C /tmp/nexy_final_extracted
+pkgutil --expand "$DIST_DIR/$APP_NAME.pkg" /tmp/nexy_final_check
+
+# Находим вложенный component PKG внутри distribution PKG
+NESTED_PKG_DIR=$(find /tmp/nexy_final_check -maxdepth 2 -type d -name "*.pkg" | head -n1)
+if [ -z "$NESTED_PKG_DIR" ]; then
+    error "Не удалось найти вложенный .pkg внутри distribution PKG"
+fi
+
+# Проверяем install-location в PackageInfo
+if [ ! -f "$NESTED_PKG_DIR/PackageInfo" ]; then
+    error "PackageInfo не найден во вложенном PKG"
+fi
+
+PKG_INSTALL_LOCATION=$(grep -o 'install-location="[^"]*"' "$NESTED_PKG_DIR/PackageInfo" | sed 's/install-location="\(.*\)"/\1/')
+echo "install-location во вложенном PKG: ${PKG_INSTALL_LOCATION}"
+if [ "$PKG_INSTALL_LOCATION" != "/" ]; then
+    error "Неверный install-location: ${PKG_INSTALL_LOCATION}. Ожидается: /"
+fi
+
+# Распаковываем Payload из вложенного PKG
+mkdir -p /tmp/nexy_final_extracted
+if [ -f "$NESTED_PKG_DIR/Payload" ]; then
+    tar -xf "$NESTED_PKG_DIR/Payload" -C /tmp/nexy_final_extracted
+else
+    error "Payload не найден во вложенном PKG"
+fi
+
 APPLE_DOUBLE_COUNT=$(find /tmp/nexy_final_extracted -name '._*' -type f | wc -l)
 echo "AppleDouble файлов: $APPLE_DOUBLE_COUNT"
 
-if codesign --verify --deep --strict --verbose=2 /tmp/nexy_final_extracted/$APP_NAME.app; then
+# Ожидаем, что приложение находится по пути Applications/Nexy.app в Payload
+if [ ! -d "/tmp/nexy_final_extracted/Applications/$APP_NAME.app" ]; then
+    error "В Payload отсутствует Applications/$APP_NAME.app"
+fi
+
+if codesign --verify --deep --strict --verbose=2 /tmp/nexy_final_extracted/Applications/$APP_NAME.app; then
     log "Приложение из PKG корректно подписано"
 else
     error "Приложение из PKG не прошло проверку подписи"
@@ -352,14 +395,14 @@ rm -rf "$DIST_DIR/$APP_NAME.app" 2>/dev/null || true
 
 echo -e "${GREEN}🎉 УПАКОВКА ЗАВЕРШЕНА УСПЕШНО!${NC}"
 echo -e "${BLUE}📁 Результаты:${NC}"
-echo "  • PKG: $DIST_DIR/$APP_NAME-signed.pkg"
+echo "  • PKG: $DIST_DIR/$APP_NAME.pkg"
 echo "  • DMG: $DMG_PATH"
-echo "  • Размер PKG: $(du -h "$DIST_DIR/$APP_NAME-signed.pkg" | cut -f1)"
+echo "  • Размер PKG: $(du -h "$DIST_DIR/$APP_NAME.pkg" | cut -f1)"
 echo "  • Размер DMG: $(du -h "$DMG_PATH" | cut -f1)"
 echo ""
 echo -e "${YELLOW}📋 Следующие шаги:${NC}"
-echo "  1. Установите приложение: ./install_nexy.sh"
-echo "  2. Или установите PKG: open $DIST_DIR/$APP_NAME-signed.pkg"
-echo "  3. Распространяйте PKG пользователям"
+echo "  1. Установите PKG: open $DIST_DIR/$APP_NAME.pkg (или: sudo installer -pkg $DIST_DIR/$APP_NAME.pkg -target /)"
+echo "  2. Либо используйте DMG для drag-and-drop: $DMG_PATH"
+echo "  3. Распространяйте PKG/DMG пользователям"
 echo ""
 echo -e "${GREEN}✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ!${NC}"

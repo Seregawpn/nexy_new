@@ -131,3 +131,6 @@ class TextFilteringConfig:
     def get_feature_config(self, feature: str) -> Dict[str, Any]:
         """Получение конфигурации функции"""
         return self.config.get(feature, {})
+
+
+

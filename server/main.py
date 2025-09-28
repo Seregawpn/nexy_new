@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from aiohttp import web
-from grpc_server import serve
+from grpc_server import run_server as serve
 
 # Импорт системы обновлений
 try:

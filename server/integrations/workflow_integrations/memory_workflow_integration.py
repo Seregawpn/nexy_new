@@ -27,6 +27,9 @@ class MemoryWorkflowIntegration:
         self.is_initialized = False
         self.memory_cache = {}  # Кэш для быстрого доступа
         self.cache_ttl = 300  # 5 минут TTL для кэша
+        self.memory_fetch_timeout = 0.3  # Максимальное время ожидания памяти
+        self.memory_update_timeout = 1.0  # Таймаут записи памяти
+        self._memory_tasks = {}
         
         logger.info("MemoryWorkflowIntegration создан")
     
@@ -43,6 +46,8 @@ class MemoryWorkflowIntegration:
             # Проверяем доступность модуля памяти
             if not self.memory_manager:
                 logger.warning("⚠️ MemoryManager не предоставлен")
+            else:
+                await self._warmup_memory_manager()
             
             self.is_initialized = True
             logger.info("✅ MemoryWorkflowIntegration инициализирован успешно")
@@ -75,30 +80,21 @@ class MemoryWorkflowIntegration:
                 logger.debug("✅ Используем кэшированный контекст памяти")
                 return cached_context
             
-            # Получаем контекст из памяти
-            if self.memory_manager and hasattr(self.memory_manager, 'get_user_context'):
-                logger.debug("Запрос контекста памяти через MemoryManager")
-                
-                # Запускаем получение памяти в фоне
-                memory_task = asyncio.create_task(
-                    self._fetch_memory_context(hardware_id)
-                )
-                
-                try:
-                    memory_context = await asyncio.wait_for(memory_task, timeout=5.0)
-                    
-                    # Кэшируем результат
-                    self._cache_memory(hardware_id, memory_context)
-                    
-                    logger.debug(f"✅ Получен контекст памяти: {len(memory_context) if memory_context else 0} элементов")
-                    return memory_context
-                    
-                except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Таймаут получения контекста памяти для {hardware_id}")
-                    return None
-            else:
+            if not self.memory_manager or not hasattr(self.memory_manager, 'get_user_context'):
                 logger.debug("MemoryManager не доступен или не имеет метода get_user_context")
                 return None
+
+            # Если запрос уже выполняется, не создаём новый
+            existing_task = self._memory_tasks.get(hardware_id)
+            if existing_task and not existing_task.done():
+                logger.debug("Запрос контекста памяти уже выполняется")
+                return None
+
+            logger.debug("Запускаем фоновой запрос контекста памяти")
+            task = asyncio.create_task(self._fetch_and_cache_memory(hardware_id))
+            self._memory_tasks[hardware_id] = task
+            task.add_done_callback(lambda _: self._memory_tasks.pop(hardware_id, None))
+            return None
             
         except Exception as e:
             logger.warning(f"⚠️ Ошибка получения контекста памяти: {e}")
@@ -156,8 +152,10 @@ class MemoryWorkflowIntegration:
             if not self.memory_manager:
                 return None
             
-            # Вызываем метод MemoryManager
-            memory_context = await self.memory_manager.get_user_context(hardware_id)
+            memory_context = await asyncio.wait_for(
+                self.memory_manager.get_user_context(hardware_id),
+                timeout=self.memory_fetch_timeout
+            )
             
             if memory_context:
                 logger.debug(f"Получен контекст памяти: {type(memory_context)}")
@@ -183,8 +181,18 @@ class MemoryWorkflowIntegration:
             # Подготавливаем данные для сохранения
             memory_data = self._prepare_memory_data(data)
             
-            # Сохраняем через MemoryManager
-            await self.memory_manager.update_memory_background(memory_data)
+            hardware_id = memory_data.get('hardware_id')
+            prompt = memory_data.get('prompt') or memory_data.get('text')
+            response = memory_data.get('response') or memory_data.get('processed_text')
+
+            if not all([hardware_id, prompt, response]):
+                logger.warning("⚠️ Недостаточно данных для обновления памяти: hardware_id/prompt/response")
+                return
+
+            await asyncio.wait_for(
+                self.memory_manager.update_memory_background(hardware_id, prompt, response),
+                timeout=self.memory_update_timeout
+            )
             
             logger.debug("✅ Фоновое сохранение в память завершено")
             
@@ -208,6 +216,8 @@ class MemoryWorkflowIntegration:
                 'hardware_id': data.get('hardware_id'),
                 'session_id': data.get('session_id'),
                 'text': data.get('text', ''),
+                'prompt': data.get('prompt', ''),
+                'response': data.get('response', ''),
                 'screenshot': data.get('screenshot'),
                 'processed_text': data.get('processed_text', ''),
                 'audio_generated': data.get('audio_generated', False)
@@ -219,6 +229,52 @@ class MemoryWorkflowIntegration:
         except Exception as e:
             logger.warning(f"⚠️ Ошибка подготовки данных для памяти: {e}")
             return data
+
+    async def _fetch_and_cache_memory(self, hardware_id: str):
+        """Фоновое получение памяти с кэшированием и таймаутом."""
+        if not self.memory_manager:
+            return None
+        try:
+            memory_context = await asyncio.wait_for(
+                self.memory_manager.get_user_context(hardware_id),
+                timeout=self.memory_fetch_timeout
+            )
+            if memory_context:
+                self._cache_memory(hardware_id, memory_context)
+                logger.debug(
+                    "✅ Фоново получен контекст памяти: %s элементов",
+                    len(memory_context) if isinstance(memory_context, dict) else "unknown"
+                )
+            return memory_context
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Таймаут фонового запроса памяти для %s", hardware_id)
+        except Exception as e:
+            logger.warning("⚠️ Ошибка фонового запроса памяти для %s: %s", hardware_id, e)
+        return None
+
+    async def _warmup_memory_manager(self):
+        """Прогрев MemoryManager, чтобы исключить задержки при первом запросе."""
+        if not self.memory_manager:
+            return
+        try:
+            if hasattr(self.memory_manager, 'initialize'):
+                init_result = self.memory_manager.initialize()
+                if asyncio.iscoroutine(init_result):
+                    await asyncio.wait_for(init_result, timeout=self.memory_update_timeout)
+            if hasattr(self.memory_manager, 'get_user_context'):
+                try:
+                    await asyncio.wait_for(
+                        self.memory_manager.get_user_context('__warmup__'),
+                        timeout=self.memory_fetch_timeout
+                    )
+                except Exception:
+                    # Игнорируем ошибки прогрева, т.к. hardware_id фиктивный
+                    pass
+            logger.debug("✅ MemoryManager прогрет")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Таймаут прогрева MemoryManager")
+        except Exception as e:
+            logger.warning("⚠️ Ошибка прогрева MemoryManager: %s", e)
     
     def _get_cached_memory(self, hardware_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -285,3 +341,6 @@ class MemoryWorkflowIntegration:
             
         except Exception as e:
             logger.error(f"❌ Ошибка очистки MemoryWorkflowIntegration: {e}")
+
+
+

@@ -1,23 +1,25 @@
 """
 Основной TextProcessor - координатор модуля обработки текста
+
+Протестированная реализация с Live API (только стриминг):
+- Этап 1: Стриминговая обработка текста (текст → поток текста)
+- Этап 2: Стриминговая обработка с JPEG (текст + изображение → поток текста)  
+- Этап 3: Google Search (текст + изображение + поиск → поток текста)
 """
 
 import logging
 from typing import Dict, Any, Optional, AsyncGenerator
 from modules.text_processing.config import TextProcessingConfig
-from modules.text_processing.fallback_manager import TextProcessingFallbackManager
 from modules.text_processing.providers.gemini_live_provider import GeminiLiveProvider
-from modules.text_processing.providers.langchain_provider import LangChainProvider
 
 logger = logging.getLogger(__name__)
 
 class TextProcessor:
     """
-    Основной процессор текста
+    Основной процессор текста с Live API (только стриминг)
     
-    Координирует работу всех провайдеров текста через
-    FallbackManager и обеспечивает единый интерфейс
-    для обработки текстовых запросов.
+    Координирует работу Live API провайдера и обеспечивает единый интерфейс
+    для стриминговой обработки текстовых запросов с поддержкой изображений и поиска.
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -28,106 +30,57 @@ class TextProcessor:
             config: Конфигурация модуля
         """
         self.config = TextProcessingConfig(config)
-        self.fallback_manager = TextProcessingFallbackManager(config)
+        
+        # ТОЛЬКО Live API провайдер (без fallback)
+        self.live_provider = GeminiLiveProvider(self.config.get_provider_config('gemini_live'))
         self.is_initialized = False
         
-        # Провайдеры
-        self.providers = []
-        
-        logger.info("TextProcessor initialized")
+        logger.info("TextProcessor initialized with Live API")
     
     async def initialize(self) -> bool:
         """
-        Инициализация процессора текста
+        Инициализация Live API
         
         Returns:
             True если инициализация успешна, False иначе
         """
         try:
-            logger.info("Initializing TextProcessor...")
+            logger.info("Initializing TextProcessor with Live API...")
             
-            # Валидируем конфигурацию
-            if not self.config.validate():
-                logger.error("Text processing configuration validation failed")
+            if await self.live_provider.initialize():
+                self.is_initialized = True
+                logger.info("TextProcessor initialized with Live API")
+                return True
+            else:
+                logger.error("Failed to initialize Live API")
                 return False
-            
-            # Создаем провайдеры
-            await self._create_providers()
-            
-            # Регистрируем провайдеры в fallback менеджере
-            self.fallback_manager.register_providers(self.providers)
-            
-            # Инициализируем провайдеры
-            await self._initialize_providers()
-            
-            self.is_initialized = True
-            logger.info(f"TextProcessor initialized successfully with {len(self.providers)} providers")
-            return True
-            
+                
         except Exception as e:
-            logger.error(f"Failed to initialize TextProcessor: {e}")
+            logger.error(f"TextProcessor initialization error: {e}")
             return False
     
-    async def _create_providers(self):
-        """Создание провайдеров текста"""
-        try:
-            # Gemini Live Provider (основной)
-            gemini_config = self.config.get_provider_config('gemini_live')
-            gemini_provider = GeminiLiveProvider(gemini_config)
-            self.providers.append(gemini_provider)
-            
-            # LangChain Provider (fallback)
-            langchain_config = self.config.get_provider_config('langchain')
-            langchain_provider = LangChainProvider(langchain_config)
-            self.providers.append(langchain_provider)
-            
-            logger.info(f"Created {len(self.providers)} text processing providers")
-            
-        except Exception as e:
-            logger.error(f"Error creating providers: {e}")
-            raise e
     
-    async def _initialize_providers(self):
-        """Инициализация всех провайдеров"""
-        initialized_count = 0
-        
-        for provider in self.providers:
-            try:
-                if await provider.initialize():
-                    initialized_count += 1
-                    logger.info(f"Provider {provider.name} initialized successfully")
-                else:
-                    logger.warning(f"Provider {provider.name} initialization failed")
-            except Exception as e:
-                logger.error(f"Error initializing provider {provider.name}: {e}")
-        
-        if initialized_count == 0:
-            raise Exception("No providers could be initialized")
-        
-        logger.info(f"Initialized {initialized_count}/{len(self.providers)} providers")
-    
-    async def process_text(self, prompt: str) -> AsyncGenerator[str, None]:
+    async def process_text_streaming(self, text: str, image_data: bytes = None) -> AsyncGenerator[str, None]:
         """
-        Обработка текстового запроса
+        Стриминговая обработка текста с изображением через Live API
         
         Args:
-            prompt: Текстовый запрос пользователя
+            text: Текстовый запрос
+            image_data: JPEG данные изображения (опционально)
             
         Yields:
-            Части сгенерированного ответа
+            Части текстового ответа
         """
         try:
             if not self.is_initialized:
                 raise Exception("TextProcessor not initialized")
             
-            logger.debug(f"Processing text: {prompt[:100]}...")
-            
-            async for result in self.fallback_manager.process_text(prompt):
-                yield result
+            async for chunk in self.live_provider.process_with_image(text, image_data):
+                yield chunk
                 
         except Exception as e:
-            logger.error(f"Error processing text: {e}")
-            yield f"Error: Text processing failed - {str(e)}"
+            logger.error(f"Text streaming with JPEG error: {e}")
+            raise e
     
     async def cleanup(self) -> bool:
         """
@@ -139,12 +92,9 @@ class TextProcessor:
         try:
             logger.info("Cleaning up TextProcessor...")
             
-            # Очищаем провайдеры
-            for provider in self.providers:
-                try:
-                    await provider.cleanup()
-                except Exception as e:
-                    logger.warning(f"Error cleaning up provider {provider.name}: {e}")
+            # Очищаем Live API провайдер
+            if self.live_provider:
+                await self.live_provider.cleanup()
             
             self.is_initialized = False
             logger.info("TextProcessor cleaned up successfully")
@@ -164,14 +114,8 @@ class TextProcessor:
         status = {
             "is_initialized": self.is_initialized,
             "config_status": self.config.get_status(),
-            "fallback_manager": self.fallback_manager.get_status(),
-            "providers": []
+            "live_provider": self.live_provider.get_status() if self.live_provider else None
         }
-        
-        # Добавляем статус каждого провайдера
-        for provider in self.providers:
-            provider_status = provider.get_status()
-            status["providers"].append(provider_status)
         
         return status
     
@@ -184,14 +128,8 @@ class TextProcessor:
         """
         metrics = {
             "is_initialized": self.is_initialized,
-            "fallback_manager": self.fallback_manager.get_metrics(),
-            "providers": []
+            "live_provider": self.live_provider.get_metrics() if self.live_provider else None
         }
-        
-        # Добавляем метрики каждого провайдера
-        for provider in self.providers:
-            provider_metrics = provider.get_metrics()
-            metrics["providers"].append(provider_metrics)
         
         return metrics
     
@@ -200,9 +138,11 @@ class TextProcessor:
         Получение списка здоровых провайдеров
         
         Returns:
-            Список здоровых провайдеров
+            Список здоровых провайдеров (только Live API)
         """
-        return self.fallback_manager.get_healthy_providers()
+        if self.live_provider and self.live_provider.is_initialized:
+            return [self.live_provider]
+        return []
     
     def get_failed_providers(self) -> list:
         """
@@ -211,11 +151,12 @@ class TextProcessor:
         Returns:
             Список failed провайдеров
         """
-        return self.fallback_manager.get_failed_providers()
+        if self.live_provider and not self.live_provider.is_initialized:
+            return [self.live_provider]
+        return []
     
     def reset_metrics(self):
         """Сброс метрик процессора"""
-        self.fallback_manager.reset_metrics()
         logger.info("TextProcessor metrics reset")
     
     def get_summary(self) -> Dict[str, Any]:
@@ -227,26 +168,25 @@ class TextProcessor:
         """
         summary = {
             "is_initialized": self.is_initialized,
-            "total_providers": len(self.providers),
+            "total_providers": 1,
             "healthy_providers": len(self.get_healthy_providers()),
             "failed_providers": len(self.get_failed_providers()),
             "config_valid": self.config.validate(),
-            "fallback_summary": self.fallback_manager.get_summary()
+            "live_api_available": self.live_provider.is_available if self.live_provider else False
         }
         
         return summary
     
     def __str__(self) -> str:
         """Строковое представление процессора"""
-        return f"TextProcessor(initialized={self.is_initialized}, providers={len(self.providers)})"
+        return f"TextProcessor(initialized={self.is_initialized}, live_api={self.live_provider.is_initialized if self.live_provider else False})"
     
     def __repr__(self) -> str:
         """Представление процессора для отладки"""
         return (
             f"TextProcessor("
             f"initialized={self.is_initialized}, "
-            f"providers={len(self.providers)}, "
-            f"healthy={len(self.get_healthy_providers())}, "
-            f"failed={len(self.get_failed_providers())}"
+            f"live_api_initialized={self.live_provider.is_initialized if self.live_provider else False}, "
+            f"live_api_available={self.live_provider.is_available if self.live_provider else False}"
             f")"
         )

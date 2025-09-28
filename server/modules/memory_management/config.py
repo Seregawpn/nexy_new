@@ -1,23 +1,41 @@
 """
 Конфигурация для Memory Management Module
+Использует централизованную конфигурацию
 """
 
 import os
+import sys
 from typing import Dict, Any
+from pathlib import Path
+
+# Добавляем корневую директорию для импорта централизованной конфигурации
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+from config.unified_config import get_config
 
 class MemoryConfig:
     """Конфигурация модуля управления памятью"""
     
-    def __init__(self):
-        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
-        self.max_short_term_memory_size = 10240  # 10KB
-        self.max_long_term_memory_size = 10240   # 10KB
-        self.memory_timeout = 2.0  # секунды на получение памяти
-        self.analysis_timeout = 5.0  # секунды на анализ диалога
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Инициализация конфигурации из централизованной системы
+        
+        Args:
+            config: Словарь с конфигурацией (опционально, переопределяет централизованную)
+        """
+        # Получаем централизованную конфигурацию
+        unified_config = get_config()
+        self.config = config or {}
+        
+        # Используем централизованные настройки с возможностью переопределения
+        self.gemini_api_key = self.config.get('gemini_api_key', unified_config.memory.gemini_api_key)
+        self.max_short_term_memory_size = self.config.get('max_short_term_memory_size', unified_config.memory.max_short_term_memory_size)
+        self.max_long_term_memory_size = self.config.get('max_long_term_memory_size', unified_config.memory.max_long_term_memory_size)
+        self.memory_timeout = self.config.get('memory_timeout', unified_config.memory.memory_timeout)
+        self.analysis_timeout = self.config.get('analysis_timeout', unified_config.memory.analysis_timeout)
         
         # Настройки анализа памяти
-        self.memory_analysis_model = "gemini-1.5-flash"
-        self.memory_analysis_temperature = 0.3
+        self.memory_analysis_model = self.config.get('memory_analysis_model', unified_config.memory.memory_analysis_model)
+        self.memory_analysis_temperature = self.config.get('memory_analysis_temperature', unified_config.memory.memory_analysis_temperature)
         
         # Промпты для анализа памяти
         self.memory_analysis_prompt = """
@@ -69,12 +87,15 @@ class MemoryConfig:
     def validate_config(self) -> bool:
         """Проверяет корректность конфигурации"""
         if not self.gemini_api_key:
+            print("⚠️ GEMINI_API_KEY не установлен")
             return False
         
         if self.memory_timeout <= 0 or self.analysis_timeout <= 0:
+            print("❌ memory_timeout и analysis_timeout должны быть больше 0")
             return False
             
         if self.max_short_term_memory_size <= 0 or self.max_long_term_memory_size <= 0:
+            print("❌ max_short_term_memory_size и max_long_term_memory_size должны быть больше 0")
             return False
             
         return True

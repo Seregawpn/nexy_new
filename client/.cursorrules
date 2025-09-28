@@ -9,7 +9,6 @@
 - `Docs/PACKAGING_FINAL_GUIDE.md` - План по упаковке приложения приложения PKG, DMG, APP
 - `Docs/ARCHITECTURE_OVERVIEW.md` - Полный архитектура проекта логика и так далее
 - `Docs/CURRENT_STATUS_REPORT.md` - Пользовательские истории и сценарии использования
-- `Docs/IMPLEMENTATION_PLAN.md` - План по текущему реализации модулей по блокировки и автозапуск
 
 ### Архитектурные принципы
 - Строго 3 режима: SLEEPING (серый), LISTENING (синий пульсирующий), PROCESSING (желтый вращающийся)

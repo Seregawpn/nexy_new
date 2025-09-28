@@ -163,9 +163,27 @@ class GrpcServiceIntegration:
                 memory_context = await self.memory_workflow.get_memory_context_parallel(hardware_id)
             
             # 2. Обрабатываем через StreamingWorkflowIntegration
+            collected_sentences: list[str] = []
+            audio_delivered = False
+            final_response_text = ''
+            prompt_text = request_data.get('text', '')
+
             if self.streaming_workflow:
                 logger.debug("Обработка через StreamingWorkflowIntegration")
                 async for result in self.streaming_workflow.process_request_streaming(request_data):
+                    try:
+                        has_audio = 'audio_chunk' in result and isinstance(result.get('audio_chunk'), (bytes, bytearray))
+                        sz = (len(result['audio_chunk']) if has_audio else 0)
+                        txt = result.get('text_response')
+                        logger.info(f'StreamingWorkflowIntegration → result: text_len={(len(txt) if txt else 0)}, audio_bytes={sz}')
+                        if txt:
+                            collected_sentences.append(txt)
+                        if has_audio:
+                            audio_delivered = True
+                        if result.get('is_final'):
+                            final_response_text = result.get('text_full_response', '') or " ".join(collected_sentences).strip()
+                    except Exception:
+                        pass
                     yield result
             else:
                 logger.warning("⚠️ StreamingWorkflowIntegration не доступен, возвращаем базовый ответ")
@@ -180,11 +198,17 @@ class GrpcServiceIntegration:
                 logger.debug("Фоновое сохранение в память")
                 # Добавляем результат обработки к данным для сохранения
                 save_data = request_data.copy()
-                save_data['processed_text'] = request_data.get('text', '')
-                save_data['audio_generated'] = True  # Предполагаем, что аудио было сгенерировано
+                save_data['processed_text'] = final_response_text or " ".join(collected_sentences).strip()
+                save_data['audio_generated'] = audio_delivered
+                save_data['prompt'] = prompt_text
+                save_data['response'] = final_response_text or save_data['processed_text']
+                save_data['sentences'] = collected_sentences
                 
-                await self.memory_workflow.save_to_memory_background(save_data)
-                logger.debug("✅ Фоновое сохранение в память запущено")
+                if save_data.get('prompt') and save_data.get('response'):
+                    await self.memory_workflow.save_to_memory_background(save_data)
+                    logger.debug("✅ Фоновое сохранение в память запущено")
+                else:
+                    logger.debug("⚠️ Фоновое сохранение пропущено: недостаточно данных (prompt/response)")
             
         except Exception as e:
             logger.error(f"❌ Ошибка внутренней обработки workflow: {e}")

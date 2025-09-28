@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager
-from modules.updater import Updater, UpdaterConfig, migrate_to_user_directory
+from modules.updater import Updater, UpdaterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,17 +40,16 @@ class UpdaterIntegration:
         self.check_task = None
         self.is_running = False
         # Поведение миграции регулируется конфигом/ENV
-        self._migrate_mode: str = str(config.get("migrate_mode", "auto")).lower()  # auto | never
-        self._migrate_on_start: bool = bool(config.get("migrate_on_start", False)) or (os.getenv("NEXY_MIGRATE_ON_START", "").lower() in {"1","true","yes"})
+        # Отключаем миграцию в ~/Applications (стратегия: системная установка в /Applications)
+        self._migrate_mode: str = "never"
+        self._migrate_on_start: bool = False
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
         try:
             logger.info("🔄 Инициализация UpdaterIntegration...")
             
-            # Миграция в пользовательскую папку (только если включено)
-            if self._should_migrate_on_start():
-                migrate_to_user_directory()
+            # Миграция в пользовательскую папку отключена (установка в /Applications)
             
             # Настраиваем обработчики событий
             await self._setup_event_handlers()
@@ -151,33 +150,8 @@ class UpdaterIntegration:
 
 
     def _should_migrate_on_start(self) -> bool:
-        """Определяет, нужно ли выполнять миграцию при старте.
-        Режимы:
-        - migrate_on_start=true (или ENV NEXY_MIGRATE_ON_START=1) → принудительно, если не в ~/Applications
-        - migrate_mode=never → никогда
-        - migrate_mode=auto (по умолчанию) → если запущены как .app И не из ~/Applications
-        Всегда игнорируется, если уже запускаемся из ~/Applications.
-        """
-        # Если уже в ~/Applications — миграция не нужна
-        if self._is_in_user_applications():
-            return False
-
-        # Жесткий флаг принудительной миграции
-        if self._migrate_on_start:
-            return True
-
-        # Политика конфигурации
-        if self._migrate_mode == "never":
-            return False
-        # auto: мигрируем только если реально .app вне ~/Applications (например, с DMG)
-        if self._migrate_mode == "auto":
-            return self._is_running_from_app_bundle()
-        try:
-            # Fallback: консервативно не мигрируем
-            return False
-        except Exception:
-            # Если не смогли определить — лучше не мигрировать
-            return False
+        """Миграция отключена по политике установки (/Applications)."""
+        return False
 
     def _is_in_user_applications(self) -> bool:
         """Проверяет, расположен ли бандл в ~/Applications."""

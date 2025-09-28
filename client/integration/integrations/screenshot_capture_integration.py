@@ -62,6 +62,8 @@ class ScreenshotCaptureIntegration:
         # Компоненты
         self._capture: Optional[ScreenshotCapture] = None
         self._config = self._load_config()
+        self._prepared_screens: Dict[float, Dict[str, Any]] = {}
+        self._prepare_tasks: Dict[float, asyncio.Task] = {}
 
     def _load_config(self) -> ScreenshotCaptureIntegrationConfig:
         try:
@@ -160,8 +162,8 @@ class ScreenshotCaptureIntegration:
             format=format_enum,
             quality=quality_enum,
             region=region_enum,
-            max_width=self._config.max_width,
-            max_height=self._config.max_height,
+            max_width=1400,
+            max_height=900,
             timeout=5.0,
         )
 
@@ -176,13 +178,15 @@ class ScreenshotCaptureIntegration:
             # ПРЯМОЙ ТРИГГЕР: захватываем скриншот сразу при остановке записи
             # (это происходит при переходе в PROCESSING)
             if session_id is not None:
-                # Идемпотентность: один захват на сессию
                 if self._captured_for_session == session_id:
                     logger.debug("ScreenshotCaptureIntegration: already captured for session (voice_stop)")
                     return
-                    
-                logger.info(f"📸 ScreenshotCapture: ПРЯМОЙ ЗАХВАТ по voice.recording_stop, session_id={session_id}")
-                await self._capture_once(session_id=session_id)
+                if session_id in self._prepared_screens:
+                    logger.info(f"📸 ScreenshotCapture: Используем подготовленный скриншот для session {session_id}")
+                    await self._publish_prepared(session_id)
+                else:
+                    logger.info(f"📸 ScreenshotCapture: ПРЯМОЙ ЗАХВАТ по voice.recording_stop, session_id={session_id}")
+                    await self._capture_once(session_id=session_id)
                 
         except Exception as e:
             logger.error(f"ScreenshotCaptureIntegration: error in voice_recording_stop: {e}")
@@ -194,17 +198,22 @@ class ScreenshotCaptureIntegration:
             logger.info(f"🔍 ScreenshotCapture: Получено событие app.mode_changed - mode={mode} (type: {type(mode)})")
             
             # Проверяем режим (может быть enum или строка)
+            if mode == AppMode.LISTENING or mode == "listening" or str(mode) == "listening":
+                session_id = self._last_session_id
+                if session_id is not None:
+                    logger.debug(f"ScreenshotCapture: LISTENING detected, preparing screenshot for session {session_id}")
+                    await self._schedule_preparation(session_id)
+                return
+
             if mode != AppMode.PROCESSING and mode != "processing" and str(mode) != "processing":
                 logger.debug(f"ScreenshotCapture: Игнорируем режим {mode}, ждем PROCESSING")
                 return
 
-            # Идемпотентность: один захват на сессию
             sid = self._last_session_id
             if sid is not None and self._captured_for_session == sid:
                 logger.debug("ScreenshotCaptureIntegration: already captured for session")
                 return
             logger.info(f"📸 ScreenshotCaptureIntegration: app entered PROCESSING, session_id={sid}")
-            # Проверяем разрешение Screen Recording, если известно
             if self._screen_permission_granted is False:
                 await self.event_bus.publish("screenshot.error", {
                     "session_id": sid,
@@ -212,7 +221,10 @@ class ScreenshotCaptureIntegration:
                 })
                 logger.info("Screenshot skipped: screen recording permission denied")
                 return
-            await self._capture_once(session_id=sid)
+            if sid is not None and sid in self._prepared_screens:
+                await self._publish_prepared(sid)
+            else:
+                await self._capture_once(session_id=sid)
         except Exception as e:
             logger.error(f"ScreenshotCaptureIntegration: error in mode_changed: {e}")
 
@@ -268,39 +280,11 @@ class ScreenshotCaptureIntegration:
                 })
             return
         try:
-            # Небольшая задержка, чтобы стабилизировать содержимое экрана на входе в PROCESSING
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
             # Выполняем захват (в фоне внутри модуля)
             result = await self._capture.capture_screenshot()
             if result and result.success and result.data:
-                # Сохраняем во временный файл (jpeg)
-                tmp_dir = Path(tempfile.gettempdir()) / "nexy_screenshots"
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"shot_{int(asyncio.get_event_loop().time()*1000)}.jpg"
-                out_path = tmp_dir / filename
-
-                # Декодируем base64
-                import base64
-                raw = base64.b64decode(result.data.base64_data)
-                out_path.write_bytes(raw)
-
-                await self.event_bus.publish("screenshot.captured", {
-                    "session_id": session_id,
-                    "image_path": str(out_path),
-                    "format": "jpeg",
-                    "width": result.data.width,
-                    "height": result.data.height,
-                    "size_bytes": result.data.size_bytes,
-                    "mime_type": result.data.mime_type,
-                    "capture_time": result.capture_time,
-                })
-                self._captured_for_session = session_id
-                logger.info(f"Screenshot captured: {out_path}")
-                # Фоновая очистка старых файлов
-                try:
-                    asyncio.create_task(self._cleanup_old_screenshots())
-                except Exception:
-                    pass
+                await self._store_and_publish(session_id, result)
             else:
                 await self.event_bus.publish("screenshot.error", {
                     "session_id": session_id,
@@ -435,7 +419,69 @@ class ScreenshotCaptureIntegration:
             "last_session_id": self._last_session_id,
             "captured_for_session": self._captured_for_session,
         }
-    
+
+    async def _schedule_preparation(self, session_id: float):
+        if session_id in self._prepare_tasks and not self._prepare_tasks[session_id].done():
+            return
+        if self._screen_permission_granted is False or not self._capture:
+            return
+        task = asyncio.create_task(self._prepare_screenshot(session_id))
+        self._prepare_tasks[session_id] = task
+        task.add_done_callback(lambda _: self._prepare_tasks.pop(session_id, None))
+
+    async def _prepare_screenshot(self, session_id: float):
+        try:
+            result = await asyncio.wait_for(self._capture.capture_screenshot(), timeout=1.0)
+            if result and result.success and result.data:
+                self._prepared_screens[session_id] = {
+                    "result": result,
+                    "created": datetime.datetime.now(),
+                }
+                logger.debug(f"✅ Предварительный скриншот подготовлен для session {session_id}")
+        except Exception as e:
+            logger.debug(f"⚠️ Не удалось подготовить скриншот заранее для session {session_id}: {e}")
+
+    async def _publish_prepared(self, session_id: float):
+        payload = self._prepared_screens.pop(session_id, None)
+        if not payload:
+            await self._capture_once(session_id=session_id)
+            return
+        result = payload.get("result")
+        await self._store_and_publish(session_id, result)
+
+    async def _store_and_publish(self, session_id: Optional[float], result):
+        tmp_dir = Path(tempfile.gettempdir()) / "nexy_screenshots"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"shot_{int(asyncio.get_event_loop().time()*1000)}.jpg"
+        out_path = tmp_dir / filename
+
+        import base64
+        raw = base64.b64decode(result.data.base64_data)
+        out_path.write_bytes(raw)
+
+        size_bytes = None
+        try:
+            size_bytes = os.path.getsize(out_path)
+        except Exception:
+            pass
+
+        await self.event_bus.publish("screenshot.captured", {
+            "session_id": session_id,
+            "image_path": str(out_path),
+            "format": "jpeg",
+            "width": result.data.width,
+            "height": result.data.height,
+            "size_bytes": size_bytes,
+            "mime_type": "image/jpeg",
+            "capture_time": result.capture_time,
+        })
+        self._captured_for_session = session_id
+        logger.info(f"Screenshot captured: {out_path}")
+        try:
+            asyncio.create_task(self._cleanup_old_screenshots())
+        except Exception:
+            pass
+
     async def _check_screen_capture_permissions(self):
         """Проверить разрешения Screen Capture"""
         try:

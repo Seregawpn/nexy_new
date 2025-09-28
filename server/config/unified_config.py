@@ -11,6 +11,17 @@ from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass, field
 import logging
 
+# Загружаем переменные окружения из config.env
+config_path = Path(__file__).parent.parent / "config.env"
+if config_path.exists():
+    with open(config_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                # Используем rsplit для правильного разбора строк с = в значениях
+                key, value = line.rsplit('=', 1)
+                os.environ[key.strip()] = value.strip()
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -94,13 +105,19 @@ class AudioConfig:
 class TextProcessingConfig:
     """Конфигурация обработки текста"""
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash-exp"
-    gemini_temperature: float = 0.7
-    gemini_max_tokens: int = 2048
     
-    # LangChain настройки
-    langchain_model: str = "gemini-pro"
-    langchain_temperature: float = 0.7
+    # Live API настройки
+    gemini_live_model: str = "gemini-live-2.5-flash-preview"
+    gemini_live_temperature: float = 0.7
+    gemini_live_max_tokens: int = 2048
+    gemini_live_tools: list = field(default_factory=lambda: ['google_search'])
+    
+    # Настройки изображений
+    image_format: str = "jpeg"
+    image_mime_type: str = "image/jpeg"
+    image_max_size: int = 10 * 1024 * 1024  # 10MB
+    streaming_chunk_size: int = 8192
+    
     
     # Fallback настройки
     fallback_timeout: int = 30
@@ -115,11 +132,14 @@ class TextProcessingConfig:
     def from_env(cls) -> 'TextProcessingConfig':
         return cls(
             gemini_api_key=os.getenv('GEMINI_API_KEY', ''),
-            gemini_model=os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp'),
-            gemini_temperature=float(os.getenv('GEMINI_TEMPERATURE', '0.7')),
-            gemini_max_tokens=int(os.getenv('GEMINI_MAX_TOKENS', '2048')),
-            langchain_model=os.getenv('LANGCHAIN_MODEL', 'gemini-pro'),
-            langchain_temperature=float(os.getenv('LANGCHAIN_TEMPERATURE', '0.7')),
+            gemini_live_model=os.getenv('GEMINI_LIVE_MODEL', 'gemini-live-2.5-flash-preview'),
+            gemini_live_temperature=float(os.getenv('GEMINI_LIVE_TEMPERATURE', '0.7')),
+            gemini_live_max_tokens=int(os.getenv('GEMINI_LIVE_MAX_TOKENS', '2048')),
+            gemini_live_tools=os.getenv('GEMINI_LIVE_TOOLS', 'google_search').split(',') if os.getenv('GEMINI_LIVE_TOOLS') else ['google_search'],
+            image_format=os.getenv('IMAGE_FORMAT', 'jpeg'),
+            image_mime_type=os.getenv('IMAGE_MIME_TYPE', 'image/jpeg'),
+            image_max_size=int(os.getenv('IMAGE_MAX_SIZE', str(10 * 1024 * 1024))),
+            streaming_chunk_size=int(os.getenv('STREAMING_CHUNK_SIZE', '8192')),
             fallback_timeout=int(os.getenv('FALLBACK_TIMEOUT', '30')),
             circuit_breaker_threshold=int(os.getenv('CIRCUIT_BREAKER_THRESHOLD', '3')),
             circuit_breaker_timeout=int(os.getenv('CIRCUIT_BREAKER_TIMEOUT', '300')),
@@ -135,7 +155,7 @@ class MemoryConfig:
     max_long_term_memory_size: int = 10240   # 10KB
     memory_timeout: float = 2.0
     analysis_timeout: float = 5.0
-    memory_analysis_model: str = "gemini-1.5-flash"
+    memory_analysis_model: str = "gemini-2.5-flash-lite"
     memory_analysis_temperature: float = 0.3
     
     @classmethod
@@ -146,7 +166,7 @@ class MemoryConfig:
             max_long_term_memory_size=int(os.getenv('MAX_LONG_TERM_MEMORY_SIZE', '10240')),
             memory_timeout=float(os.getenv('MEMORY_TIMEOUT', '2.0')),
             analysis_timeout=float(os.getenv('ANALYSIS_TIMEOUT', '5.0')),
-            memory_analysis_model=os.getenv('MEMORY_ANALYSIS_MODEL', 'gemini-1.5-flash'),
+            memory_analysis_model=os.getenv('MEMORY_ANALYSIS_MODEL', 'gemini-2.5-flash-lite'),
             memory_analysis_temperature=float(os.getenv('MEMORY_ANALYSIS_TEMPERATURE', '0.3'))
         )
 
@@ -232,8 +252,8 @@ class UnifiedServerConfig:
             errors.append("AZURE_SPEECH_REGION не установлен")
         
         # Проверяем диапазоны значений
-        if not (0 <= self.text_processing.gemini_temperature <= 2):
-            errors.append("gemini_temperature должен быть между 0 и 2")
+        if not (0 <= self.text_processing.gemini_live_temperature <= 2):
+            errors.append("gemini_live_temperature должен быть между 0 и 2")
             
         if not (0.5 <= self.audio.azure_speech_rate <= 2.0):
             errors.append("azure_speech_rate должен быть между 0.5 и 2.0")
@@ -284,15 +304,9 @@ class UnifiedServerConfig:
         provider_configs = {
             'gemini_live': {
                 'api_key': self.text_processing.gemini_api_key,
-                'model': self.text_processing.gemini_model,
-                'temperature': self.text_processing.gemini_temperature,
-                'max_tokens': self.text_processing.gemini_max_tokens,
-                'timeout': self.text_processing.request_timeout
-            },
-            'langchain': {
-                'model': self.text_processing.langchain_model,
-                'temperature': self.text_processing.langchain_temperature,
-                'api_key': self.text_processing.gemini_api_key,
+                'model': self.text_processing.gemini_live_model,
+                'temperature': self.text_processing.gemini_live_temperature,
+                'max_tokens': self.text_processing.gemini_live_max_tokens,
                 'timeout': self.text_processing.request_timeout
             },
             'azure_tts': {
@@ -434,8 +448,8 @@ class UnifiedServerConfig:
             },
             'text_processing': {
                 'gemini_api_key_set': bool(self.text_processing.gemini_api_key),
-                'gemini_model': self.text_processing.gemini_model,
-                'gemini_temperature': self.text_processing.gemini_temperature,
+                'gemini_live_model': self.text_processing.gemini_live_model,
+                'gemini_live_temperature': self.text_processing.gemini_live_temperature,
                 'max_concurrent_requests': self.text_processing.max_concurrent_requests
             },
             'memory': {

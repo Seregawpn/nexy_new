@@ -173,58 +173,46 @@ class SequentialSpeechPlayer:
             ID чанка
         """
         try:
-            # Нормализация формата на уровне плеера
-            # 1) Ресемплинг при наличии источника sample_rate в metadata
-            try:
-                src_sr = None
-                if isinstance(metadata, dict):
-                    src_sr = metadata.get('sample_rate')
-                if src_sr and int(src_sr) != int(self.config.sample_rate):
-                    # Убедимся, что аудио 2D [samples, channels]
-                    arr = audio_data
-                    if arr.ndim == 1:
-                        arr = arr.reshape(-1, 1)
-                    audio_data = resample_audio(arr, target_sample_rate=int(self.config.sample_rate), original_sample_rate=int(src_sr))
-            except Exception:
-                pass
-
-            # Конвертация каналов под целевые (1..2) и приведение к 2D
-            # 2) Приведение числа каналов
-            try:
-                # Попытаемся учесть источники каналов из metadata для корректной конверсии
-                converted = convert_channels(audio_data, self.config.channels)
-            except Exception:
-                converted = audio_data
-            # Убеждаемся, что на выходе 2D [frames, channels]
-            if converted.ndim == 1:
-                if self.config.channels == 1:
-                    converted = converted.reshape(-1, 1)
-                else:
-                    converted = np.column_stack([converted, converted])
-            elif converted.ndim > 2:
-                converted = converted.reshape(converted.shape[0], -1)
-
-            # Приводим dtype к конфигу (унифицировано на int16)
-            try:
-                if str(self.config.dtype).lower() in ('int16', 'short'):
-                    # Внутренний вывод — int16
-                    if converted.dtype == np.float32 or converted.dtype == np.float64:
-                        audio_data = np.clip(converted, -1.0, 1.0)
-                        audio_data = (audio_data * 32767.0).astype(np.int16)
-                    elif converted.dtype != np.int16:
-                        audio_data = converted.astype(np.int16)
-                    else:
-                        audio_data = converted
-                else:
-                    # Fallback — всё равно приводим к int16 для sd.OutputStream
-                    if converted.dtype == np.float32 or converted.dtype == np.float64:
-                        audio_data = np.clip(converted, -1.0, 1.0)
-                        audio_data = (audio_data * 32767.0).astype(np.int16)
-                    else:
-                        audio_data = converted.astype(np.int16)
-            except Exception:
-                audio_data = converted
+            # ✅ ПРАВИЛЬНО: ЕДИНСТВЕННАЯ конвертация в модуле плеера
+            # Только dtype конвертация - все остальные конвертации убраны
             
+            # Проверяем и конвертируем dtype если необходимо
+            if audio_data.dtype == np.float32 or audio_data.dtype == np.float64:
+                # float32/float64 → int16
+                audio_data = np.clip(audio_data, -1.0, 1.0)
+                audio_data = (audio_data * 32767.0).astype(np.int16)
+                logger.debug(f"🔄 Конвертация: {audio_data.dtype} → int16")
+            elif audio_data.dtype != np.int16:
+                # другие типы → int16
+                audio_data = audio_data.astype(np.int16)
+                logger.debug(f"🔄 Конвертация: {audio_data.dtype} → int16")
+            # Если уже int16 - оставляем как есть
+            
+            # Убеждаемся, что данные в правильной форме [samples, channels]
+            if audio_data.ndim == 1:
+                # 1D → 2D [samples, 1] для моно
+                audio_data = audio_data.reshape(-1, 1)
+                current_channels = 1
+            elif audio_data.ndim > 2:
+                # 3D+ → 2D
+                audio_data = audio_data.reshape(audio_data.shape[0], -1)
+                current_channels = audio_data.shape[1]
+            else:
+                current_channels = audio_data.shape[1]
+
+            # Приводим число каналов к конфигурации вывода (например, stereo device)
+            target_channels = max(1, min(2, int(self.config.channels)))
+            if current_channels != target_channels:
+                if current_channels == 1 and target_channels == 2:
+                    # Дублируем моно-данные на оба канала, чтобы избежать мусора во 2-м канале
+                    audio_data = np.repeat(audio_data, 2, axis=1)
+                elif current_channels >= 2 and target_channels == 1:
+                    # Берем первый канал для моно
+                    audio_data = audio_data[:, :1]
+                else:
+                    # Универсальный fallback: повторяем первый канал столько раз, сколько требуется
+                    audio_data = np.repeat(audio_data[:, :1], target_channels, axis=1)
+
             # Добавляем в буфер
             chunk_id = self.chunk_buffer.add_chunk(audio_data, priority, metadata)
             

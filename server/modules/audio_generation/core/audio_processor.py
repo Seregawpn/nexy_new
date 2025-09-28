@@ -123,13 +123,13 @@ class AudioProcessor:
                 return
             
             # Потоковая генерация через провайдер
-            chunk_size = streaming_config['chunk_size']
             async for audio_chunk in self.provider.process(text):
-                # Разбиваем на меньшие chunks для streaming
-                for i in range(0, len(audio_chunk), chunk_size):
-                    chunk = audio_chunk[i:i + chunk_size]
-                    if chunk:
-                        yield chunk
+                if not audio_chunk:
+                    continue
+                logger.info(
+                    "AudioProcessor → emit sentence audio bytes=%s", len(audio_chunk)
+                )
+                yield audio_chunk
                 
         except Exception as e:
             logger.error(f"Error in streaming speech generation: {e}")
