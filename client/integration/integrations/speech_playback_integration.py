@@ -314,8 +314,10 @@ class SpeechPlaybackIntegration:
         try:
             data = (event or {}).get("data", {})
             sid = data.get("session_id")
+            logger.info(f"SpeechPlayback: получено grpc.request_completed для сессии {sid}")
             if sid is not None:
                 self._grpc_done_sessions[sid] = True
+                logger.info(f"SpeechPlayback: установлен флаг _grpc_done_sessions[{sid}] = True")
             # Запускаем таймер тишины для завершения воспроизведения
             if self._silence_task and not self._silence_task.done():
                 self._silence_task.cancel()
@@ -535,14 +537,23 @@ class SpeechPlaybackIntegration:
     async def _finalize_on_silence(self, sid, timeout: float = 3.0):
         """Фолбэк: если после последнего чанка наступила тишина и плеер остановился — завершаем PROCESSING."""
         try:
+            logger.info(f"SpeechPlayback: запуск _finalize_on_silence для сессии {sid}, timeout={timeout}s")
             start = self._last_audio_ts
             await asyncio.sleep(timeout)
+            logger.info(f"SpeechPlayback: _finalize_on_silence завершен для сессии {sid}")
+            
             # Если не было новых чанков
             if self._last_audio_ts == start and self._player:
                 # Если буфер пуст — завершаем воспроизведение и сессию
                 buf_empty = (getattr(self._player, 'chunk_buffer', None) and self._player.chunk_buffer.is_empty)
+                grpc_done = self._grpc_done_sessions.get(sid, False)
+                finalized = self._finalized_sessions.get(sid, False)
+                
+                logger.info(f"SpeechPlayback: _finalize_on_silence проверка для сессии {sid}: grpc_done={grpc_done}, buf_empty={buf_empty}, finalized={finalized}")
+                
                 # Финализируем ТОЛЬКО если сервер закончил поток (grpc_done), буфер пуст, и сессия ещё не финализирована
-                if self._grpc_done_sessions.get(sid) and buf_empty and not self._finalized_sessions.get(sid):
+                if grpc_done and buf_empty and not finalized:
+                    logger.info(f"SpeechPlayback: _finalize_on_silence завершаем сессию {sid}")
                     # Небольшая задержка для дренажа устройства
                     try:
                         drain_sec = max(0.05, min(0.25, (self.config['buffer_size'] / self.config['sample_rate']) * 4.0))
@@ -564,9 +575,59 @@ class SpeechPlaybackIntegration:
                         })
                     except Exception:
                         pass
+                elif grpc_done and not finalized:
+                    # Дополнительная проверка: если gRPC завершен, но буфер не пуст,
+                    # принудительно завершаем через небольшую задержку
+                    logger.info(f"SpeechPlayback: _finalize_on_silence принудительное завершение для сессии {sid} (gRPC завершен, но буфер не пуст)")
+                    try:
+                        # Даем время для завершения воспроизведения
+                        await asyncio.sleep(0.5)
+                        # Проверяем еще раз
+                        buf_empty_retry = (getattr(self._player, 'chunk_buffer', None) and self._player.chunk_buffer.is_empty)
+                        if buf_empty_retry or not self._player or not self._player.state_manager.is_playing:
+                            logger.info(f"SpeechPlayback: _finalize_on_silence принудительно завершаем сессию {sid}")
+                            try:
+                                if self._player:
+                                    self._player.stop_playback()
+                            except Exception:
+                                pass
+                            await self.event_bus.publish("playback.completed", {"session_id": sid})
+                            self._finalized_sessions[sid] = True
+                            try:
+                                await self.event_bus.publish("mode.request", {
+                                    "target": AppMode.SLEEPING,
+                                    "source": "speech_playback"
+                                })
+                            except Exception:
+                                pass
+                        else:
+                            # Если все еще воспроизводится, ждем еще 1 секунду и принудительно завершаем
+                            logger.info(f"SpeechPlayback: _finalize_on_silence ждем еще 1 секунду для сессии {sid}")
+                            await asyncio.sleep(1.0)
+                            logger.info(f"SpeechPlayback: _finalize_on_silence принудительно завершаем сессию {sid} (таймаут)")
+                            try:
+                                if self._player:
+                                    self._player.stop_playback()
+                            except Exception:
+                                pass
+                            await self.event_bus.publish("playback.completed", {"session_id": sid})
+                            self._finalized_sessions[sid] = True
+                            try:
+                                await self.event_bus.publish("mode.request", {
+                                    "target": AppMode.SLEEPING,
+                                    "source": "speech_playback"
+                                })
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logger.error(f"SpeechPlayback: ошибка при принудительном завершении для сессии {sid}: {e}")
+                else:
+                    logger.info(f"SpeechPlayback: _finalize_on_silence пропускаем завершение для сессии {sid}")
         except asyncio.CancelledError:
+            logger.info(f"SpeechPlayback: _finalize_on_silence отменен для сессии {sid}")
             return
-        except Exception:
+        except Exception as e:
+            logger.error(f"SpeechPlayback: ошибка в _finalize_on_silence для сессии {sid}: {e}")
             # Тихо игнорируем ошибки фолбэка
             pass
 

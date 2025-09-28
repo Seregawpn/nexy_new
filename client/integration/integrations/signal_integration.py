@@ -68,7 +68,7 @@ class SignalIntegration:
             # sensible defaults (чуть больший cooldown для LISTEN_START, чтобы гасить дребезг)
             cooldowns = {
                 SignalPattern.LISTEN_START: CooldownPolicy(600),
-                SignalPattern.DONE: CooldownPolicy(150),
+                SignalPattern.DONE: CooldownPolicy(2000),  # Увеличиваем cooldown для DONE до 2 секунд
                 SignalPattern.ERROR: CooldownPolicy(150),
                 SignalPattern.CANCEL: CooldownPolicy(150),
             }
@@ -135,8 +135,9 @@ class SignalIntegration:
 
     async def _on_playback_completed(self, event: Dict[str, Any]):
         try:
-            logger.info("Signals: DONE (playback.completed)")
-            await self._service.emit(SignalRequest(pattern=SignalPattern.DONE, kind=SignalKind.AUDIO))
+            # Отключаем сигнал DONE при завершении воспроизведения
+            logger.debug("Signals: DONE (playback.completed) - сигнал отключен")
+            # await self._service.emit(SignalRequest(pattern=SignalPattern.DONE, kind=SignalKind.AUDIO))
         except Exception as e:
             logger.debug(f"SignalIntegration _on_playback_completed error: {e}")
 
