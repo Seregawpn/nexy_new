@@ -54,6 +54,8 @@ class SpeechPlaybackIntegration:
         self._current_session_id: Optional[Any] = None
         # Пометки отменённых сессий для фильтрации поздних чанков
         self._cancelled_sessions: set = set()
+        # Защита от WAV: пометка, что заголовок уже отброшен для сессии
+        self._wav_header_skipped: Dict[Any, bool] = {}
 
     async def initialize(self) -> bool:
         try:
@@ -77,8 +79,11 @@ class SpeechPlaybackIntegration:
             await self.event_bus.subscribe("grpc.response.audio", self._on_audio_chunk, EventPriority.HIGH)
             await self.event_bus.subscribe("grpc.request_completed", self._on_grpc_completed, EventPriority.HIGH)
             await self.event_bus.subscribe("grpc.request_failed", self._on_grpc_failed, EventPriority.HIGH)
+            # ✅ Новый обработчик для сырых аудио данных
+            await self.event_bus.subscribe("playback.raw_audio", self._on_raw_audio, EventPriority.HIGH)
             # Сигналы (короткие тоны) через EventBus
             await self.event_bus.subscribe("playback.signal", self._on_playback_signal, EventPriority.HIGH)
+            await self.event_bus.subscribe("grpc.request_cancel", self._on_grpc_cancel, EventPriority.CRITICAL)
             
             # ЕДИНЫЙ канал прерываний - только playback.cancelled
             await self.event_bus.subscribe("playback.cancelled", self._on_unified_interrupt, EventPriority.CRITICAL)
@@ -148,6 +153,29 @@ class SpeechPlaybackIntegration:
 
             # Декодирование в numpy + диагностика формата
             try:
+                audio_bytes_in = audio_bytes
+                # Если пришёл WAV (RIFF) — на первом чанке отбросим заголовок до data
+                try:
+                    if sid is not None and not self._wav_header_skipped.get(sid):
+                        b = audio_bytes
+                        if len(b) >= 12 and b[:4] == b'RIFF' and b[8:12] == b'WAVE':
+                            i = 12
+                            data_offset = None
+                            while i + 8 <= len(b):
+                                chunk_id = b[i:i+4]
+                                chunk_size = int.from_bytes(b[i+4:i+8], 'little', signed=False)
+                                i += 8
+                                if chunk_id == b'data':
+                                    data_offset = i
+                                    break
+                                i += chunk_size
+                            if data_offset is not None:
+                                audio_bytes_in = b[data_offset:]
+                                self._wav_header_skipped[sid] = True
+                        else:
+                            self._wav_header_skipped[sid] = True
+                except Exception:
+                    pass
                 # Определяем dtype с учётом возможной эндИанности
                 dt: Any
                 if dtype in ('float32', 'float'):
@@ -162,7 +190,7 @@ class SpeechPlaybackIntegration:
                 else:
                     dt = np.dtype('<i2')
 
-                arr = np.frombuffer(audio_bytes, dtype=dt)
+                arr = np.frombuffer(audio_bytes_in, dtype=dt)
                 # Если тип int16 без явной эндИанности — эвристика byteswap по пику сигнала
                 try:
                     if dt.kind == 'i' and dt.itemsize == 2 and dtype in ('int16', 'short'):
@@ -173,23 +201,40 @@ class SpeechPlaybackIntegration:
                             arr = swapped
                 except Exception:
                     pass
+
+                # Доп. эвристика: если dtype не указан/"int16", а данные выглядят как float32 PCM
+                # (длина кратна 4, а пик у int16-представления слишком мал),
+                # попробуем интерпретировать как float32 и передать в модуль для конвертации.
+                try:
+                    if dtype in ('int16', 'short') and (len(audio_bytes_in) % 4 == 0):
+                        peak_i16 = float(np.max(np.abs(arr))) if arr.size else 0.0
+                        arr_f32 = np.frombuffer(audio_bytes_in, dtype=np.float32)
+                        peak_f32 = float(np.max(np.abs(arr_f32))) if arr_f32.size else 0.0
+                        # Считаем «правдоподобным» float32, если значения в пределах [-1,1]
+                        looks_like_f32 = (peak_f32 > 0 and peak_f32 <= 1.2)
+                        looks_like_bad_i16 = (peak_i16 > 0 and peak_i16 < 256)
+                        if looks_like_f32 and looks_like_bad_i16:
+                            # ✅ ПРАВИЛЬНО: Передаем float32 в модуль, не конвертируем здесь
+                            arr = arr_f32
+                            dtype = 'float32'  # для логов ниже
+                except Exception:
+                    pass
                 if shape and len(shape) > 0:
                     try:
                         arr = arr.reshape(shape)
                     except Exception:
                         pass
-                # Приводим dtype к int16 при поступлении float32 (если выбран int16 вывод)
-                if arr.dtype == np.float32:
-                    scaled = np.clip(arr, -1.0, 1.0) * 32767.0
-                    arr = scaled.astype(np.int16)
-                # Если уже int16 - оставляем как есть (убираем лишние конвертации)
+                # ✅ ПРАВИЛЬНО: Не конвертируем здесь - передаем сырые данные в модуль
+                # Модуль speech_playback сам выполнит конвертацию float32 → int16
                 # Прочее приведение формата (ресемплинг/каналы) выполняет плеер на основе metadata
 
                 # Диагностика: логируем основы формата (без спамма)
                 try:
                     _min = float(arr.min()) if arr.size else 0.0
                     _max = float(arr.max()) if arr.size else 0.0
-                    logger.info(f"🔍 audio_chunk: sid={sid}, dtype={arr.dtype}, shape={getattr(arr,'shape',())}, min={_min:.3f}, max={_max:.3f}, bytes={len(audio_bytes)}")
+                    logger.info(
+                        f"🔍 audio_chunk: sid={sid}, in_dtype='{(data.get('dtype') or 'auto')}', dec_dtype={arr.dtype}, shape={getattr(arr,'shape',())}, min={_min:.3f}, max={_max:.3f}, bytes={len(audio_bytes_in)}"
+                    )
                 except Exception:
                     pass
             except Exception as e:
@@ -206,6 +251,8 @@ class SpeechPlaybackIntegration:
                             "session_id": sid,
                             "sample_rate": src_sample_rate,
                             "channels": src_channels,
+                            "original_dtype": dtype,  # ✅ Передаем оригинальный тип для диагностики
+                            "original_bytes": len(audio_bytes),  # ✅ Для диагностики
                         },
                     )
                     # Определяем текущее состояние плеера и корректно управляем
@@ -378,6 +425,51 @@ class SpeechPlaybackIntegration:
         except Exception as e:
             await self._handle_error(e, where="speech.on_legacy_interrupt", severity="warning")
 
+    async def _on_raw_audio(self, event: Dict[str, Any]):
+        """✅ ПРАВИЛЬНО: Приём сырых аудио данных (numpy array) для воспроизведения."""
+        try:
+            if not self._player:
+                return
+            data = (event or {}).get("data", {})
+            audio_data = data.get("audio_data")
+            if audio_data is None:
+                return
+            
+            # Извлекаем метаданные
+            sample_rate = data.get("sample_rate", 48000)
+            channels = data.get("channels", 1)
+            priority = int(data.get("priority", 10))
+            pattern = data.get("pattern", "raw_audio")
+            
+            logger.info(f"🔔 playback.raw_audio: pattern={pattern}, dtype={audio_data.dtype}, shape={audio_data.shape}, sr={sample_rate}, ch={channels}, prio={priority}")
+
+            # Проверяем sample rate — должен совпадать с плеером
+            target_sr = int(self.config['sample_rate'])
+            if sample_rate != target_sr:
+                logger.debug(f"Raw audio SR mismatch: got={sample_rate}, player={target_sr} — skipping")
+                return
+
+            # ✅ ПРАВИЛЬНО: Передаем numpy массив напрямую в плеер
+            # Плеер сам выполнит необходимую конвертацию
+            try:
+                meta = {
+                    "kind": "raw_audio", 
+                    "pattern": pattern,
+                    "sample_rate": sample_rate,
+                    "channels": channels
+                }
+                self._player.add_audio_data(audio_data, priority=priority, metadata=meta)
+                state = self._player.state_manager.get_state()
+                if state == PlaybackState.PAUSED:
+                    self._player.resume_playback()
+                elif state != PlaybackState.PLAYING:
+                    self._player.start_playback()
+            except Exception as e:
+                await self._handle_error(e, where="speech.raw_audio", severity="warning")
+
+        except Exception as e:
+            await self._handle_error(e, where="speech.on_raw_audio", severity="warning")
+
     async def _on_app_shutdown(self, event):
         await self.stop()
 
@@ -439,6 +531,28 @@ class SpeechPlaybackIntegration:
                 await self._handle_error(e, where="speech.signal.add_chunk")
         except Exception as e:
             await self._handle_error(e, where="speech.on_playback_signal", severity="warning")
+
+    async def _on_grpc_cancel(self, event: Dict[str, Any]):
+        """Отмена активного воспроизведения по запросу gRPC."""
+        try:
+            if not self._player:
+                return
+            logger.info("SpeechPlayback: получен grpc.request_cancel — очищаем буфер")
+            try:
+                if hasattr(self._player, "chunk_buffer") and self._player.chunk_buffer:
+                    self._player.chunk_buffer.clear_all()
+            except Exception:
+                pass
+            try:
+                self._player.stop_playback()
+            except Exception:
+                pass
+            await self.event_bus.publish("playback.cancelled", {
+                "session_id": self._current_session_id,
+                "source": "grpc_cancel"
+            })
+        except Exception as e:
+            await self._handle_error(e, where="speech.on_grpc_cancel", severity="warning")
 
     # -------- Utils --------
     async def _finalize_on_silence(self, sid, timeout: float = 1.5):

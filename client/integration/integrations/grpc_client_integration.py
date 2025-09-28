@@ -368,23 +368,30 @@ class GrpcClientIntegration:
                     logger.debug(f"gRPC stream progress: {chunk_count} chunks received")
                 # oneof content
                 if hasattr(resp, 'text_chunk') and resp.text_chunk:
+                    logger.info(f"gRPC received text_chunk len={len(resp.text_chunk)} for session {session_id}")
                     await self.event_bus.publish("grpc.response.text", {"session_id": session_id, "text": resp.text_chunk})
                 elif hasattr(resp, 'audio_chunk') and resp.audio_chunk:
                     ch = resp.audio_chunk
+                    data = bytes(getattr(ch, 'audio_data', b""))
+                    dtype = getattr(ch, 'dtype', 'int16')
+                    shape = list(getattr(ch, 'shape', []))
+                    logger.info(f"gRPC received audio_chunk bytes={len(data)} dtype={dtype} shape={shape} for session {session_id}")
                     await self.event_bus.publish("grpc.response.audio", {
                         "session_id": session_id,
-                        "dtype": getattr(ch, 'dtype', 'int16'),
+                        "dtype": dtype,
                         # Явно передаём метаданные формата, чтобы избежать искажений при воспроизведении
                         "sample_rate": getattr(ch, 'sample_rate', None),
                         "channels": getattr(ch, 'channels', None),
-                        "shape": list(getattr(ch, 'shape', [])),
-                        "bytes": bytes(getattr(ch, 'audio_data', b"")),
+                        "shape": shape,
+                        "bytes": data,
                     })
                 elif hasattr(resp, 'end_message') and resp.end_message:
+                    logger.info(f"gRPC received end_message for session {session_id}")
                     await self.event_bus.publish("grpc.request_completed", {"session_id": session_id})
                     got_terminal = True
                     break
                 elif hasattr(resp, 'error_message') and resp.error_message:
+                    logger.error(f"gRPC received error_message='{resp.error_message}' for session {session_id}")
                     await self.event_bus.publish("grpc.request_failed", {"session_id": session_id, "error": resp.error_message})
                     got_terminal = True
                     break
