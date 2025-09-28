@@ -5,11 +5,6 @@ Update Manager - основной координатор Update Module
 import asyncio
 import logging
 from typing import Dict, Any, Optional, AsyncGenerator
-import sys
-import os
-
-# Добавляем путь для импорта универсальных компонентов
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../integrations/core'))
 
 from integrations.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
 from ..config import UpdateConfig

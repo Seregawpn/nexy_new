@@ -4,12 +4,7 @@
 
 import time
 import logging
-import sys
-import os
 from typing import Dict, Any, Optional
-
-# Добавляем путь к корневой директории сервера
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
 from integrations.core.universal_provider_interface import UniversalProviderInterface, ProviderStatus
 

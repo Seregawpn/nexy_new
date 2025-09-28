@@ -8,14 +8,9 @@ import asyncio
 import logging
 import grpc.aio
 from concurrent.futures import ThreadPoolExecutor
-import sys
-import os
 import numpy as np
 from datetime import datetime
 from typing import Dict, Any, Optional, AsyncGenerator
-
-# Добавляем корневую директорию в путь для импорта
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Protobuf файлы генерируются автоматически из streaming.proto
 import streaming_pb2

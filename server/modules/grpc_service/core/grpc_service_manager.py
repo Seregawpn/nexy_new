@@ -8,10 +8,6 @@ import logging
 from typing import Dict, Any, Optional, AsyncGenerator, List
 from datetime import datetime
 
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
-
 from integrations.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
 from integrations.service_integrations.grpc_service_integration import GrpcServiceIntegration
 from integrations.service_integrations.module_coordinator_integration import ModuleCoordinatorIntegration

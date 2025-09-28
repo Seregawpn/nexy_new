@@ -7,13 +7,8 @@
 import asyncio
 import logging
 import time
-import sys
-import os
 from typing import Dict, Any, Optional, Set, Callable
 from datetime import datetime
-
-# Добавляем путь к корневой директории сервера
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
 from integrations.core.universal_module_interface import UniversalModuleInterface, ModuleStatus
 from modules.interrupt_handling.config import InterruptHandlingConfig

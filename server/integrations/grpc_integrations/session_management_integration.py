@@ -5,10 +5,6 @@
 import logging
 from typing import Dict, Any, AsyncGenerator
 
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
-
 from integrations.core.universal_grpc_integration import UniversalGrpcIntegration
 
 logger = logging.getLogger(__name__)

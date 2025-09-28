@@ -5,8 +5,6 @@ StreamingWorkflowIntegration - управляет потоком: текст →
 
 import logging
 import os
-import re
-import unicodedata
 from typing import Dict, Any, AsyncGenerator, Optional
 from datetime import datetime
 
@@ -338,79 +336,56 @@ class StreamingWorkflowIntegration:
         """
         Очистка текста для синтеза речи через модуль фильтрации
         """
-        try:
-            if not text:
-                return ""
-            # Используем модуль фильтрации текста
-            if self.text_filter_manager:
+        if not text:
+            return ""
+
+        if self.text_filter_manager:
+            try:
                 result = await self.text_filter_manager.clean_text(text, {
                     "remove_special_chars": True,
                     "remove_extra_whitespace": True,
                     "normalize_unicode": True,
                     "remove_control_chars": True
                 })
-                if result.get("success"):
-                    return result.get("cleaned_text", text)
-            
-            # Fallback к простой очистке
-            import unicodedata
-            t = unicodedata.normalize("NFKC", text)
-            t = re.sub(r"[\u0000-\u001F\u007F]", "", t)
-            t = re.sub(r"\*\*?", "", t)
-            t = re.sub(r"(^|\s)[•\-\u2022]\s+", " ", t)
-            t = re.sub(r"[`~^_=+#|\\]", " ", t)
-            t = re.sub(r"\s+", " ", t).strip()
-            return t
-        except Exception:
-            return (text or "").strip()
+                if result.get("success") and result.get("cleaned_text") is not None:
+                    return result.get("cleaned_text", "").strip()
+            except Exception as err:
+                logger.warning("⚠️ Ошибка очистки текста через TextFilterManager: %s", err)
+
+        return text.strip()
 
     async def _split_complete_sentences(self, text: str) -> tuple[list[str], str]:
         """
         Разбиение текста на предложения через модуль фильтрации
         """
-        try:
-            if not text:
-                return [], ""
-            
-            # Используем модуль фильтрации текста
-            if self.text_filter_manager:
+        if not text:
+            return [], ""
+
+        if self.text_filter_manager:
+            try:
                 result = await self.text_filter_manager.split_sentences(text)
                 if result.get("success"):
                     return result.get("sentences", []), result.get("remainder", "")
-            
-            # Fallback к простому разбиению
-            import re
-            parts = re.split(r'([.!?]+)', text)
-            sentences = []
-            current = ""
-            for part in parts:
-                if part in '.!?':
-                    current += part
-                    if current.strip():
-                        sentences.append(current.strip())
-                    current = ""
-                else:
-                    current += part
-            return sentences, current.strip()
-        except Exception:
-            return [], text
+            except Exception as err:
+                logger.warning("⚠️ Ошибка разбиения текста через TextFilterManager: %s", err)
+
+        stripped = text.strip()
+        return ([stripped] if stripped else [], "")
 
     async def _count_meaningful_words(self, text: str) -> int:
         """
         Подсчёт значимых слов через модуль фильтрации
         """
-        try:
-            if not text:
-                return 0
-            
-            # Используем модуль фильтрации текста
-            if self.text_filter_manager:
+        if not text:
+            return 0
+
+        if self.text_filter_manager:
+            try:
                 return self.text_filter_manager.count_meaningful_words(text)
-            
-            # Fallback к простому подсчёту
-            return len([w for w in text.split() if w.strip()])
-        except Exception:
-            return len([w for w in text.split() if w.strip()])
+            except Exception as err:
+                logger.warning("⚠️ Ошибка подсчёта слов через TextFilterManager: %s", err)
+
+        return len([w for w in text.split() if w.strip()])
 
     def _enrich_with_memory(self, text: str, memory_context: Optional[Dict[str, Any]]) -> str:
         """

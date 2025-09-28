@@ -3,14 +3,10 @@
 Использует централизованную конфигурацию
 """
 
-import os
-import sys
 from typing import Dict, Any, Optional
-from pathlib import Path
 
-# Добавляем корневую директорию для импорта централизованной конфигурации
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from config.unified_config import get_config
+
 
 class TextProcessingConfig:
     """Конфигурация модуля обработки текста"""
