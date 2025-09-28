@@ -170,8 +170,7 @@ class MemoryManager:
                     logger.warning("⚠️ DatabaseManager is not set in MemoryManager; skipping memory update")
                     return
                 # Обновляем память в базе данных
-                success = await asyncio.to_thread(
-                    self.db_manager.update_user_memory,
+                success = await self.db_manager.update_user_memory(
                     hardware_id,
                     short_memory,
                     long_memory

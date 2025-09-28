@@ -575,9 +575,17 @@ class SpeechPlaybackIntegration:
         try:
             sid = self._current_session_id
             if sid is None:
+                logger.debug("SpeechPlayback: _on_player_completed вызван, но session_id=None")
                 return
+            
+            grpc_done = self._grpc_done_sessions.get(sid, False)
+            finalized = self._finalized_sessions.get(sid, False)
+            
+            logger.info(f"SpeechPlayback: _on_player_completed для сессии {sid}, grpc_done={grpc_done}, finalized={finalized}")
+            
             # Завершаем только если сервер завершил поток и мы еще не финализировали
-            if self._grpc_done_sessions.get(sid) and not self._finalized_sessions.get(sid):
+            if grpc_done and not finalized:
+                logger.info(f"SpeechPlayback: завершаем воспроизведение для сессии {sid}")
                 loop = asyncio.get_event_loop()
                 # На всякий случай — остановим воспроизведение, если ещё не остановлено
                 try:
@@ -591,8 +599,10 @@ class SpeechPlaybackIntegration:
                     "target": AppMode.SLEEPING,
                     "source": "speech_playback"
                 }))
-        except Exception:
-            pass
+            else:
+                logger.debug(f"SpeechPlayback: пропускаем завершение для сессии {sid} (grpc_done={grpc_done}, finalized={finalized})")
+        except Exception as e:
+            logger.error(f"SpeechPlayback: ошибка в _on_player_completed: {e}")
     async def _handle_error(self, e: Exception, *, where: str, severity: str = "error"):
         if hasattr(self.error_handler, 'handle'):
             await self.error_handler.handle(

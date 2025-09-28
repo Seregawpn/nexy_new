@@ -376,6 +376,14 @@ class GrpcClientIntegration:
                     dtype = getattr(ch, 'dtype', 'int16')
                     shape = list(getattr(ch, 'shape', []))
                     logger.info(f"gRPC received audio_chunk bytes={len(data)} dtype={dtype} shape={shape} for session {session_id}")
+                    
+                    # Если получен пустой аудио чанк - это признак завершения потока
+                    if len(data) == 0:
+                        logger.info(f"gRPC received empty audio_chunk - stream completed for session {session_id}")
+                        await self.event_bus.publish("grpc.request_completed", {"session_id": session_id})
+                        got_terminal = True
+                        break
+                    
                     await self.event_bus.publish("grpc.response.audio", {
                         "session_id": session_id,
                         "dtype": dtype,

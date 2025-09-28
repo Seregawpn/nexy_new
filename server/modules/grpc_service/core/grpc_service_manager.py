@@ -126,6 +126,12 @@ class GrpcServiceManager(UniversalModuleInterface):
                     if hasattr(module, 'is_initialized'):
                         logger.info(f"   → module.is_initialized: {module.is_initialized}")
                     
+                    # Подключаем DatabaseManager к MemoryManager после инициализации базы
+                    if name == 'database':
+                        memory_manager = self.modules.get('memory_management')
+                        if memory_manager and hasattr(memory_manager, 'set_database_manager'):
+                            memory_manager.set_database_manager(module)
+
                     logger.info(f"✅ Module {name} initialized")
                 except Exception as e:
                     logger.error(f"❌ Failed to initialize module {name}: {e}")

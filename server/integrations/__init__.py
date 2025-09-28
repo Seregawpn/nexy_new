@@ -1,22 +1,8 @@
+"""Пакет интеграций.
+
+Используйте подмодули `service_integrations` и `workflow_integrations`
+для актуальной архитектуры. Наследие gRPC интеграций перенесено в
+`integrations.legacy` и не импортируется автоматически.
 """
-Интеграции для взаимодействия между модулями
-"""
 
-from .grpc_integrations import (
-    TextProcessingIntegration,
-    AudioGenerationIntegration,
-    SessionManagementIntegration,
-    DatabaseIntegration,
-    MemoryManagementIntegration
-)
-
-__all__ = [
-    'TextProcessingIntegration',
-    'AudioGenerationIntegration', 
-    'SessionManagementIntegration',
-    'DatabaseIntegration',
-    'MemoryManagementIntegration'
-]
-
-
-
+__all__: list[str] = []
