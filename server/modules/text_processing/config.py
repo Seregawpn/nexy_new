@@ -31,16 +31,16 @@ class TextProcessingConfig:
         self.gemini_system_prompt = self.config.get('gemini_system_prompt', getattr(unified_config.text_processing, 'gemini_system_prompt', ''))
         
         # Live API настройки
-        self.gemini_live_model = self.config.get('gemini_live_model', 'gemini-live-2.5-flash-preview')
-        self.gemini_live_temperature = self.config.get('gemini_live_temperature', 0.7)
-        self.gemini_live_max_tokens = self.config.get('gemini_live_max_tokens', 2048)
-        self.gemini_live_tools = self.config.get('gemini_live_tools', ['google_search'])
+        self.gemini_live_model = self.config.get('gemini_live_model', unified_config.text_processing.gemini_live_model)
+        self.gemini_live_temperature = self.config.get('gemini_live_temperature', unified_config.text_processing.gemini_live_temperature)
+        self.gemini_live_max_tokens = self.config.get('gemini_live_max_tokens', unified_config.text_processing.gemini_live_max_tokens)
+        self.gemini_live_tools = self.config.get('gemini_live_tools', unified_config.text_processing.gemini_live_tools)
         
         # Настройки изображений
-        self.image_format = self.config.get('image_format', 'jpeg')
-        self.image_mime_type = self.config.get('image_mime_type', 'image/jpeg')
-        self.image_max_size = self.config.get('image_max_size', 10 * 1024 * 1024)
-        self.streaming_chunk_size = self.config.get('streaming_chunk_size', 8192)
+        self.image_format = self.config.get('image_format', unified_config.text_processing.image_format)
+        self.image_mime_type = self.config.get('image_mime_type', unified_config.text_processing.image_mime_type)
+        self.image_max_size = self.config.get('image_max_size', unified_config.text_processing.image_max_size)
+        self.streaming_chunk_size = self.config.get('streaming_chunk_size', unified_config.text_processing.streaming_chunk_size)
         
         
         # Настройки fallback

@@ -45,14 +45,20 @@ class ModuleCoordinatorIntegration:
                 
                 for module_name, module in self.modules.items():
                     try:
-                        if hasattr(module, 'initialize'):
-                            logger.debug(f"Инициализация модуля {module_name}")
-                            await module.initialize()
-                            self.modules_status[module_name] = 'initialized'
-                            logger.debug(f"✅ Модуль {module_name} инициализирован")
-                        else:
-                            logger.warning(f"⚠️ Модуль {module_name} не имеет метода initialize")
+                        if not hasattr(module, 'initialize'):
+                            logger.debug(f"Пропуск инициализации модуля {module_name}: метод отсутствует")
                             self.modules_status[module_name] = 'no_initialize_method'
+                            continue
+
+                        if getattr(module, 'is_initialized', False):
+                            logger.debug(f"Модуль {module_name} уже инициализирован, пропускаем")
+                            self.modules_status[module_name] = 'already_initialized'
+                            continue
+
+                        logger.debug(f"Инициализация модуля {module_name}")
+                        await module.initialize()
+                        self.modules_status[module_name] = 'initialized'
+                        logger.debug(f"✅ Модуль {module_name} инициализирован")
                     except Exception as e:
                         logger.error(f"❌ Ошибка инициализации модуля {module_name}: {e}")
                         self.modules_status[module_name] = f'initialization_error: {str(e)}'
@@ -84,16 +90,21 @@ class ModuleCoordinatorIntegration:
             
             for module_name, module in self.modules.items():
                 try:
-                    if hasattr(module, 'start'):
-                        logger.debug(f"Запуск модуля {module_name}")
-                        await module.start()
-                        results[module_name] = 'started'
-                        self.modules_status[module_name] = 'running'
-                        logger.debug(f"✅ Модуль {module_name} запущен")
-                    else:
-                        logger.warning(f"⚠️ Модуль {module_name} не имеет метода start")
+                    if not hasattr(module, 'start'):
+                        logger.debug(f"Пропуск запуска модуля {module_name}: метод start отсутствует")
                         results[module_name] = 'no_start_method'
-                        self.modules_status[module_name] = 'no_start_method'
+                        continue
+
+                    if self.modules_status.get(module_name) == 'running':
+                        logger.debug(f"Модуль {module_name} уже запущен, пропускаем")
+                        results[module_name] = 'already_running'
+                        continue
+
+                    logger.debug(f"Запуск модуля {module_name}")
+                    await module.start()
+                    results[module_name] = 'started'
+                    self.modules_status[module_name] = 'running'
+                    logger.debug(f"✅ Модуль {module_name} запущен")
                 except Exception as e:
                     logger.error(f"❌ Ошибка запуска модуля {module_name}: {e}")
                     results[module_name] = f'start_error: {str(e)}'
@@ -130,16 +141,21 @@ class ModuleCoordinatorIntegration:
             
             for module_name, module in self.modules.items():
                 try:
-                    if hasattr(module, 'stop'):
-                        logger.debug(f"Остановка модуля {module_name}")
-                        await module.stop()
-                        results[module_name] = 'stopped'
-                        self.modules_status[module_name] = 'stopped'
-                        logger.debug(f"✅ Модуль {module_name} остановлен")
-                    else:
-                        logger.warning(f"⚠️ Модуль {module_name} не имеет метода stop")
+                    if not hasattr(module, 'stop'):
+                        logger.debug(f"Пропуск остановки модуля {module_name}: метод stop отсутствует")
                         results[module_name] = 'no_stop_method'
-                        self.modules_status[module_name] = 'no_stop_method'
+                        continue
+
+                    if self.modules_status.get(module_name) == 'stopped':
+                        logger.debug(f"Модуль {module_name} уже остановлен, пропускаем")
+                        results[module_name] = 'already_stopped'
+                        continue
+
+                    logger.debug(f"Остановка модуля {module_name}")
+                    await module.stop()
+                    results[module_name] = 'stopped'
+                    self.modules_status[module_name] = 'stopped'
+                    logger.debug(f"✅ Модуль {module_name} остановлен")
                 except Exception as e:
                     logger.error(f"❌ Ошибка остановки модуля {module_name}: {e}")
                     results[module_name] = f'stop_error: {str(e)}'
@@ -176,16 +192,16 @@ class ModuleCoordinatorIntegration:
             
             for module_name, module in self.modules.items():
                 try:
-                    if hasattr(module, 'cleanup'):
-                        logger.debug(f"Очистка модуля {module_name}")
-                        await module.cleanup()
-                        results[module_name] = 'cleaned'
-                        self.modules_status[module_name] = 'cleaned'
-                        logger.debug(f"✅ Модуль {module_name} очищен")
-                    else:
-                        logger.warning(f"⚠️ Модуль {module_name} не имеет метода cleanup")
+                    if not hasattr(module, 'cleanup'):
+                        logger.debug(f"Пропуск очистки модуля {module_name}: метод cleanup отсутствует")
                         results[module_name] = 'no_cleanup_method'
-                        self.modules_status[module_name] = 'no_cleanup_method'
+                        continue
+
+                    logger.debug(f"Очистка модуля {module_name}")
+                    await module.cleanup()
+                    results[module_name] = 'cleaned'
+                    self.modules_status[module_name] = 'cleaned'
+                    logger.debug(f"✅ Модуль {module_name} очищен")
                 except Exception as e:
                     logger.error(f"❌ Ошибка очистки модуля {module_name}: {e}")
                     results[module_name] = f'cleanup_error: {str(e)}'

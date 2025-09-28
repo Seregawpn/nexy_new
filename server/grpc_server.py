@@ -23,7 +23,6 @@ import streaming_pb2_grpc
 
 # Импорт новых модулей
 from modules.grpc_service.core.grpc_service_manager import GrpcServiceManager
-from modules.interrupt_handling.core.interrupt_manager import InterruptManager
 
 # Логирование настроено в main.py
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         
         # Инициализируем менеджеры модулей
         self.grpc_service_manager = GrpcServiceManager()
-        self.interrupt_manager = InterruptManager()
+        self.interrupt_manager = None
         
         # Флаг инициализации
         self.is_initialized = False
@@ -69,9 +68,11 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             await self.grpc_service_manager.initialize()
             logger.info("✅ gRPC Service Manager инициализирован")
             
-            # Инициализируем Interrupt Manager
-            await self.interrupt_manager.initialize()
-            logger.info("✅ Interrupt Manager инициализирован")
+            # Используем Interrupt Manager из gRPC Service Manager
+            self.interrupt_manager = self.grpc_service_manager.modules.get('interrupt_handling')
+            if not self.interrupt_manager:
+                raise RuntimeError("Interrupt Manager module not found in GrpcServiceManager")
+            logger.info("✅ Interrupt Manager подключен к gRPC сервису")
             
             # Запускаем все модули
             await self.grpc_service_manager.start()
@@ -94,16 +95,13 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 # Останавливаем все модули
                 await self.grpc_service_manager.stop()
                 logger.info("✅ Все модули остановлены")
-                
-                # Очищаем Interrupt Manager
-                await self.interrupt_manager.cleanup()
-                logger.info("✅ Interrupt Manager очищен")
-                
+
                 # Очищаем gRPC Service Manager
                 await self.grpc_service_manager.cleanup()
                 logger.info("✅ gRPC Service Manager очищен")
             
             self.is_initialized = False
+            self.interrupt_manager = None
             logger.info("✅ Новый сервер полностью очищен")
             
         except Exception as e:
@@ -121,6 +119,11 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             # В новом protobuf нет interrupt_flag в StreamRequest
             # Прерывания обрабатываются через отдельный InterruptSession API
             
+            if not self.interrupt_manager:
+                logger.error("Interrupt Manager недоступен, запрос отклонён")
+                yield streaming_pb2.StreamResponse(error_message="Interrupt manager unavailable")
+                return
+
             # Проверяем глобальный флаг прерывания
             if self.interrupt_manager.should_interrupt(hardware_id):
                 logger.info(f"🛑 Глобальное прерывание активно для {hardware_id}, отклоняем запрос {session_id}")
@@ -198,6 +201,14 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         logger.info(f"🛑 Получен InterruptRequest: hardware_id={hardware_id}")
         
         try:
+            if not self.interrupt_manager:
+                logger.error("Interrupt Manager недоступен, прерывание невозможно")
+                return streaming_pb2.InterruptResponse(
+                    success=False,
+                    message="Interrupt manager unavailable",
+                    interrupted_sessions=[]
+                )
+
             # Используем Interrupt Manager для обработки прерывания
             interrupt_result = await self.interrupt_manager.interrupt_session(
                 hardware_id=hardware_id

@@ -57,16 +57,25 @@ class GrpcServiceIntegration:
             
             # Инициализируем workflow интеграции если они доступны
             if self.streaming_workflow:
-                await self.streaming_workflow.initialize()
-                logger.info("✅ StreamingWorkflowIntegration инициализирован")
+                if getattr(self.streaming_workflow, 'is_initialized', False):
+                    logger.debug("StreamingWorkflowIntegration уже инициализирован, пропускаем повторный запуск")
+                else:
+                    await self.streaming_workflow.initialize()
+                    logger.info("✅ StreamingWorkflowIntegration инициализирован")
             
             if self.memory_workflow:
-                await self.memory_workflow.initialize()
-                logger.info("✅ MemoryWorkflowIntegration инициализирован")
+                if getattr(self.memory_workflow, 'is_initialized', False):
+                    logger.debug("MemoryWorkflowIntegration уже инициализирован, пропускаем повторный запуск")
+                else:
+                    await self.memory_workflow.initialize()
+                    logger.info("✅ MemoryWorkflowIntegration инициализирован")
             
             if self.interrupt_workflow:
-                await self.interrupt_workflow.initialize()
-                logger.info("✅ InterruptWorkflowIntegration инициализирован")
+                if getattr(self.interrupt_workflow, 'is_initialized', False):
+                    logger.debug("InterruptWorkflowIntegration уже инициализирован, пропускаем повторный запуск")
+                else:
+                    await self.interrupt_workflow.initialize()
+                    logger.info("✅ InterruptWorkflowIntegration инициализирован")
             
             self.is_initialized = True
             logger.info("✅ GrpcServiceIntegration инициализирован успешно")
