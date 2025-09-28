@@ -142,6 +142,17 @@ class SignalIntegration:
 
     async def _on_playback_cancelled(self, event: Dict[str, Any]):
         try:
+            raw_event = event or {}
+            payload = raw_event.get("data")
+            if not isinstance(payload, dict):
+                payload = raw_event if isinstance(raw_event, dict) else {}
+
+            reason = payload.get("reason") or payload.get("source")
+
+            if reason and str(reason).lower() in {"grpc_cancel", "short_press", "keyboard", "interrupt"}:
+                logger.debug("Signals: CANCEL skipped (reason=%s)", reason)
+                return
+
             logger.info("Signals: CANCEL (playback.cancelled)")
             await self._service.emit(SignalRequest(pattern=SignalPattern.CANCEL, kind=SignalKind.AUDIO))
         except Exception as e:

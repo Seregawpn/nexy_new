@@ -50,6 +50,9 @@ class InputProcessingIntegration:
         self._recording_started: bool = False
         # Debounce для short press в LISTENING
         self._last_short_ts: float = 0.0
+        # Текущее состояние gRPC-потока
+        self._session_waiting_grpc: bool = False
+        self._active_grpc_session_id: Optional[float] = None
         
     async def initialize(self) -> bool:
         """Инициализация input_processing (клавиатура)"""
@@ -138,6 +141,8 @@ class InputProcessingIntegration:
             self._current_session_id = event.timestamp or time.monotonic()
             self._session_recognized = False
             self._recording_started = False
+            self._session_waiting_grpc = False
+            self._active_grpc_session_id = None
             logger.debug(f"PRESS: session(after)={self._current_session_id}, recognized reset to {self._session_recognized}")
             # На PRESS ничего не запускаем: ждём LONG_PRESS, чтобы открыть микрофон
         except Exception as e:
@@ -164,6 +169,8 @@ class InputProcessingIntegration:
             await self.event_bus.subscribe("voice.recognition_timeout", self._on_recognition_failed, EventPriority.HIGH)
         except Exception:
             pass
+        await self.event_bus.subscribe("grpc.request_completed", self._on_grpc_completed, EventPriority.HIGH)
+        await self.event_bus.subscribe("grpc.request_failed", self._on_grpc_failed, EventPriority.HIGH)
 
     async def _on_recognition_completed(self, event):
         """Фиксируем факт распознавания для текущей сессии"""
@@ -183,10 +190,7 @@ class InputProcessingIntegration:
     async def _on_recognition_failed(self, event):
         """Возврат в SLEEPING при неудаче/таймауте распознавания."""
         try:
-            # Сбрасываем текущую сессию
-            self._current_session_id = None
-            self._session_recognized = False
-            self._recording_started = False
+            self._reset_session("recognition_failed")
             # Переходим в SLEEPING через централизованный запрос
             await self.event_bus.publish("mode.request", {
                 "target": AppMode.SLEEPING,
@@ -199,6 +203,67 @@ class InputProcessingIntegration:
                 category=ErrorCategory.RUNTIME,
                 message=f"Ошибка обработки recognition_failed/timeout: {e}",
                 context={"where": "input_processing_integration.on_recognition_failed"}
+            )
+
+    def _reset_session(self, reason: str):
+        """Сбрасывает состояние текущей сессии после завершения gRPC-цепочки."""
+        logger.debug(f"SESSION RESET ({reason})")
+        self._current_session_id = None
+        self._active_grpc_session_id = None
+        self._session_waiting_grpc = False
+        self._session_recognized = False
+        self._recording_started = False
+
+    async def _on_grpc_completed(self, event):
+        """Сбрасывает сессию при штатном завершении gRPC."""
+        try:
+            data = (event or {}).get("data", {})
+            session_id = data.get("session_id")
+            if session_id is None:
+                return
+
+            if session_id in {self._active_grpc_session_id, self._current_session_id}:
+                logger.debug(f"gRPC completed for session {session_id}")
+                self._reset_session("grpc_completed")
+            else:
+                logger.debug(
+                    "gRPC completed for session %s, ignored (current=%s, active=%s)",
+                    session_id,
+                    self._current_session_id,
+                    self._active_grpc_session_id,
+                )
+        except Exception as e:
+            await self.error_handler.handle_error(
+                severity=ErrorSeverity.LOW,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки grpc.request_completed: {e}",
+                context={"where": "input_processing_integration.on_grpc_completed"}
+            )
+
+    async def _on_grpc_failed(self, event):
+        """Сбрасывает сессию при ошибке или отмене gRPC."""
+        try:
+            data = (event or {}).get("data", {})
+            session_id = data.get("session_id")
+            if session_id is None:
+                return
+
+            if session_id in {self._active_grpc_session_id, self._current_session_id}:
+                logger.debug(f"gRPC failed for session {session_id}")
+                self._reset_session("grpc_failed")
+            else:
+                logger.debug(
+                    "gRPC failed for session %s, ignored (current=%s, active=%s)",
+                    session_id,
+                    self._current_session_id,
+                    self._active_grpc_session_id,
+                )
+        except Exception as e:
+            await self.error_handler.handle_error(
+                severity=ErrorSeverity.LOW,
+                category=ErrorCategory.RUNTIME,
+                message=f"Ошибка обработки grpc.request_failed: {e}",
+                context={"where": "input_processing_integration.on_grpc_failed"}
             )
         
     async def start(self) -> bool:
@@ -309,6 +374,18 @@ class InputProcessingIntegration:
                     }
                 )
                 logger.debug("SHORT_PRESS: voice.recording_stop опубликовано")
+                self._session_waiting_grpc = True
+                self._active_grpc_session_id = self._current_session_id
+                logger.debug(
+                    "SHORT_PRESS: session_id=%s удерживаем до завершения gRPC",
+                    self._current_session_id,
+                )
+
+            # Отменяем активный gRPC поток, если он идёт
+            logger.debug("SHORT_PRESS: запрашиваем отмену активного gRPC стрима")
+            await self.event_bus.publish("grpc.request_cancel", {
+                "session_id": self._current_session_id
+            })
 
             # При коротком нажатии: только прерывание (уже выполнено на PRESS) и переход в SLEEPING
             await self.event_bus.publish("mode.request", {
@@ -319,11 +396,13 @@ class InputProcessingIntegration:
 
             # Смена режима публикуется централизованно через ApplicationStateManager
 
-            # Сбрасываем текущую сессию
-            self._current_session_id = None
-            self._session_recognized = False
+            # Прерывание записи (если была)
             self._recording_started = False
-            logger.debug("SHORT_PRESS: сброшены session_id и recognized")
+
+            if not self._session_waiting_grpc:
+                self._reset_session("short_press_idle")
+            else:
+                logger.debug("SHORT_PRESS: удерживаем session_id=%s до завершения gRPC", self._current_session_id)
             
         except Exception as e:
             await self.error_handler.handle_error(
@@ -424,12 +503,17 @@ class InputProcessingIntegration:
 
             # Смена режима публикуется централизованно через ApplicationStateManager
 
-            # Сбрасываем сессию
-            self._current_session_id = None
-            self._session_recognized = False
+            was_recording = self._recording_started
             self._recording_started = False
-            logger.debug("RELEASE: сброшены session_id и recognized")
-            
+
+            if was_recording:
+                self._session_waiting_grpc = True
+                self._active_grpc_session_id = self._current_session_id
+                logger.debug("RELEASE: удерживаем session_id=%s до завершения gRPC", self._current_session_id)
+            elif self._session_waiting_grpc:
+                logger.debug("RELEASE: session_id=%s уже ожидает завершения gRPC", self._current_session_id)
+            else:
+                self._reset_session("release_no_recording")
         except Exception as e:
             await self.error_handler.handle_error(
                 severity=ErrorSeverity.MEDIUM,
