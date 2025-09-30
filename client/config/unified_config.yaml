@@ -1,9 +1,30 @@
+# Nexy AI Assistant Configuration
+# Version: v3.5.0
+# Last Updated: 2025-09-29
+
 accessibility:
   error_sound: true
   sound_notifications: true
   startup_sound: true
   success_sound: true
   voice_feedback: true
+  voiceover_control:
+    enabled: true
+    mode: stop  # Используем Command+F5 для полного переключения VoiceOver
+    duck_modes:
+      - listening
+      - processing
+    release_modes:
+      - sleeping
+    debounce_seconds: 0.25
+    stop_repeats: 2
+    stop_repeat_delay: 0.05
+    use_apple_script_fallback: true
+    engage_on_keyboard_events: true
+    # Настройки детального логирования для диагностики
+    debug_logging: true
+    log_osascript_commands: true
+    log_voiceover_state: true
 app:
   bundle_id: com.nexy.assistant
   debug: false

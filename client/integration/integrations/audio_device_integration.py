@@ -21,6 +21,7 @@ from modules.audio_device_manager.core.device_manager import AudioDeviceManager
 from modules.audio_device_manager.core.types import (
     AudioDevice, DeviceType, DeviceStatus, AudioDeviceManagerConfig
 )
+# VoiceOver логика перенесена в VoiceOverDuckingIntegration
 
 # Импорт конфигурации
 from config.unified_config_loader import UnifiedConfigLoader
@@ -68,7 +69,9 @@ class AudioDeviceIntegration:
         self.enable_microphone_on_listening = integration_cfg.get('enable_microphone_on_listening', True)
         self.disable_microphone_on_sleeping = integration_cfg.get('disable_microphone_on_sleeping', True)
         self.disable_microphone_on_processing = integration_cfg.get('disable_microphone_on_processing', True)
-        
+
+        # VoiceOver логика перенесена в VoiceOverDuckingIntegration
+
         # AudioDeviceManager экземпляр
         self._manager: Optional[AudioDeviceManager] = None
         self._initialized = False
@@ -105,6 +108,8 @@ class AudioDeviceIntegration:
             await self.event_bus.subscribe("app.shutdown", self._on_app_shutdown, EventPriority.MEDIUM)
             await self.event_bus.subscribe("app.state_changed", self._on_app_state_changed, EventPriority.HIGH)
             await self.event_bus.subscribe("app.mode_changed", self._on_app_mode_changed, EventPriority.HIGH)
+
+            # VoiceOver подписки перенесены в VoiceOverDuckingIntegration
             
             self._initialized = True
             logger.info("AudioDeviceIntegration initialized successfully")
@@ -185,8 +190,9 @@ class AudioDeviceIntegration:
             success = await self._manager.stop()
             if not success:
                 logger.error("Failed to stop AudioDeviceManager")
-            
+
             self._running = False
+            # VoiceOver shutdown перенесен в VoiceOverDuckingIntegration
             logger.info("AudioDeviceIntegration stopped")
             return success
             
@@ -291,9 +297,10 @@ class AudioDeviceIntegration:
         try:
             logger.info(f"Audio mode change: {old_mode} -> {new_mode}")
             logger.debug(f"AudioIntegration: current_mode(before)={self._current_mode}")
-            
+
             self._current_mode = new_mode
-            
+            mode_value_str = getattr(new_mode, 'value', str(new_mode)).lower() if new_mode else ""
+
             if new_mode == AppMode.LISTENING:
                 logger.debug("AudioIntegration: enabling microphone due to LISTENING")
                 # В режиме прослушивания - включаем микрофон
@@ -302,7 +309,9 @@ class AudioDeviceIntegration:
                 logger.debug("AudioIntegration: disabling microphone due to SLEEPING/PROCESSING")
                 # В режиме сна или обработки - выключаем микрофон
                 await self._disable_microphone()
-            
+
+            # VoiceOver mode handling перенесен в VoiceOverDuckingIntegration
+
         except Exception as e:
             if hasattr(self.error_handler, 'handle_error'):
                 await self.error_handler.handle_error(
@@ -370,7 +379,9 @@ class AudioDeviceIntegration:
                 "error": str(e),
                 "context": "disable_microphone"
             })
-    
+
+    # VoiceOver методы перенесены в VoiceOverDuckingIntegration
+
     async def _on_device_changed(self, change):
         """Обработка изменения аудио устройств"""
         try:

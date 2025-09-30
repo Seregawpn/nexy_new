@@ -39,6 +39,7 @@ from integration.integrations.signal_integration import SignalIntegration
 from modules.signals.config.types import PatternConfig
 from integration.integrations.signal_integration import SignalsIntegrationConfig
 from integration.integrations.welcome_message_integration import WelcomeMessageIntegration
+from integration.integrations.voiceover_ducking_integration import VoiceOverDuckingIntegration
 
 # Импорты core компонентов
 from integration.core.event_bus import EventBus, EventPriority
@@ -366,7 +367,17 @@ class SimpleModuleCoordinator:
                 error_handler=self.error_handler,
             )
 
-            print("✅ Интеграции созданы: instance_manager, hardware_id, tray, input, permissions, updater, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals, autostart_manager, welcome_message")
+            # VoiceOver Ducking Integration - управление VoiceOver
+            config_data = self.config._load_config()
+            voiceover_config = config_data.get("accessibility", {}).get("voiceover_control", {})
+            self.integrations['voiceover_ducking'] = VoiceOverDuckingIntegration(
+                event_bus=self.event_bus,
+                state_manager=self.state_manager,
+                error_handler=self.error_handler,
+                config=voiceover_config
+            )
+
+            print("✅ Интеграции созданы: instance_manager, hardware_id, tray, input, permissions, updater, network, audio, interrupt, voice_recognition, screenshot_capture, grpc, speech_playback, signals, autostart_manager, welcome_message, voiceover_ducking")
             
             # 3. Создаем Workflows (координаторы режимов)
             print("🔧 Создание Workflows...")
@@ -481,18 +492,19 @@ class SimpleModuleCoordinator:
                 'permissions',        # 1. Сначала разрешения - КРИТИЧНО!
                 'hardware_id',        # 2. Получить уникальный ID
                 'tray',               # 3. GUI и меню-бар
-                'audio',              # 4. Аудио система (после разрешений)
-                'voice_recognition',  # 5. Распознавание речи (зависит от audio)
-                'screenshot_capture', # 6. Захват экрана (зависит от permissions)
-                'network',            # 7. Сетевая система
-                'updater',            # 8. Система обновлений
-                'interrupt',          # 9. Управление прерываниями
-                'grpc',               # 10. gRPC клиент (зависит от hardware_id)
-                'speech_playback',    # 11. Воспроизведение речи (зависит от grpc)
-                'signals',            # 12. Аудио сигналы
-                'welcome_message',    # 13. Приветственное сообщение (зависит от speech_playback)
-                'autostart_manager',  # 14. Автозапуск
-                'instance_manager',   # 15. Управление экземплярами (последний)
+                'voiceover_ducking',  # 4. VoiceOver Ducking (зависит от permissions)
+                'audio',              # 5. Аудио система (после разрешений)
+                'voice_recognition',  # 6. Распознавание речи (зависит от audio)
+                'screenshot_capture', # 7. Захват экрана (зависит от permissions)
+                'network',            # 8. Сетевая система
+                'updater',            # 9. Система обновлений
+                'interrupt',          # 10. Управление прерываниями
+                'grpc',               # 11. gRPC клиент (зависит от hardware_id)
+                'speech_playback',    # 12. Воспроизведение речи (зависит от grpc)
+                'signals',            # 13. Аудио сигналы
+                'welcome_message',    # 14. Приветственное сообщение (зависит от speech_playback)
+                'autostart_manager',  # 15. Автозапуск
+                'instance_manager',   # 16. Управление экземплярами (последний)
             ]
             
             # Запускаем в правильном порядке

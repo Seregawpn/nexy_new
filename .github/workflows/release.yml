@@ -1,0 +1,89 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Полная история для генерации release notes
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Получаем предыдущий тег
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # Генерируем release notes
+          if [ -n "$PREVIOUS_TAG" ]; then
+            CHANGES=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
+          else
+            CHANGES=$(git log --pretty=format:"- %s" --max-count=10)
+          fi
+          
+          # Создаем release notes
+          cat > release_notes.md << EOF
+          ## Что нового в ${{ github.ref_name }}
+          
+          ### Изменения:
+          $CHANGES
+          
+          ### Установка:
+          1. Скачайте \`Nexy.pkg\` из Assets ниже
+          2. Установите через двойной клик
+          3. Разрешите необходимые разрешения в System Preferences
+          
+          ### Требования:
+          - macOS 12.0+
+          - Разрешения: Microphone, Screen Recording, Accessibility, VoiceOver
+          EOF
+          
+          # Сохраняем в output
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Nexy AI Assistant ${{ github.ref_name }}
+          body: ${{ steps.release_notes.outputs.notes }}
+          draft: false
+          prerelease: false
+      
+      - name: Upload PKG (if exists)
+        if: hashFiles('dist/Nexy.pkg') != ''
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/Nexy.pkg
+          asset_name: Nexy-${{ github.ref_name }}.pkg
+          asset_content_type: application/octet-stream
+      
+      - name: Notify about missing PKG
+        if: hashFiles('dist/Nexy.pkg') == ''
+        run: |
+          echo "⚠️ PKG файл не найден в dist/Nexy.pkg"
+          echo "Создайте PKG файл вручную и прикрепите к релизу"

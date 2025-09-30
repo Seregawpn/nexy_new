@@ -144,7 +144,19 @@ class InputProcessingIntegration:
             self._session_waiting_grpc = False
             self._active_grpc_session_id = None
             logger.debug(f"PRESS: session(after)={self._current_session_id}, recognized reset to {self._session_recognized}")
-            # На PRESS ничего не запускаем: ждём LONG_PRESS, чтобы открыть микрофон
+            # Публикуем событие press чтобы другие модули (например VoiceOver) могли отреагировать мгновенно
+            await self.event_bus.publish(
+                "keyboard.press",
+                {
+                    "type": "keyboard.press",
+                    "data": {
+                        "timestamp": self._current_session_id,
+                        "key": event.key,
+                        "source": "keyboard",
+                    },
+                    "timestamp": event.timestamp,
+                }
+            )
         except Exception as e:
             await self.error_handler.handle_error(
                 severity=ErrorSeverity.MEDIUM,
