@@ -55,7 +55,10 @@ class TrayMenu:
 @dataclass
 class TrayConfig:
     """Конфигурация трея"""
+    enabled: bool = True
     show_status: bool = True
+    show_audio_device: bool = True
+    show_quit_option: bool = True
     show_menu: bool = True
     enable_click_events: bool = True
     enable_right_click: bool = True
@@ -63,6 +66,7 @@ class TrayConfig:
     animation_speed: float = 0.5
     icon_size: int = 16
     menu_font_size: int = 13
+    status_update_interval: float = 1.0
     enable_sound: bool = False
     debug_mode: bool = False
 

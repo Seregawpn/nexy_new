@@ -9,7 +9,7 @@ from .core.types import (
     HardwareIdError, HardwareIdNotFoundError, HardwareIdValidationError,
     CacheInfo
 )
-from .core.config import get_hardware_id_config, HardwareIdConfigManager
+from .core.types import HardwareIdConfig
 
 # Глобальный экземпляр для переиспользования
 _hardware_identifier = None
@@ -77,7 +77,6 @@ def is_available() -> bool:
 __all__ = [
     # Основные классы
     'HardwareIdentifier',
-    'HardwareIdConfigManager',
     
     # Типы данных
     'HardwareIdResult',

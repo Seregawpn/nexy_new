@@ -83,7 +83,7 @@ class ScreenshotCaptureIntegration:
         try:
             # Пытаемся инициализировать модуль захвата
             try:
-                self._capture = ScreenshotCapture(self._build_module_config())
+                self._capture = ScreenshotCapture()  # Загружает конфигурацию из unified_config автоматически
                 logger.info("ScreenshotCaptureIntegration: capture module ready")
             except Exception as e:
                 # Если модуль недоступен (нет bridge/pyobjc) — работаем в degraded-режиме

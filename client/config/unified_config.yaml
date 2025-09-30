@@ -112,6 +112,12 @@ integrations:
   hardware_id:
     enabled: true
     priority: 2
+    cache_enabled: true
+    cache_file_path: "~/.voice_assistant/hardware_id_cache.json"
+    cache_ttl_seconds: 2592000  # 30 дней
+    system_profiler_timeout: 5
+    validate_uuid_format: true
+    fallback_to_random: false
   keyboard:
     key_to_monitor: space
     short_press_threshold: 0.6

@@ -29,6 +29,13 @@ class ScreenshotRegion(Enum):
 @dataclass
 class ScreenshotConfig:
     """Конфигурация для захвата скриншотов"""
+    enabled: bool = True
+    auto_capture: bool = False
+    capture_delay: float = 0.1
+    capture_format: str = "PNG"
+    capture_quality: int = 85
+    max_captures: int = 10
+    save_path: str = "screenshots"
     format: ScreenshotFormat = ScreenshotFormat.JPEG
     quality: ScreenshotQuality = ScreenshotQuality.MEDIUM
     region: ScreenshotRegion = ScreenshotRegion.FULL_SCREEN

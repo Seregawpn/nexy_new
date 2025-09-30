@@ -9,7 +9,7 @@ from .types import (
     HardwareIdResult, HardwareIdStatus, HardwareIdConfig,
     HardwareIdError, HardwareIdNotFoundError, HardwareIdValidationError
 )
-from .config import get_hardware_id_config
+from config.unified_config_loader import unified_config
 from ..macos.hardware_detector import HardwareDetector
 from ..utils.caching import HardwareIdCache
 from ..utils.validation import HardwareIdValidator
@@ -21,7 +21,7 @@ class HardwareIdentifier:
     """Основной класс для получения Hardware ID"""
     
     def __init__(self, config: Optional[HardwareIdConfig] = None):
-        self.config = config or get_hardware_id_config()
+        self.config = config or self._get_config_from_unified()
         self.detector = HardwareDetector(timeout=self.config.system_profiler_timeout)
         self.cache = HardwareIdCache(
             cache_file_path=self.config.cache_file_path,
@@ -29,6 +29,26 @@ class HardwareIdentifier:
         )
         self.validator = HardwareIdValidator()
         self._cached_result: Optional[HardwareIdResult] = None
+    
+    def _get_config_from_unified(self) -> HardwareIdConfig:
+        """Загружает конфигурацию из unified_config.yaml"""
+        try:
+            # Получаем конфигурацию hardware_id из unified_config
+            config_data = unified_config._load_config()
+            hardware_config = config_data.get('hardware_id', {})
+            
+            return HardwareIdConfig(
+                cache_enabled=hardware_config.get('cache_enabled', True),
+                cache_file_path=hardware_config.get('cache_file_path', '~/.voice_assistant/hardware_id_cache.json'),
+                cache_ttl_seconds=hardware_config.get('cache_ttl_seconds', 86400 * 30),  # 30 дней
+                system_profiler_timeout=hardware_config.get('system_profiler_timeout', 5),
+                validate_uuid_format=hardware_config.get('validate_uuid_format', True),
+                fallback_to_random=hardware_config.get('fallback_to_random', False)
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки конфигурации hardware_id: {e}")
+            # Возвращаем конфигурацию по умолчанию
+            return HardwareIdConfig()
     
     def get_hardware_id(self, force_regenerate: bool = False) -> HardwareIdResult:
         """

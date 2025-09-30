@@ -7,27 +7,48 @@ import logging
 import time
 from typing import Optional, Tuple
 from .types import ScreenshotResult, ScreenshotConfig, ScreenshotRegion, ScreenshotError, ScreenshotTimeoutError
+from config.unified_config_loader import unified_config
 
 logger = logging.getLogger(__name__)
 
 class ScreenshotCapture:
     """Основной класс для захвата скриншотов на macOS"""
     
-    def __init__(self, config: ScreenshotConfig):
+    def __init__(self, config: Optional[ScreenshotConfig] = None):
         """
         Инициализирует захватчик скриншотов
         
         Args:
-            config: Конфигурация захвата (обязательная; передаётся интеграцией)
+            config: Конфигурация захвата (опциональная; если None, загружается из unified_config)
         """
-        if config is None:
-            raise ScreenshotError("ScreenshotCapture: config is required")
-        self.config = config
+        self.config = config or self._get_config_from_unified()
         self._bridge = None
         self._initialized = False
         
         # Инициализируем bridge
         self._initialize_bridge()
+    
+    def _get_config_from_unified(self) -> ScreenshotConfig:
+        """Загружает конфигурацию из unified_config.yaml"""
+        try:
+            # Получаем конфигурацию screenshot_capture из unified_config
+            config_data = unified_config._load_config()
+            screenshot_config = config_data.get('screenshot_capture', {})
+            
+            return ScreenshotConfig(
+                enabled=screenshot_config.get('enabled', True),
+                auto_capture=screenshot_config.get('auto_capture', False),
+                capture_delay=float(screenshot_config.get('capture_delay', 0.1)),
+                capture_format=screenshot_config.get('capture_format', 'PNG'),
+                capture_quality=int(screenshot_config.get('capture_quality', 85)),
+                max_captures=int(screenshot_config.get('max_captures', 10)),
+                save_path=screenshot_config.get('save_path', 'screenshots'),
+                timeout=float(screenshot_config.get('timeout', 5.0))
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки конфигурации screenshot_capture: {e}")
+            # Возвращаем конфигурацию по умолчанию
+            return ScreenshotConfig()
     
     def _initialize_bridge(self):
         """Инициализирует Core Graphics bridge"""

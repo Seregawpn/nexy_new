@@ -8,7 +8,7 @@ from .types import (
     HardwareIdError, HardwareIdNotFoundError, HardwareIdValidationError,
     CacheInfo
 )
-from .config import get_hardware_id_config, HardwareIdConfigManager
+from .types import HardwareIdConfig
 
 __all__ = [
     'HardwareIdentifier',
@@ -19,6 +19,4 @@ __all__ = [
     'HardwareIdNotFoundError',
     'HardwareIdValidationError',
     'CacheInfo',
-    'get_hardware_id_config',
-    'HardwareIdConfigManager'
 ]

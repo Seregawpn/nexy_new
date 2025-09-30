@@ -5,7 +5,7 @@
 <dict>
   <!-- Вне App Store: sandbox выключен -->
   <key>com.apple.security.app-sandbox</key><false/>
-  <!-- Нужен, если посылаете Apple Events -->
+  <!-- Нужен, если посылаете Apple Events (VoiceOver управление) -->
   <key>com.apple.security.automation.apple-events</key><true/>
   <!-- Доступ к микрофону -->
   <key>com.apple.security.device.microphone</key><true/>

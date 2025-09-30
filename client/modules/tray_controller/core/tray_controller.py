@@ -7,7 +7,7 @@ import logging
 import threading
 from typing import Optional, Callable, Dict, Any
 from .tray_types import TrayStatus, TrayConfig, TrayMenu, TrayMenuItem, TrayEvent
-from .config import TrayConfigManager
+from config.unified_config_loader import unified_config
 from ..macos.tray_icon import MacOSTrayIcon
 from ..macos.menu_handler import MacOSTrayMenu
 
@@ -16,9 +16,8 @@ logger = logging.getLogger(__name__)
 class TrayController:
     """Основной контроллер трея"""
     
-    def __init__(self, config_manager: Optional[TrayConfigManager] = None):
-        self.config_manager = config_manager or TrayConfigManager()
-        self.config = self.config_manager.get_config()
+    def __init__(self, config: Optional[TrayConfig] = None):
+        self.config = config or self._get_config_from_unified()
         
         # Компоненты
         self.tray_icon: Optional[MacOSTrayIcon] = None
@@ -28,6 +27,27 @@ class TrayController:
         self.current_status = TrayStatus.SLEEPING
         self.is_running = False
         self.event_callbacks: Dict[str, Callable] = {}
+    
+    def _get_config_from_unified(self) -> TrayConfig:
+        """Загружает конфигурацию из unified_config.yaml"""
+        try:
+            # Получаем конфигурацию tray_controller из unified_config
+            config_data = unified_config._load_config()
+            tray_config = config_data.get('tray_controller', {})
+            
+            return TrayConfig(
+                enabled=tray_config.get('enabled', True),
+                show_status=tray_config.get('show_status', True),
+                show_audio_device=tray_config.get('show_audio_device', True),
+                show_quit_option=tray_config.get('show_quit_option', True),
+                icon_size=tray_config.get('icon_size', 22),
+                menu_font_size=tray_config.get('menu_font_size', 14),
+                status_update_interval=tray_config.get('status_update_interval', 1.0)
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки конфигурации tray_controller: {e}")
+            # Возвращаем конфигурацию по умолчанию
+            return TrayConfig()
         
         # Поток для macOS приложения
         self._menu_thread: Optional[threading.Thread] = None

@@ -5,7 +5,7 @@ Tray Controller Module для macOS
 
 from .core.tray_controller import TrayController
 from .core.tray_types import TrayIcon, TrayMenu, TrayStatus, TrayConfig
-from .core.config import TrayConfigManager
+from .core.tray_types import TrayConfig
 
 __all__ = [
     'TrayController',
@@ -13,7 +13,6 @@ __all__ = [
     'TrayMenu',
     'TrayStatus',
     'TrayConfig',
-    'TrayConfigManager'
 ]
 
 __version__ = "1.0.0"

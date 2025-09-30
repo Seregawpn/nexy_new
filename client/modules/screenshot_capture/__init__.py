@@ -17,7 +17,6 @@ from .core.types import (
     ScreenshotFormatError,
     ScreenshotTimeoutError
 )
-from .core.config import get_screenshot_config
 
 __all__ = [
     # Основные классы
@@ -40,8 +39,6 @@ __all__ = [
     'ScreenshotFormatError',
     'ScreenshotTimeoutError',
     
-    # Конфигурация
-    'get_screenshot_config'
 ]
 
 # Версия модуля
