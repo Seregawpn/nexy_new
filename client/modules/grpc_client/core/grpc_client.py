@@ -197,8 +197,11 @@ class GrpcClient:
         try:
             repo_root = Path(__file__).resolve().parents[4]
             server_dir = repo_root / 'server'
-            if str(server_dir) not in sys.path:
+            
+            # Проверяем существование и добавляем только если нужно
+            if server_dir.exists() and str(server_dir) not in sys.path:
                 sys.path.append(str(server_dir))
+            
             pb2 = importlib.import_module('streaming_pb2')
             pb2_grpc = importlib.import_module('streaming_pb2_grpc')
             return pb2, pb2_grpc

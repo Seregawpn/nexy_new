@@ -67,16 +67,8 @@ class ScreenshotCapture:
                 self._initialized = True
                 logger.info("✅ Simple Core Graphics bridge инициализирован")
             except ImportError as e2:
-                logger.warning(f"⚠️ Simple bridge недоступен: {e2}")
-                try:
-                    # Используем тестовый bridge
-                    from ..macos.test_bridge import TestCoreGraphicsBridge
-                    self._bridge = TestCoreGraphicsBridge()
-                    self._initialized = True
-                    logger.info("✅ Test Core Graphics bridge инициализирован")
-                except ImportError as e3:
-                    logger.error(f"❌ Ошибка инициализации bridge: {e3}")
-                    raise ScreenshotError(f"Ошибка инициализации bridge: {e3}")
+                logger.error(f"❌ Ошибка инициализации bridge: {e2}")
+                raise ScreenshotError(f"Ошибка инициализации bridge: {e2}")
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации bridge: {e}")
             raise ScreenshotError(f"Ошибка инициализации bridge: {e}")

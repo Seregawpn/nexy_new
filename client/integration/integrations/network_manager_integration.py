@@ -8,9 +8,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent.parent))
+# Пути уже добавлены в main.py - не дублируем
 
 from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager
@@ -73,15 +71,8 @@ class NetworkManagerIntegration:
         try:
             logger.info("Initializing NetworkManagerIntegration...")
             
-            # Создаем конфигурацию NetworkManager
-            network_config = NetworkManagerConfig(
-                check_interval=self.config.check_interval,
-                ping_timeout=self.config.ping_timeout,
-                ping_hosts=self.config.ping_hosts
-            )
-            
-            # Создаем NetworkManager
-            self._manager = NetworkManager(network_config)
+            # Создаем NetworkManager (он сам загрузит конфигурацию из unified_config)
+            self._manager = NetworkManager()
             
             # Добавляем callback для событий сети
             self._manager.add_callback(self._on_network_event)

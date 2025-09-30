@@ -17,10 +17,15 @@ from pydub import AudioSegment
 
 from .types import WelcomeConfig
 
-# Импортируем серверный AudioGenerator
+# Импортируем серверный AudioGenerator (если доступен)
 try:
-    server_path = Path(__file__).parent.parent.parent.parent.parent / "server"
-    sys.path.append(str(server_path))
+    # Ищем сервер в родительской директории проекта
+    project_root = Path(__file__).parent.parent.parent.parent.parent
+    server_path = project_root / "server"
+    
+    if server_path.exists() and str(server_path) not in sys.path:
+        sys.path.append(str(server_path))
+    
     from audio_generator import AudioGenerator as ServerAudioGenerator
     from config import Config as ServerConfig
     _SERVER_AUDIO_GEN_AVAILABLE = True

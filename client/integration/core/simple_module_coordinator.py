@@ -10,9 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-# Добавляем путь к модулям
-sys.path.append(str(Path(__file__).parent.parent.parent))
-sys.path.append(str(Path(__file__).parent.parent))
+# Пути уже добавлены в main.py - не дублируем
 
 # Импорты интеграций (НЕ модулей напрямую!)
 from integration.integrations.instance_manager_integration import InstanceManagerIntegration
