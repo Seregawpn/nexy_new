@@ -2,11 +2,12 @@
 
 ## 1. Документы перед началом
 Перед изменениями обнови контекст по ключевым файлам:
-- `client/Docs/PRODUCT_CONCEPT.md` — пользовательские сценарии и режимы
-- `client/Docs/ARCHITECTURE_OVERVIEW.md` — связь модулей и интеграций
-- `client/Docs/PACKAGING_FINAL_GUIDE.md` и `client/modules/*/MACOS_PACKAGING_GUIDE.md` — пайплайн сборки и подписи
-- `client/Docs/CURRENT_STATUS_REPORT.md` — актуальные истории и фичи
-- `client/Docs/GLOBAL_DELIVERY_PLAN.md` — требования к доставке и Azure VM
+- `Docs/PRODUCT_CONCEPT.md` — пользовательские сценарии и режимы
+- `Docs/ARCHITECTURE_OVERVIEW.md` — связь модулей и интеграций
+- `Docs/PACKAGING_FINAL_GUIDE.md` и `client/modules/*/MACOS_PACKAGING_GUIDE.md` — пайплайн сборки и подписи
+- `Docs/CURRENT_STATUS_REPORT.md` — актуальные истории и фичи
+- `Docs/GLOBAL_DELIVERY_PLAN.md` — требования к доставке и Azure VM
+- `Docs/GO_TO_MARKET_BETA_PLAN_RU.md` — план выхода на рынок
 - `PERMISSIONS_REPORT.md` — актуальные статусы системных разрешений
 
 ## 2. Среда и запуск
@@ -14,7 +15,7 @@
 - Точка входа: `python client/main.py` (создаёт EventBus и запускает `SimpleModuleCoordinator`).
 - ffmpeg для pydub должен лежать в `client/resources/ffmpeg/ffmpeg` или паковаться внутрь `.app`.
 - При разработке держи `PYTHONPATH` чистым: `client/main.py` сам добавляет нужные пути.
-- Сборка `.app`/PKG описана в `client/Docs/PACKAGING_FINAL_GUIDE.md` (PyInstaller + pkgbuild/productbuild).
+- Сборка `.app`/PKG описана в `../Docs/PACKAGING_FINAL_GUIDE.md` (PyInstaller + pkgbuild/productbuild).
 
 ## 3. Архитектурное устройство
 - **Core** (`client/integration/core/`): `EventBus`, `SimpleModuleCoordinator`, `ApplicationStateManager`, `ErrorHandler`.
@@ -27,7 +28,7 @@
 ## 4. Порядок модулей и инициализации
 `SimpleModuleCoordinator` инициализирует интеграции в фиксированной последовательности: InstanceManager → HardwareId → Tray → ModeManagement → InputProcessing → VoiceRecognition → Permissions → AudioDevice → NetworkManager → InterruptManagement → ScreenshotCapture → GrpcClient → SpeechPlayback → Updater → Signal → WelcomeMessage → VoiceOverDucking. Не меняй порядок без веских причин — это влияет на зависимости и режимы.
 
-**Политика расширения:** прежде чем изменять структуру или добавлять новую интеграцию, проверь существующие модули и workflows; их допускается расширять конфигом или событиями. Новый модуль/интеграция создаём только если требуемого поведения нет и его нельзя разумно добавить через текущие компоненты. В этом случае документируй причину и зависимостей в `CURRENT_STATUS_REPORT.md` и обнови `unified_config.yaml`.
+**Политика расширения:** прежде чем изменять структуру или добавлять новую интеграцию, проверь существующие модули и workflows; их допускается расширять конфигом или событиями. Новый модуль/интеграция создаём только если требуемого поведения нет и его нельзя разумно добавить через текущие компоненты. В этом случае документируй причину и зависимостей в `../Docs/CURRENT_STATUS_REPORT.md` и обнови `unified_config.yaml`.
 
 ## 5. Паттерн интеграции
 - Наследуй `BaseIntegration` и подключай существующий модуль.
@@ -44,7 +45,7 @@
 
 ## 7. Взаимодействие с сервером
 - gRPC настройки (`grpc.server_host`, `grpc.server_port`, TLS) берутся из unified_config.
-- Сообщения/стриминг определены `server/streaming.proto`; при изменениях сервера обновляй клиентские stubs и проводи совместное тестирование.
+- Сообщения/стриминг определены `../server/modules/grpc_service/streaming.proto`; при изменениях сервера обновляй клиентские stubs и проводи совместное тестирование.
 - Сетевые ошибки должны транслироваться через события ошибок и обрабатываться дружелюбно (без падения режима).
 
 ## 8. Логирование и телеметрия
@@ -60,7 +61,7 @@
 ## 10. Тестирование
 - Модульные тесты (если есть) держим рядом с модулями (`modules/*/tests` или `integration/tests`).
 - Обязательные ручные проверки: push-to-talk, переходы режимов, Tray меню, автообновление Sparkle, VoiceOver ducking.
-- Для регрессии глянь сценарии в `client/Docs/CURRENT_STATUS_REPORT.md` и адаптируй плейлист.
+- Для регрессии глянь сценарии в `../Docs/CURRENT_STATUS_REPORT.md` и адаптируй плейлист.
 
 ## 11. Чеклист изменений
 **Перед началом**
@@ -76,7 +77,7 @@
 - Не забывай о `session_id`, `source` в событиях и об обработке ошибок.
 
 **После**
-- Если добавлена новая интеграция/модуль — зафиксируй обоснование в `CURRENT_STATUS_REPORT.md` и обнови список в корневом `.cursorrules`.
+- Если добавлена новая интеграция/модуль — зафиксируй обоснование в `../Docs/CURRENT_STATUS_REPORT.md` и обнови список в корневом `.cursorrules`.
 - Добавь интеграцию в SimpleModuleCoordinator (если новая) и настрой приоритеты.
 - Обнови `unified_config.yaml`, документацию и при необходимости паковочные гайты.
 - Прогоняй ручные проверки и убедись, что логи чисты от ошибок.

@@ -40,6 +40,10 @@ log() {
 safe_copy() {
     # $1 = src, $2 = dst
     /usr/bin/ditto --noextattr --noqtn "$1" "$2"
+    # Дополнительная очистка после копирования
+    xattr -cr "$2" 2>/dev/null || true
+    find "$2" -name '._*' -delete 2>/dev/null || true
+    find "$2" -name '.DS_Store' -delete 2>/dev/null || true
 }
 
 # Функция проверки и очистки extended attributes
@@ -47,10 +51,21 @@ clean_xattrs() {
     local app_path="$1"
     local stage="$2"
     
-    # Жёстко чистим
+    # Агрессивная очистка extended attributes
     xattr -cr "$app_path" || true
     find "$app_path" -name '._*' -type f -delete || true
     find "$app_path" -name '.DS_Store' -type f -delete || true
+    
+    # Дополнительная очистка конкретных атрибутов
+    xattr -d com.apple.FinderInfo "$app_path" 2>/dev/null || true
+    xattr -d com.apple.ResourceFork "$app_path" 2>/dev/null || true
+    xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+    xattr -d com.apple.metadata:kMDItemWhereFroms "$app_path" 2>/dev/null || true
+    xattr -d com.apple.metadata:kMDItemDownloadedDate "$app_path" 2>/dev/null || true
+    
+    # Рекурсивная очистка всех файлов
+    find "$app_path" -type f -exec xattr -c {} \; 2>/dev/null || true
+    find "$app_path" -type d -exec xattr -c {} \; 2>/dev/null || true
     
     # Проверяем и валим сборку, если что-то осталось
     if xattr -pr com.apple.FinderInfo "$app_path" 2>/dev/null | grep -q .; then
@@ -126,11 +141,14 @@ log "Сборка завершена успешно"
     # Шаг 2: Создание ЧИСТОЙ копии (КРИТИЧНО!)
     echo -e "${BLUE}📋 Шаг 2: Создание чистой копии${NC}"
     
+    log "Очищаем исходное приложение от extended attributes..."
+    clean_xattrs "dist/$APP_NAME.app" "исходное приложение"
+    
     log "Создаем полностью чистую копию без extended attributes..."
     rm -rf "$CLEAN_APP"
     safe_copy "dist/$APP_NAME.app" "$CLEAN_APP"
     
-    log "Проверяем и очищаем extended attributes..."
+    log "Проверяем и очищаем extended attributes в копии..."
     clean_xattrs "$CLEAN_APP" "создание чистой копии"
     
     # Дополнительная агрессивная очистка
@@ -303,9 +321,13 @@ xcrun stapler staple "$DIST_DIR/$APP_NAME.pkg"
     xattr -d com.apple.FinderInfo "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
     xattr -d com.apple.ResourceFork "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
     xattr -d com.apple.quarantine "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+    xattr -d com.apple.metadata:kMDItemWhereFroms "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
+    xattr -d com.apple.metadata:kMDItemDownloadedDate "$DIST_DIR/$APP_NAME-final.app" 2>/dev/null || true
     xattr -cr "$DIST_DIR/$APP_NAME-final.app" || true
     find "$DIST_DIR/$APP_NAME-final.app" -name '._*' -delete || true
     find "$DIST_DIR/$APP_NAME-final.app" -name '.DS_Store' -delete || true
+    find "$DIST_DIR/$APP_NAME-final.app" -type f -exec xattr -c {} \; 2>/dev/null || true
+    find "$DIST_DIR/$APP_NAME-final.app" -type d -exec xattr -c {} \; 2>/dev/null || true
 
 echo "=== ФИНАЛЬНАЯ ПРОВЕРКА ВСЕХ АРТЕФАКТОВ ==="
 echo ""

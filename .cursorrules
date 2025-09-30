@@ -4,12 +4,12 @@
 
 ## 1. Контекст перед изменениями
 Перед началом работы обязательно изучи актуальные материалы проекта:
-- `client/Docs/PRODUCT_CONCEPT.md` — концепт продукта, UX и сценарии SLEEPING/LISTENING/PROCESSING
-- `client/Docs/GLOBAL_DELIVERY_PLAN.md` — глобальный план поставки, Azure VM, требования к подписи
-- `client/Docs/PACKAGING_FINAL_GUIDE.md` — финальный гайд по упаковке PKG
-- `client/Docs/ARCHITECTURE_OVERVIEW.md` — архитектура клиента и сервера
-- `client/Docs/CURRENT_STATUS_REPORT.md` — актуальные пользовательские истории
-- `server/SERVER_MODULARIZATION_PLAN.md` — план модуляризации серверной части
+- `Docs/PRODUCT_CONCEPT.md` — концепт продукта, UX и сценарии SLEEPING/LISTENING/PROCESSING
+- `Docs/GLOBAL_DELIVERY_PLAN.md` — глобальный план поставки, Azure VM, требования к подписи
+- `Docs/GO_TO_MARKET_BETA_PLAN_RU.md` — план выхода на рынок
+- `Docs/PACKAGING_FINAL_GUIDE.md` — финальный гайд по упаковке PKG
+- `Docs/ARCHITECTURE_OVERVIEW.md` — архитектура клиента и сервера
+- `Docs/CURRENT_STATUS_REPORT.md` — актуальные пользовательские истории
 
 ## 2. Технический baseline (клиент)
 - macOS меню-бар приложение (rumps)
@@ -22,11 +22,12 @@
 
 ## 3. Технический baseline (сервер)
 - Python 3.11+, запуск через `server/main.py`
-- gRPC сервис из `server/grpc_server.py`, протокол описан в `server/streaming.proto`
+- gRPC сервис из `server/modules/grpc_service/core/grpc_server.py`, протокол описан в `server/modules/grpc_service/streaming.proto`
 - HTTP health-check на 8080 (aiohttp) обязателен для Azure Container Apps
 - Опциональный update-сервер на 8081 из каталога `update-server`
 - Конфигурация из `server/config` и `config.env`; секреты хранятся вне репозитория
-- Модули и интеграции собираются по плану `SERVER_MODULARIZATION_PLAN.md`
+- Модули и интеграции завершены, архитектура описана в `Docs/ARCHITECTURE_OVERVIEW.md`
+- Масштабирование до 100 пользователей с мониторингом в `server/monitoring/`
 
 Подробные серверные требования см. в `server/.cursorrules`.
 
@@ -39,11 +40,23 @@ VoiceRecognitionIntegration, ScreenshotCaptureIntegration, HardwareIdIntegration
 GrpcClientIntegration, SpeechPlaybackIntegration, ModeManagementIntegration,
 SignalIntegration, WelcomeMessageIntegration, VoiceOverDuckingIntegration.
 
+### Workflows (новая архитектура):
+- **ListeningWorkflow** - координатор LISTENING режима, дебаунс, умные таймауты
+- **ProcessingWorkflow** - координатор PROCESSING: capture→grpc→playback→SLEEPING
+- **BaseWorkflow** - базовый класс для всех workflows
+
+### Серверная часть (завершена):
+- 9 модулей полностью реализованы и протестированы
+- Масштабирование до 100 пользователей настроено
+- Система мониторинга активна (`server/monitoring/`)
+- gRPC сервер оптимизирован для высокой нагрузки
+
 ## 5. Архитектура и режимы работы
 - Поддерживаются только три режима: SLEEPING (серый, микрофон выключен, фоновое обновление), LISTENING (синий пульс, распознавание речи, обновления остановлены), PROCESSING (желтый спиннер, отправка данных, воспроизведение ответа, обновления остановлены).
 - Переход LISTENING активируется долгим удержанием пробела, отпускание переводит в PROCESSING.
 - Все подсистемы общаются через EventBus.
 - Интеграции тонкие: управляют существующими модулями и не дублируют бизнес-логику.
+- Workflows координируют сложные переходы между режимами: ListeningWorkflow (LISTENING), ProcessingWorkflow (PROCESSING).
 - Перед созданием нового модуля/интеграции повторно используй существующие компоненты. Расширяй их конфигурацией, событиями или провайдерами. Новый блок допускается только когда требуемого поведения нет и его нельзя разумно добавить в текущие; документируй обоснование и зависимости в профильных отчетах.
 
 ## 6. Критические запреты
@@ -138,7 +151,7 @@ my_feature:
 - Изучи `client/modules/` и актуальные интеграции.
 - Посмотри `unified_config.yaml` и план запуска `SimpleModuleCoordinator`.
 - Определи необходимые события EventBus.
-- Если задача серверная: изучи `server/modules/`, `server/integrations/`, `SERVER_MODULARIZATION_PLAN.md` и актуальные gRPC контракты.
+- Если задача серверная: изучи `server/modules/`, `server/integrations/`, `Docs/ARCHITECTURE_OVERVIEW.md` и актуальные gRPC контракты.
 
 Во время:
 - Создавай только интеграции, не новые модули.
@@ -161,6 +174,8 @@ my_feature:
 - Конфигурацию загружай через существующие утилиты, секреты храни во внешних источниках (env или Keychain).
 - Для каждой интеграции нужны unit-тесты в `integration/tests/`, мокай внешние зависимости и проверяй переходы между режимами.
 - Sparkle: `appcast_url`, `check_interval` настраиваются через конфиг.
+- Мониторинг: используй `server/monitoring/` для отслеживания производительности и ошибок.
+- Масштабирование: сервер настроен на 100 пользователей с оптимизированными параметрами.
 
 ## 13.1. Система версионирования (КРИТИЧНО!)
 - **ПРАВИЛО #1:** При загрузке кода на GitHub ВСЕГДА создавай новую версию через `./scripts/create_version_release.sh vX.Y.Z "Описание"`

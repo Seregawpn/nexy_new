@@ -22,11 +22,11 @@ database:
   user: postgres
 grpc:
   host: 0.0.0.0
-  max_workers: 10
+  max_workers: 100
   port: 50051
 interrupt:
   global_interrupt_timeout: 300
-  max_active_sessions: 50
+  max_active_sessions: 100
   session_interrupt_timeout: 60
 logging:
   backup_count: 5
@@ -38,14 +38,14 @@ logging:
 memory:
   analysis_timeout: 5.0
   gemini_api_key: ''
-  max_long_term_memory_size: 10240
-  max_short_term_memory_size: 10240
+  max_long_term_memory_size: 102400
+  max_short_term_memory_size: 51200
   memory_analysis_model: gemini-2.5-flash-lite
   memory_analysis_temperature: 0.3
   memory_timeout: 2.0
 session:
   hardware_id_length: 32
-  max_sessions: 100
+  max_sessions: 200
   session_timeout: 3600
 text_processing:
   circuit_breaker_threshold: 3
@@ -57,5 +57,12 @@ text_processing:
   gemini_temperature: 0.7
   langchain_model: gemini-pro
   langchain_temperature: 0.7
-  max_concurrent_requests: 10
+  max_concurrent_requests: 50
   request_timeout: 60
+
+# Защитные лимиты для масштабирования
+protection:
+  max_requests_per_minute: 1000
+  max_requests_per_user: 10
+  circuit_breaker_threshold: 5
+  max_memory_usage: 80

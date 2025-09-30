@@ -5,5 +5,10 @@ gRPC Service Module
 """
 
 from .core.grpc_service_manager import GrpcServiceManager
+from .core.grpc_server import run_server, NewStreamingServicer
 
-__all__ = ['GrpcServiceManager']
+# Protobuf файлы
+import streaming_pb2
+import streaming_pb2_grpc
+
+__all__ = ['GrpcServiceManager', 'run_server', 'NewStreamingServicer', 'streaming_pb2', 'streaming_pb2_grpc']

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from aiohttp import web
-from grpc_server import run_server as serve
+from modules.grpc_service.core.grpc_server import run_server as serve
 from dotenv import load_dotenv
 
 # Загружаем config.env

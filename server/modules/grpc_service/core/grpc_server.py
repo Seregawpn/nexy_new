@@ -9,15 +9,25 @@ import logging
 import grpc.aio
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional, AsyncGenerator
 
 # Protobuf файлы генерируются автоматически из streaming.proto
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import streaming_pb2
 import streaming_pb2_grpc
 
 # Импорт новых модулей
-from modules.grpc_service.core.grpc_service_manager import GrpcServiceManager
+from .grpc_service_manager import GrpcServiceManager
+
+# Импорты мониторинга (относительные пути)
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+from monitoring import record_request, set_active_connections, get_metrics, get_status
 
 # Логирование настроено в main.py
 logger = logging.getLogger(__name__)
@@ -103,7 +113,8 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             logger.error(f"❌ Ошибка очистки нового сервера: {e}")
     
     async def StreamAudio(self, request: streaming_pb2.StreamRequest, context) -> AsyncGenerator[streaming_pb2.StreamResponse, None]:
-        """Обработка StreamRequest через новые модули"""
+        """Обработка StreamRequest через новые модули с мониторингом"""
+        start_time = time.time()
         session_id = request.session_id or f"session_{datetime.now().timestamp()}"
         hardware_id = request.hardware_id or "unknown"
         
@@ -111,6 +122,9 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
         logger.info(f"📨 StreamRequest данные: prompt_len={len(request.prompt)}, screenshot_len={len(request.screenshot) if request.screenshot else 0}")
         
         try:
+            # Увеличиваем счетчик активных соединений
+            current_connections = get_metrics().get('active_connections', 0)
+            set_active_connections(current_connections + 1)
             # В новом protobuf нет interrupt_flag в StreamRequest
             # Прерывания обрабатываются через отдельный InterruptSession API
             
@@ -183,10 +197,21 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             import traceback
             traceback.print_exc()
             
+            # Записываем ошибку в метрики
+            record_request(time.time() - start_time, is_error=True)
+            
             response = streaming_pb2.StreamResponse(
                 error_message=f"Внутренняя ошибка сервера: {str(e)}"
             )
             yield response
+        finally:
+            # Уменьшаем счетчик активных соединений
+            current_connections = get_metrics().get('active_connections', 0)
+            set_active_connections(max(0, current_connections - 1))
+            
+            # Записываем метрику запроса
+            response_time = time.time() - start_time
+            record_request(response_time, is_error=False)
     
     async def InterruptSession(self, request: streaming_pb2.InterruptRequest, context) -> streaming_pb2.InterruptResponse:
         """Обработка InterruptRequest через Interrupt Manager"""
@@ -237,12 +262,38 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
                 interrupted_sessions=[]
             )
 
-async def run_server(port: int = 50051, max_workers: int = 10):
-    """Запуск нового gRPC сервера"""
-    logger.info(f"🚀 Запуск нового gRPC сервера на порту {port}")
+async def run_server(port: int = 50051, max_workers: int = 100):
+    """Запуск оптимизированного gRPC сервера для 100 пользователей"""
+    logger.info(f"🚀 Запуск оптимизированного gRPC сервера на порту {port} с {max_workers} воркерами")
     
-    # Создаем сервер
-    server = grpc.aio.server(ThreadPoolExecutor(max_workers=max_workers))
+    # Оптимизированный ThreadPoolExecutor
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="grpc-worker"
+    )
+    
+    # Настройки для высокой нагрузки
+    options = [
+        # Keep-alive настройки
+        ('grpc.keepalive_time_ms', 30000),
+        ('grpc.keepalive_timeout_ms', 5000),
+        ('grpc.keepalive_permit_without_calls', True),
+        
+        # HTTP/2 настройки
+        ('grpc.http2.max_pings_without_data', 0),
+        ('grpc.http2.min_time_between_pings_ms', 10000),
+        ('grpc.http2.min_ping_interval_without_data_ms', 300000),
+        
+        # Буферы
+        ('grpc.max_receive_message_length', 4 * 1024 * 1024),  # 4MB
+        ('grpc.max_send_message_length', 4 * 1024 * 1024),     # 4MB
+        
+        # Таймауты
+        ('grpc.client_idle_timeout_ms', 300000),  # 5 минут
+    ]
+    
+    # Создаем сервер с оптимизированными настройками
+    server = grpc.aio.server(executor, options=options)
     
     # Создаем сервис
     servicer = NewStreamingServicer()
@@ -260,12 +311,17 @@ async def run_server(port: int = 50051, max_workers: int = 10):
     listen_addr = f'[::]:{port}'
     server.add_insecure_port(listen_addr)
     
-    logger.info(f"✅ Новый сервер настроен на {listen_addr}")
+    logger.info(f"✅ Оптимизированный сервер настроен на {listen_addr}")
+    logger.info(f"📊 Настройки производительности:")
+    logger.info(f"   - Воркеры: {max_workers}")
+    logger.info(f"   - Keep-alive: 30s")
+    logger.info(f"   - Буферы: 4MB")
+    logger.info(f"   - Таймаут клиента: 5 минут")
     
     try:
         # Запускаем сервер
         await server.start()
-        logger.info(f"🎉 Новый gRPC сервер запущен на порту {port}")
+        logger.info(f"🎉 Оптимизированный gRPC сервер запущен на порту {port}")
         
         # Ждем завершения
         await server.wait_for_termination()
@@ -281,7 +337,7 @@ async def run_server(port: int = 50051, max_workers: int = 10):
         
         # Graceful shutdown
         await server.stop(grace=5.0)
-        logger.info("✅ Новый сервер остановлен")
+        logger.info("✅ Оптимизированный сервер остановлен")
 
 async def main():
     """Основная функция"""

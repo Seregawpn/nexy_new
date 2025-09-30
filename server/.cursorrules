@@ -1,12 +1,13 @@
 # Nexy Server Development Rules
 
 ## 1. Базовый контекст
-Перед изменениями обязательно освежи архитектурные документы:
-- `server/SERVER_MODULARIZATION_PLAN.md` — целевая структура модулей и интеграций
-- `server/ARCHITECTURE_REMEDIATION_PLAN.md` — исторические решения и долговые ограничения
-- `server/MODULES_TESTING_FINAL_GUIDE.md` и `server/TESTING_SUMMARY.md` — актуальный статус тестов
-- `server/streaming.proto` — контракт gRPC, согласованный с клиентом
-- `update-server/README.md` — нюансы встроенного update-сервера
+Перед изменениями обнови контекст по ключевым файлам:
+- `Docs/PRODUCT_CONCEPT.md` — пользовательские сценарии и режимы
+- `Docs/ARCHITECTURE_OVERVIEW.md` — связь модулей и интеграций
+- `Docs/PACKAGING_FINAL_GUIDE.md` и `client/modules/*/MACOS_PACKAGING_GUIDE.md` — пайплайн сборки и подписи
+- `Docs/CURRENT_STATUS_REPORT.md` — актуальные истории и фичи
+- `Docs/GLOBAL_DELIVERY_PLAN.md` — требования к доставке и Azure VM
+- `Docs/GO_TO_MARKET_BETA_PLAN_RU.md` — план выхода на рынок
 
 ## 2. Среда и запуск
 - Python 3.11+, разворачивай в отдельном `venv`; зависимости — `server/requirements.txt`
@@ -14,7 +15,7 @@
 - Перед запуском загрузи переменные окружения из `server/config.env`
 - Для регенерации gRPC артефактов используй:
   ```bash
-  cd server
+  cd server/modules/grpc_service
   python -m grpc_tools.protoc \
       -I. \
       --python_out=. \
@@ -30,7 +31,7 @@
   - `service_integrations/` — обвязка gRPC (`GrpcServiceIntegration`, `ModuleCoordinatorIntegration`)
   - `workflow_integrations/` — сценарные пайплайны (streaming, memory, interrupt и т.д.)
 - gRPC менеджер собирает активные модули через Module Coordinator; прямых вызовов между модулями быть не должно
-- Модули считаются стабильными (см. серверный план); расширяем их конфигурацией, провайдерами или событиями. Новый модуль/интеграция допускается только когда нужного поведения нет и нельзя разумно добавить его в существующие блоки. В таком случае документируй мотивацию и зависимости в `SERVER_MODULARIZATION_PLAN.md` и обновляй конфиг/тесты.
+- Модули считаются стабильными; расширяем их конфигурацией, провайдерами или событиями. Новый модуль/интеграция допускается только когда нужного поведения нет и нельзя разумно добавить его в существующие блоки. В таком случае документируй мотивацию и зависимости в `Docs/ARCHITECTURE_OVERVIEW.md` и обновляй конфиг/тесты.
 
 ## 4. Паттерны модулей и интеграций
 - Каждый модуль наследует `UniversalModuleInterface`: реализуй `initialize`, `process`, `cleanup`, обновляй `ModuleStatus`
@@ -46,7 +47,7 @@
 ## 6. Конфигурация и секреты
 - Основные настройки: `server/config/unified_config_example.yaml` и `server/config/unified_config.py`
 - Ожидаемые переменные берутся из `.env`/`config.env`; секреты (API-ключи, токены) храним вне репозитория
-- Новые параметры документируй в `SERVER_MODULARIZATION_PLAN.md` и добавляй в пример конфигурации
+- Новые параметры документируй в `Docs/ARCHITECTURE_OVERVIEW.md` и добавляй в пример конфигурации
 - Не создавай рассыпанные YAML/JSON; используй существующие загрузчики
 
 ## 7. Логирование и мониторинг
@@ -54,9 +55,11 @@
 - Обязательно логируй старт/остановку сервисов, сигналы обновлений, ошибки gRPC и статусы модулей
 - Не допускается логирование PII и секретов
 - При расширении логгирования используй стандартный `logging` и централизованные настройки из `main.py`
+- Система мониторинга: используй `server/monitoring/` для отслеживания производительности и ошибок
+- Масштабирование: сервер настроен на 100 пользователей с оптимизированными параметрами
 
 ## 8. Тестирование
-- Для каждого модуля есть сценарий из `MODULES_TESTING_FINAL_GUIDE.md` (например, `python modules/text_processing/test_text_processing.py`)
+- Для каждого модуля есть сценарий тестирования (например, `python modules/text_processing/test_text_processing.py`)
 - Сохраняй последовательность тестов, указанную в гиде, чтобы не нарушить зависимости
 - Для регрессии gRPC сервиса используй `modules/grpc_service/test_grpc_service.py`
 - При добавлении модулей/интеграций обеспечь отдельный тестовый скрипт и обнови гайд
