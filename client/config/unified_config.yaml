@@ -1,7 +1,3 @@
-# Nexy AI Assistant Configuration
-# Version: v3.5.0
-# Last Updated: 2025-09-29
-
 accessibility:
   error_sound: true
   sound_notifications: true
