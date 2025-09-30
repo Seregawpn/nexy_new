@@ -8,9 +8,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent.parent))
+# Пути уже добавлены в main.py - не дублируем
 
 from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager, AppMode

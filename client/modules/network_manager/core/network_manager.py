@@ -10,8 +10,7 @@ from typing import Optional, Callable, Dict, Any, List
 from pathlib import Path
 import sys
 
-# Добавляем путь для импорта unified_config
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+# Пути уже добавлены в main.py - не дублируем
 
 from .types import (
     NetworkStatus,
@@ -25,6 +24,7 @@ from .types import (
     NetworkManagerState
 )
 from .config import NetworkManagerConfig
+from config.unified_config_loader import unified_config
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class NetworkManager:
     """Менеджер сети для мониторинга подключения и качества"""
     
     def __init__(self, config: Optional[NetworkManagerConfig] = None):
-        self.config = config or NetworkManagerConfig()
+        self.config = config or self._get_config_from_unified()
         self.state = NetworkManagerState()
         self.state.config = self.config.to_network_config()
         
@@ -42,6 +42,16 @@ class NetworkManager:
         
         # Callbacks
         self._callbacks: List[Callable[[NetworkEvent], None]] = []
+        
+    def _get_config_from_unified(self) -> NetworkManagerConfig:
+        """Загружает конфигурацию из unified_config.yaml"""
+        try:
+            config_data = unified_config._load_config()
+            network_config = config_data.get('network_manager', {})
+            return NetworkManagerConfig.from_unified_config(network_config)
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки конфигурации network_manager: {e}")
+            return NetworkManagerConfig()
         
         logger.info(f"NetworkManager initialized with config: {self.config}")
     

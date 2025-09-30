@@ -282,3 +282,19 @@ welcome_message:
   sample_rate: 48000
   channels: 1
   bit_depth: 16
+
+# Network Manager Configuration
+network_manager:
+  enabled: true
+  priority: 6
+  check_interval: 10
+  ping_timeout: 3
+  max_retries: 3
+  retry_delay: 5.0
+  ping_hosts:
+    - "1.1.1.1"
+    - "8.8.8.8"
+  test_urls:
+    - "https://www.google.com"
+    - "https://www.apple.com"
+    - "https://www.cloudflare.com"

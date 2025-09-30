@@ -9,8 +9,11 @@ import os
 import sys
 from pathlib import Path
 
-# Добавляем путь к модулям
-sys.path.append(str(Path(__file__).parent))
+# Добавляем пути к модулям (централизованно)
+CLIENT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(CLIENT_ROOT))
+sys.path.insert(0, str(CLIENT_ROOT / "modules"))
+sys.path.insert(0, str(CLIENT_ROOT / "integration"))
 
 # --- Ранняя инициализация pydub/ffmpeg (до любых вызовов pydub) ---
 def init_ffmpeg_for_pydub():
