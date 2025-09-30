@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>Nexy</title>
+    <options customize="never" require-scripts="false"/>
+    <!-- Форсируем установку только в системный домен (/Applications) -->
+    <domains enable_localSystem="true" enable_currentUserHome="false"/>
+    <choices-outline>
+        <line choice="main"/>
+    </choices-outline>
+    <choice id="main" visible="false">
+        <pkg-ref id="com.nexy.assistant.pkg"/>
+    </choice>
+    <!-- id и version должны совпадать с параметрами pkgbuild -->
+    <pkg-ref id="com.nexy.assistant.pkg" version="1.0.0">Nexy-raw.pkg</pkg-ref>
+</installer-gui-script>

@@ -1,0 +1,34 @@
+appcast:
+  base_url: https://api.nexy.ai/updates
+  check_interval: 24
+  timeout: 30
+grpc_servers:
+  fallback:
+    host: backup.nexy.ai
+    port: 443
+    retry_attempts: 2
+    retry_delay: 2.0
+    ssl: true
+    timeout: 90
+  local:
+    host: 127.0.0.1
+    port: 50051
+    retry_attempts: 2
+    retry_delay: 0.5
+    ssl: false
+    timeout: 60
+  production:
+    host: 20.151.51.172
+    port: 50051
+    retry_attempts: 3
+    retry_delay: 1.0
+    ssl: false
+    timeout: 120
+network:
+  auto_fallback: true
+  connection_check_interval: 5
+  ping_hosts:
+  - 8.8.8.8
+  - 1.1.1.1
+  - google.com
+  ping_timeout: 5

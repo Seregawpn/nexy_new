@@ -1,0 +1,50 @@
+# PyInstaller артефакты
+build/
+dist/
+packaging/build/
+packaging/dist/
+*.spec
+*.pkg
+*.dmg
+*-app-for-notarization.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
