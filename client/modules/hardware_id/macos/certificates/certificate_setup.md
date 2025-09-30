@@ -47,10 +47,10 @@ APPLE_ID="your_apple_id@example.com"
 APP_SPECIFIC_PASSWORD="your_app_specific_password"
 
 # Team ID (найти в Apple Developer Portal)
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 
 # Имя сертификата (как в Keychain Access)
-DEVELOPER_ID_APPLICATION_CERT_NAME="Developer ID Application: Your Name (XXXXXXXXXX)"
+DEVELOPER_ID_APPLICATION_CERT_NAME="Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)"
 ```
 
 ### Шаг 4: Проверка установки

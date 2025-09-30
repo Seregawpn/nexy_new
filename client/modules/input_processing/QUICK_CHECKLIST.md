@@ -306,7 +306,7 @@ pkgutil --check-signature "InputProcessing-1.0.0-signed.pkg"
 PKG_FILE="InputProcessing-1.0.0-signed.pkg"
 APPLE_ID="your-apple-id@example.com"
 APP_PASSWORD="your-app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 
 # Нотаризация
 xcrun notarytool submit "$PKG_FILE" \
@@ -340,7 +340,7 @@ echo "🚀 Полная сборка Input Processing модуля..."
 # Переменные (настройте под себя)
 APPLE_ID="your-apple-id@example.com"
 APP_PASSWORD="your-app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 APP_IDENTITY="Developer ID Application: Your Name ($TEAM_ID)"
 INSTALLER_IDENTITY="Developer ID Installer: Your Name ($TEAM_ID)"
 

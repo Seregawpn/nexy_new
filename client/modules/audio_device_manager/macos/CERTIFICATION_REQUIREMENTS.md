@@ -126,7 +126,7 @@
 xcrun notarytool submit "AudioDeviceManager-1.0.0-signed.pkg" \
     --apple-id "your-apple-id@example.com" \
     --password "app-specific-password" \
-    --team-id "YOUR_TEAM_ID" \
+    --team-id "5NKLL2CLB9" \
     --wait
 ```
 

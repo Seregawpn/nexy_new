@@ -212,7 +212,7 @@ chmod +x sign_and_notarize.sh
 export DEVELOPER_ID="Developer ID Application: Your Name (TEAM_ID)"
 export APPLE_ID="your@email.com"
 export APP_PASSWORD="app-specific-password"
-export TEAM_ID="YOUR_TEAM_ID"
+export TEAM_ID="5NKLL2CLB9"
 ```
 
 ## ⚠️ **ВАЖНЫЕ ЗАМЕЧАНИЯ**

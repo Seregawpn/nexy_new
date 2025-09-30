@@ -57,7 +57,7 @@ check_environment() {
     fi
     
     if [ -z "$TEAM_ID" ]; then
-        error "TEAM_ID не установлен. Установите: export TEAM_ID='YOUR_TEAM_ID'"
+        error "TEAM_ID не установлен. Установите: export TEAM_ID='5NKLL2CLB9'"
         exit 1
     fi
     

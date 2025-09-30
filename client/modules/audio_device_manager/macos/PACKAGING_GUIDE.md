@@ -365,7 +365,7 @@ set -e
 PKG_FILE="AudioDeviceManager-1.0.0-signed.pkg"
 APPLE_ID="your-apple-id@example.com"
 APP_PASSWORD="your-app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 
 echo "🏛️ Начинаем нотаризацию..."
 

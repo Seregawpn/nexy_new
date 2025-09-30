@@ -80,7 +80,7 @@ cp "${INFO_PLIST_FILE}" "${DIST_DIR}/${APP_NAME}.app/Contents/Info.plist"
 
 # 7. Подписываем приложение (если есть сертификат)
 echo "✍️ Подписываем приложение..."
-codesign --force --deep --entitlements "${ENTITLEMENTS_FILE}" --options runtime --sign "Developer ID Application: Your Developer ID (XXXXXXXXXX)" "${DIST_DIR}/${APP_NAME}.app"
+codesign --force --deep --entitlements "${ENTITLEMENTS_FILE}" --options runtime --sign "Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)" "${DIST_DIR}/${APP_NAME}.app"
 
 if [ $? -ne 0 ]; then
     echo "⚠️ Ошибка при подписании приложения. Продолжаем без подписи."

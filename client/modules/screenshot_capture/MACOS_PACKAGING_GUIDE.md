@@ -56,7 +56,7 @@ security import "DeveloperIDInstaller.cer" -k build.keychain -T /usr/bin/codesig
 
 APP_NAME="Nexy"
 APP_VERSION="1.0.0"
-BUNDLE_ID="com.nexy.app"
+BUNDLE_ID="com.nexy.assistant"
 
 # Создание структуры .app
 mkdir -p "${APP_NAME}.app/Contents/MacOS"
@@ -353,7 +353,7 @@ if __name__ == "__main__":
 # sign_app.sh
 
 APP_NAME="Nexy"
-BUNDLE_ID="com.nexy.app"
+BUNDLE_ID="com.nexy.assistant"
 DEVELOPER_ID="Developer ID Application: Your Name (TEAM_ID)"
 INSTALLER_ID="Developer ID Installer: Your Name (TEAM_ID)"
 
@@ -424,7 +424,7 @@ spctl --assess --verbose "${APP_NAME}.app"
 
 APP_NAME="Nexy"
 PKG_NAME="Nexy-1.0.0.pkg"
-BUNDLE_ID="com.nexy.app"
+BUNDLE_ID="com.nexy.assistant"
 INSTALLER_ID="Developer ID Installer: Your Name (TEAM_ID)"
 
 # Создание временной директории
@@ -538,10 +538,10 @@ rm -rf "$TEMP_DIR"
 
 APP_NAME="Nexy"
 PKG_NAME="signed_Nexy-1.0.0.pkg"
-BUNDLE_ID="com.nexy.app"
-APPLE_ID="your-email@example.com"
-APP_PASSWORD="app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+BUNDLE_ID="com.nexy.assistant"
+APPLE_ID="seregawpn@gmail.com"
+APP_PASSWORD="qtiv-kabm-idno-qmbl"
+TEAM_ID="5NKLL2CLB9"
 
 # Отправка на нотаризацию
 echo "Отправка на нотаризацию..."

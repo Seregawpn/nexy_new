@@ -1,10 +1,10 @@
 {
-  "apple_id": "YOUR_APPLE_ID",
-  "app_specific_password": "YOUR_APP_SPECIFIC_PASSWORD",
-  "team_id": "YOUR_TEAM_ID",
-  "developer_id_application_cert_name": "Developer ID Application: Your Developer ID (XXXXXXXXXX)",
-  "bundle_identifier": "com.nexy.hardware.id",
-  "app_name": "NexyHardwareID",
+  "apple_id": "seregawpn@gmail.com",
+  "app_specific_password": "qtiv-kabm-idno-qmbl",
+  "team_id": "5NKLL2CLB9",
+  "developer_id_application_cert_name": "Developer ID Application: Sergiy Zasorin (5NKLL2CLB9)",
+  "bundle_identifier": "com.nexy.assistant",
+  "app_name": "Nexy",
   "version": "1.0.0",
   "description": "Hardware ID module for Nexy voice assistant",
   "keywords": [

@@ -30,9 +30,9 @@ client/
 ├─ config/                      # ⚙️ Конфигурация
 │  ├─ unified_config.yaml       # 🎯 ЕДИНЫЙ источник конфигурации
 │  ├─ unified_config_loader.py  # 🔧 Загрузчик конфигурации
-│  ├─ logging_config.yaml       # 📝 Настройки логирования
-│  ├─ network_config.yaml       # 🌐 Сетевые настройки
-│  ├─ tray_config.yaml          # 🎯 Настройки tray иконки
+│  ├─ logging_config.yaml       # 📝 Устарел - используйте unified_config.yaml
+│  ├─ network_config.yaml       # 🌐 Устарел - используйте unified_config.yaml
+│  ├─ tray_config.yaml          # 🎯 Устарел - используйте unified_config.yaml
 │  └─ README.md                 # 📚 Документация конфигурации
 ├─ integration/                 # 🏗️ Слой интеграций (ЗАВЕРШЕН)
 │  ├─ core/                     # Базовая архитектура

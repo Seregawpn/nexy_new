@@ -18,9 +18,9 @@ accessibility:
     use_apple_script_fallback: true
     engage_on_keyboard_events: true
     # Настройки детального логирования для диагностики
-    debug_logging: true
-    log_osascript_commands: true
-    log_voiceover_state: true
+    debug_logging: false
+    log_osascript_commands: false
+    log_voiceover_state: false
 app:
   bundle_id: com.nexy.assistant
   debug: false
@@ -175,8 +175,8 @@ integrations:
     simulate_min_delay_sec: 1.0
     simulate_max_delay_sec: 3.0
 logging:
-  console_level: INFO
-  file_level: DEBUG
+  console_level: ERROR
+  file_level: WARNING
   file_path: logs/nexy.log
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   max_file_size: 10485760

@@ -305,7 +305,7 @@ APP_NAME="Nexy"
 PKG_NAME="Nexy_AI_Assistant_1.0.0.pkg"
 APPLE_ID="your-apple-id@example.com"
 APP_PASSWORD="your-app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 
 echo "🏛️ Подготовка к нотаризации"
 
@@ -435,7 +435,7 @@ VERSION="1.0.0"
 CERTIFICATE="Developer ID Application: Your Company (TEAM_ID)"
 APPLE_ID="your-apple-id@example.com"
 APP_PASSWORD="your-app-specific-password"
-TEAM_ID="YOUR_TEAM_ID"
+TEAM_ID="5NKLL2CLB9"
 
 echo "🚀 Полная сборка и упаковка $APP_NAME"
 
