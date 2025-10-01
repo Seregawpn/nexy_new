@@ -7,6 +7,7 @@ aiohttp
 
 # 🚀 Google Gemini API (основной LLM)
 google-genai
+google-generativeai
 
 # 🔄 LangChain интеграция
 langchain
@@ -33,3 +34,6 @@ psycopg2-binary
 # Аудио обработка
 numpy
 pydub
+
+# Мониторинг системы
+psutil

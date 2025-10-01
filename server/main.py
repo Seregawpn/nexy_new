@@ -4,6 +4,8 @@ from aiohttp import web
 from modules.grpc_service.core.grpc_server import run_server as serve
 from dotenv import load_dotenv
 
+# 🚀 Тест автоматического деплоя - 30 сентября 2025
+
 # Загружаем config.env
 load_dotenv('config.env')
 

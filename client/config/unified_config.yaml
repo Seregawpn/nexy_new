@@ -6,18 +6,17 @@ accessibility:
   voice_feedback: true
   voiceover_control:
     enabled: true
-    mode: stop  # Используем Command+F5 для полного переключения VoiceOver
+    mode: stop
     duck_modes:
-      - listening
-      - processing
+    - listening
+    - processing
     release_modes:
-      - sleeping
+    - sleeping
     debounce_seconds: 0.25
     stop_repeats: 2
     stop_repeat_delay: 0.05
     use_apple_script_fallback: true
     engage_on_keyboard_events: true
-    # Настройки детального логирования для диагностики
     debug_logging: false
     log_osascript_commands: false
     log_voiceover_state: false
@@ -75,6 +74,33 @@ audio:
   volume_step: 0.1
   volume_threshold: 0.01
   warmup_delay: 0.1
+servers:
+  grpc_servers:
+    local:
+      host: 127.0.0.1
+      port: 50051
+      ssl: false
+      timeout: 60
+      retry_attempts: 2
+      retry_delay: 0.5
+    production:
+      host: 20.151.51.172
+      port: 50051
+      ssl: false
+      timeout: 120
+      retry_attempts: 3
+      retry_delay: 1.0
+    fallback:
+      host: backup.nexy.ai
+      port: 443
+      ssl: true
+      timeout: 90
+      retry_attempts: 2
+      retry_delay: 2.0
+  appcast:
+    base_url: https://api.nexy.ai/updates
+    check_interval: 24
+    timeout: 30
 grpc:
   connection_timeout: 30
   enable_compression: true
@@ -90,7 +116,7 @@ grpc:
   max_send_message_length: 4194304
   retry_attempts: 3
   retry_delay: 1.0
-  server_host: 127.0.0.1
+  server_host: 20.151.51.172
   server_port: 50051
   use_tls: false
 integrations:
@@ -146,11 +172,11 @@ integrations:
     retry_delay: 5.0
     show_instructions: false
     required_permissions:
-      - microphone
-      - screen_capture
-      - network
-      - accessibility
-      - input_monitoring
+    - microphone
+    - screen_capture
+    - network
+    - accessibility
+    - input_monitoring
   screenshot_capture:
     enabled: true
     priority: 7
@@ -169,7 +195,7 @@ integrations:
   voice_recognition:
     enabled: true
     priority: 4
-    simulate: false  # Отключаем симуляцию - пытаемся использовать реальный микрофон
+    simulate: false
     timeout_sec: 10.0
     simulate_success_rate: 0.7
     simulate_min_delay_sec: 1.0
@@ -182,44 +208,39 @@ logging:
   max_file_size: 10485760
   max_files: 5
   rotation: true
-network:
-  # Настройки сети используют конфигурацию из секции grpc
-  # чтобы избежать дублирования
+network: null
 permissions:
-  # Основные разрешения
   microphone:
     enabled: true
     required: true
-    description: "Nexy использует микрофон для распознавания речи и голосового управления."
+    description: Nexy использует микрофон для распознавания речи и голосового управления.
   screen_capture:
     enabled: true
     required: true
-    description: "Nexy захватывает содержимое экрана для анализа и помощи пользователю."
+    description: Nexy захватывает содержимое экрана для анализа и помощи пользователю.
   camera:
     enabled: false
     required: false
-    description: "Nexy может использовать камеру для анализа окружения."
+    description: Nexy может использовать камеру для анализа окружения.
   network:
     enabled: true
     required: true
-    description: "Nexy использует сеть для связи с сервером и обновлений."
+    description: Nexy использует сеть для связи с сервером и обновлений.
   notifications:
     enabled: true
     required: true
-    description: "Nexy отправляет уведомления о статусе работы и важных событиях."
+    description: Nexy отправляет уведомления о статусе работы и важных событиях.
   accessibility:
     enabled: true
     required: true
-    description: "Nexy использует Accessibility для мониторинга клавиатуры и автоматизации."
-  # Настройки разрешений (дублируются в integrations.permissions)
-  # Системные настройки
+    description: Nexy использует Accessibility для мониторинга клавиатуры и автоматизации.
   system_preferences:
-    microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    screen_capture: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-    camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
-    accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    input_monitoring: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-    notifications: "x-apple.systempreferences:com.apple.preference.notifications"
+    microphone: x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone
+    screen_capture: x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture
+    camera: x-apple.systempreferences:com.apple.preference.security?Privacy_Camera
+    accessibility: x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility
+    input_monitoring: x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent
+    notifications: x-apple.systempreferences:com.apple.preference.notifications
 screenshot_capture:
   auto_capture: false
   capture_delay: 0.1
@@ -273,17 +294,15 @@ voice_recognition:
   wake_word: nexy
 welcome_message:
   enabled: true
-  text: "Hi! Nexy is here. How can I help you?"
-  audio_file: "assets/audio/welcome_en.mp3"
+  text: Hi! Nexy is here. How can I help you?
+  audio_file: assets/audio/welcome_en.mp3
   fallback_to_tts: true
   delay_sec: 1.5
   volume: 0.8
-  voice: "en-US-JennyNeural"
+  voice: en-US-JennyNeural
   sample_rate: 48000
   channels: 1
   bit_depth: 16
-
-# Network Manager Configuration
 network_manager:
   enabled: true
   priority: 6
@@ -292,9 +311,9 @@ network_manager:
   max_retries: 3
   retry_delay: 5.0
   ping_hosts:
-    - "1.1.1.1"
-    - "8.8.8.8"
+  - 1.1.1.1
+  - 8.8.8.8
   test_urls:
-    - "https://www.google.com"
-    - "https://www.apple.com"
-    - "https://www.cloudflare.com"
+  - https://www.google.com
+  - https://www.apple.com
+  - https://www.cloudflare.com

@@ -117,11 +117,15 @@ class UnifiedConfigLoader:
     def get_network_config(self) -> NetworkConfig:
         """Получает сетевые настройки"""
         config = self._load_config()
-        network_data = config['network']
+        
+        # Новая структура: servers.grpc_servers
+        servers_data = config.get('servers', {})
+        grpc_servers_data = servers_data.get('grpc_servers', {})
+        appcast_data = servers_data.get('appcast', {})
         
         # Преобразуем gRPC серверы в объекты
         grpc_servers = {}
-        for name, server_data in network_data['grpc_servers'].items():
+        for name, server_data in grpc_servers_data.items():
             grpc_servers[name] = GrpcServerConfig(
                 host=server_data['host'],
                 port=server_data['port'],
@@ -131,13 +135,16 @@ class UnifiedConfigLoader:
                 retry_delay=server_data['retry_delay']
             )
         
+        # Настройки сети (с fallback на старую структуру)
+        network_data = config.get('network', {})
+        
         return NetworkConfig(
             grpc_servers=grpc_servers,
-            appcast=network_data['appcast'],
-            connection_check_interval=network_data['connection_check_interval'],
-            auto_fallback=network_data['auto_fallback'],
-            ping_timeout=network_data['ping_timeout'],
-            ping_hosts=network_data['ping_hosts']
+            appcast=appcast_data,
+            connection_check_interval=network_data.get('connection_check_interval', 5),
+            auto_fallback=network_data.get('auto_fallback', True),
+            ping_timeout=network_data.get('ping_timeout', 5),
+            ping_hosts=network_data.get('ping_hosts', ['8.8.8.8', '1.1.1.1'])
         )
     
     def get_grpc_config(self, environment: str = "local") -> GrpcServerConfig:

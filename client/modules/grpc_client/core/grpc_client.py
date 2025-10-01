@@ -41,7 +41,7 @@ class GrpcClient:
         return {
             'servers': {
                 'local': {
-                    'address': '127.0.0.1',
+                    'address': '127.0.0.1',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
                     'port': 50051,
                     'use_ssl': False,
                     'timeout': 30,
@@ -49,7 +49,7 @@ class GrpcClient:
                     'retry_delay': 1.0
                 },
                 'production': {
-                    'address': '20.151.51.172',
+                    'address': '20.151.51.172',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
                     'port': 50051,
                     'use_ssl': False,
                     'timeout': 120,

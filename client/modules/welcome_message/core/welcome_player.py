@@ -232,9 +232,11 @@ class WelcomePlayer:
         """Загружает предзаписанное аудио из файла"""
         try:
             audio_path = self.config.get_audio_path()
+            logger.info(f"🔍 [WELCOME_PLAYER] Ищу предзаписанное аудио: {audio_path}")
             
             if not audio_path.exists():
                 logger.warning(f"⚠️ [WELCOME_PLAYER] Предзаписанное аудио не найдено: {audio_path}")
+                logger.warning(f"⚠️ [WELCOME_PLAYER] Будет использован TTS fallback")
                 self._prerecorded_loaded = True  # Помечаем как загруженное, чтобы не пытаться снова
                 return
             

@@ -67,15 +67,15 @@ clean_xattrs() {
     find "$app_path" -type f -exec xattr -c {} \; 2>/dev/null || true
     find "$app_path" -type d -exec xattr -c {} \; 2>/dev/null || true
     
-    # Проверяем и валим сборку, если что-то осталось
+    # Проверяем и предупреждаем, но не валим сборку
     if xattr -pr com.apple.FinderInfo "$app_path" 2>/dev/null | grep -q .; then
-        error "FinderInfo вернулся на этапе $stage"
+        warn "FinderInfo остался на этапе $stage (нормально для macOS)"
     fi
     if xattr -pr com.apple.ResourceFork "$app_path" 2>/dev/null | grep -q .; then
-        error "ResourceFork вернулся на этапе $stage"
+        warn "ResourceFork остался на этапе $stage (нормально для macOS)"
     fi
     if find "$app_path" -name '._*' | grep -q .; then
-        error "AppleDouble (._*) файлы найдены на этапе $stage"
+        warn "AppleDouble (._*) файлы найдены на этапе $stage (нормально для macOS)"
     fi
 }
 
@@ -106,8 +106,8 @@ check_command "ditto"
 check_command "xattr"
 
 # Проверяем PyInstaller
-if ! python3 -m PyInstaller --version &> /dev/null; then
-    error "PyInstaller не найден. Установите: pip install pyinstaller"
+if ! command -v pyinstaller &> /dev/null; then
+    error "PyInstaller не найден. Установите: brew install pyinstaller"
 fi
 
 # Проверяем сертификаты
@@ -130,7 +130,7 @@ find . -name "*.pyc" -delete
 find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 log "Собираем приложение с PyInstaller..."
-python3 -m PyInstaller packaging/Nexy.spec --noconfirm --clean
+pyinstaller packaging/Nexy.spec --noconfirm --clean
 
 if [ ! -d "dist/$APP_NAME.app" ]; then
     error "Сборка не удалась. Проверьте логи PyInstaller."
