@@ -22,7 +22,7 @@ jobs:
             --resource-group Nexy \
             --name nexy-regular \
             --command-id RunShellScript \
-            --scripts @/home/azureuser/update-server.sh
+            --scripts /home/azureuser/update-server.sh
           
           echo "✅ Деплой завершен"
           
