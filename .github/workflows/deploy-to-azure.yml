@@ -1,0 +1,45 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'main.py', 'modules/**', 'integrations/**', 'config/**', 'requirements.txt' ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Deploy to Azure VM
+      uses: azure/CLI@v1
+      with:
+        inlineScript: |
+          echo "🚀 Начинаем деплой на Azure VM..."
+          
+          # Выполняем команду обновления на VM
+          az vm run-command invoke \
+            --resource-group nexy-rg \
+            --name nexy-vm \
+            --command-id RunShellScript \
+            --scripts @/home/azureuser/update-server.sh
+          
+          echo "✅ Деплой завершен"
+          
+          # Проверяем health endpoint
+          echo "🔍 Проверяем health endpoint..."
+          sleep 10
+          
+          # Проверяем статус сервиса
+          az vm run-command invoke \
+            --resource-group nexy-rg \
+            --name nexy-vm \
+            --command-id RunShellScript \
+            --scripts "systemctl is-active voice-assistant.service"
+          
+          echo "🎉 Деплой успешно завершен!"
+      env:
+        AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
