@@ -19,8 +19,8 @@ jobs:
           
           # Выполняем команду обновления на VM
           az vm run-command invoke \
-            --resource-group nexy-rg \
-            --name nexy-vm \
+            --resource-group Nexy \
+            --name nexy-regular \
             --command-id RunShellScript \
             --scripts @/home/azureuser/update-server.sh
           
@@ -32,8 +32,8 @@ jobs:
           
           # Проверяем статус сервиса
           az vm run-command invoke \
-            --resource-group nexy-rg \
-            --name nexy-vm \
+            --resource-group Nexy \
+            --name nexy-regular \
             --command-id RunShellScript \
             --scripts "systemctl is-active voice-assistant.service"
           
