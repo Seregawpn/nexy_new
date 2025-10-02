@@ -1,18 +1,31 @@
 # 🚀 РУКОВОДСТВО ПО ДЕПЛОЮ СЕРВЕРА НА AZURE
 
 **Дата создания:** 1 октября 2025  
-**Версия:** 1.0  
-**Статус:** ✅ Активно используется
+**Версия:** 2.1  
+**Статус:** ✅ Активно используется  
+**Последнее обновление:** 2 октября 2025 - Исправлен GitHub Actions workflow для корректной работы
 
 ---
 
 ## 📋 **ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ**
 
 ### **🔐 GitHub Secrets (КРИТИЧНО):**
-Должны быть настроены в `https://github.com/Seregawpn/Nexy_server/settings/secrets/actions`:
-- `AZURE_CREDENTIALS` - Service Principal JSON
-- `AZURE_SUBSCRIPTION_ID` - ID подписки Azure
-- `AZURE_TENANT_ID` - ID тенанта Azure
+
+**Должен быть настроен в** `https://github.com/Seregawpn/Nexy_server/settings/secrets/actions`:
+
+**Секрет:** `AZURE_CREDENTIALS` (формат JSON)
+
+**Структура секрета:**
+```json
+{
+  "clientId": "YOUR_AZURE_CLIENT_ID",
+  "clientSecret": "YOUR_AZURE_CLIENT_SECRET",
+  "subscriptionId": "YOUR_AZURE_SUBSCRIPTION_ID",
+  "tenantId": "YOUR_AZURE_TENANT_ID"
+}
+```
+
+**📝 Примечание:** Реальные значения хранятся только в GitHub Secrets и локально. Никогда не коммитьте секреты в репозиторий.
 
 ### **📁 Структура файлов (ОБЯЗАТЕЛЬНО):**
 ```
@@ -59,9 +72,23 @@ cd nexy_server_temp
 # ОБЯЗАТЕЛЬНО: Очистить все старые файлы
 rm -rf * .* 2>/dev/null || true
 
-# ОБЯЗАТЕЛЬНО: Скопировать все файлы сервера
+# ОБЯЗАТЕЛЬНО: Скопировать только серверные файлы
 cp -r /Users/sergiyzasorin/Library/Mobile\ Documents/com~apple~CloudDocs/Development/Nexy/server/* .
-cp -r /Users/sergiyzasorin/Library/Mobile\ Documents/com~apple~CloudDocs/Development/Nexy/server/.* . 2>/dev/null || true
+# НЕ копируем скрытые файлы из корня проекта (они могут содержать клиентские данные)
+
+**Что копируется:**
+- ✅ `main.py` - основной файл сервера
+- ✅ `modules/` - все модули сервера
+- ✅ `integrations/` - интеграции сервера
+- ✅ `config/` - конфигурация сервера
+- ✅ `requirements.txt` - зависимости
+- ✅ `.github/` - GitHub Actions
+- ✅ `Docs/` - серверная документация
+
+**Что НЕ копируется:**
+- ❌ `client/` - клиентская часть (остается в nexy_new)
+- ❌ Скрытые файлы из корня проекта
+- ❌ Клиентские конфигурации
 ```
 
 ### **ШАГ 4: НАСТРОЙКА GIT (30 секунд)**
@@ -106,11 +133,16 @@ rm -rf nexy_server_temp
 После push в GitHub автоматически запускается:
 
 ### **🤖 GitHub Actions процесс:**
-1. **Триггер:** Push в main ветку
+1. **Триггер:** Push в main ветку (изменения в `main.py`, `modules/**`, `integrations/**`, `config/**`, `requirements.txt`)
 2. **Аутентификация:** GitHub Secrets + Azure Service Principal
 3. **Команда:** `az vm run-command invoke` → `/home/azureuser/update-server.sh`
-4. **Обновление:** `git pull` + `pip install` + `systemctl restart`
-5. **Проверка:** Health checks
+4. **Обновление:** 
+   - `git stash` + `git clean` (очистка локальных изменений)
+   - `git pull origin main` (получение обновлений)
+   - `pip install -r requirements.txt` (установка зависимостей)
+   - `systemctl restart voice-assistant.service` (перезапуск сервиса)
+   - **Регенерация protobuf файлов** (при необходимости)
+5. **Проверка:** Health checks + откат при ошибках
 
 ### **📊 Мониторинг деплоя:**
 - **GitHub Actions:** `https://github.com/Seregawpn/Nexy_server/actions`
@@ -171,6 +203,7 @@ az vm run-command invoke \
 1. Проверить GitHub Secrets в настройках репозитория
 2. Убедиться, что workflow файл в `.github/workflows/`
 3. Проверить триггеры в workflow
+4. Проверить, что GitHub Actions включен в Settings > Actions > General
 
 ### **Проблема: Деплой не завершается**
 **Решение:**
@@ -189,6 +222,36 @@ az vm run-command invoke \
 1. Проверить статус сервиса на сервере
 2. Посмотреть логи сервиса
 3. Перезапустить сервис вручную
+
+### **Проблема: Protobuf version mismatch**
+**Ошибка:** `VersionError: Detected mismatched Protobuf Gencode/Runtime major versions`
+**Решение:**
+```bash
+# На сервере выполнить:
+cd /home/azureuser/voice-assistant
+source venv/bin/activate
+python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. modules/grpc_service/streaming.proto
+sudo systemctl restart voice-assistant.service
+```
+
+### **Проблема: Git pull не работает**
+**Ошибка:** `fatal: refusing to merge unrelated histories` или локальные изменения
+**Решение:**
+```bash
+# Скрипт автоматически решает эту проблему:
+git stash  # Сохраняет локальные изменения
+git clean -fd --exclude=venv/  # Очищает неотслеживаемые файлы
+git pull origin main  # Получает обновления
+```
+
+### **Проблема: Сервис не запускается после обновления**
+**Решение:**
+1. Скрипт автоматически откатывается к предыдущему коммиту
+2. Проверить логи сервиса:
+```bash
+sudo journalctl -u voice-assistant.service --no-pager -n 20
+```
+3. При необходимости регенерировать protobuf файлы
 
 ---
 
@@ -232,14 +295,88 @@ git commit -m "changes"
 
 ---
 
+## 🛠️ **ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ СЕРВЕРОМ**
+
+### **Проверка статуса сервера:**
+```bash
+# Статус сервиса
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "systemctl status voice-assistant.service"
+
+# Health check
+curl http://20.151.51.172/health
+
+# Логи сервиса
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "sudo journalctl -u voice-assistant.service --no-pager -n 20"
+```
+
+### **Ручное управление сервисом:**
+```bash
+# Перезапуск сервиса
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl restart voice-assistant.service"
+
+# Остановка сервиса
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl stop voice-assistant.service"
+
+# Запуск сервиса
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl start voice-assistant.service"
+```
+
+### **Проверка обновлений:**
+```bash
+# Проверить последний коммит на сервере
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "cd /home/azureuser/voice-assistant && git log --oneline -1"
+
+# Проверить статус git
+az vm run-command invoke \
+  --resource-group Nexy \
+  --name nexy-regular \
+  --command-id RunShellScript \
+  --scripts "cd /home/azureuser/voice-assistant && git status"
+```
+
+---
+
 ## 🚀 **ГОТОВО К ИСПОЛЬЗОВАНИЮ**
 
 **Следуйте этой инструкции для каждого обновления сервера.**
 
 **При возникновении проблем - обращайтесь к разделу "Устранение проблем".**
 
+**Автоматический деплой работает и включает в себя:**
+- ✅ Автоматическую очистку локальных изменений
+- ✅ Безопасное обновление кода
+- ✅ Установку зависимостей
+- ✅ Перезапуск сервиса
+- ✅ Проверку работоспособности
+- ✅ Автоматический откат при ошибках
+
 ---
 
 **📞 Поддержка:** Документация в `Docs/` папке  
 **🔗 Репозиторий:** `https://github.com/Seregawpn/Nexy_server`  
-**🌐 Сервер:** `http://20.151.51.172`
+**🌐 Сервер:** `http://20.151.51.172`  
+**📊 GitHub Actions:** `https://github.com/Seregawpn/Nexy_server/actions`
