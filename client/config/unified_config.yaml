@@ -121,7 +121,7 @@ integrations:
   grpc_client:
     enabled: true
     priority: 9
-    server: local  # local|production|fallback - ЕДИНСТВЕННОЕ МЕСТО для изменения сервера
+    server: production  # local|production|fallback - ЕДИНСТВЕННОЕ МЕСТО для изменения сервера
     aggregate_timeout_sec: 1.5
     request_timeout_sec: 30.0
     max_retries: 3

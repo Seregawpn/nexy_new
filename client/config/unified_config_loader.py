@@ -121,7 +121,7 @@ class UnifiedConfigLoader:
         # Получаем gRPC настройки из секции grpc
         grpc_data = config.get('grpc', {})
         
-        # Создаем конфигурацию для локального сервера
+        # Создаем конфигурации для всех серверов
         grpc_servers = {
             'local': GrpcServerConfig(
                 host=grpc_data.get('server_host', '127.0.0.1'),
@@ -130,6 +130,22 @@ class UnifiedConfigLoader:
                 timeout=grpc_data.get('connection_timeout', 30),
                 retry_attempts=grpc_data.get('retry_attempts', 3),
                 retry_delay=grpc_data.get('retry_delay', 1.0)
+            ),
+            'production': GrpcServerConfig(
+                host='20.151.51.172',  # Azure VM IP
+                port=50051,
+                ssl=False,  # Временно без TLS для беты
+                timeout=30,
+                retry_attempts=3,
+                retry_delay=1.0
+            ),
+            'fallback': GrpcServerConfig(
+                host='127.0.0.1',
+                port=50052,  # Резервный порт
+                ssl=False,
+                timeout=30,
+                retry_attempts=3,
+                retry_delay=1.0
             )
         }
         
