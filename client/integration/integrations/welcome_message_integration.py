@@ -3,8 +3,7 @@ WelcomeMessageIntegration — интеграция модуля приветст
 
 Назначение:
 - Воспроизводит приветственное сообщение при запуске приложения
-- Поддерживает предзаписанное аудио и TTS fallback
-- Интегрируется с SpeechPlaybackIntegration для воспроизведения
+- Запрашивает серверную генерацию и передает аудио в SpeechPlaybackIntegration
 """
 
 import asyncio
@@ -148,6 +147,14 @@ class WelcomeMessageIntegration:
         try:
             logger.info(f"🎵 [WELCOME_INTEGRATION] Начинаю воспроизведение приветствия (trigger={trigger})")
             
+            # 🆕 ПЕРЕХОД В PROCESSING РЕЖИМ
+            logger.info("🔄 [WELCOME_INTEGRATION] Переход в режим PROCESSING для приветствия")
+            await self.event_bus.publish("mode.request", {
+                "target": "PROCESSING",
+                "source": "welcome_message",
+                "reason": "welcome_playback"
+            })
+            
             # Воспроизводим через плеер
             result = await self.welcome_player.play_welcome()
             
@@ -156,7 +163,18 @@ class WelcomeMessageIntegration:
             else:
                 logger.warning(f"⚠️ [WELCOME_INTEGRATION] Приветствие не удалось: {result.error}")
             
+            # НЕ переключаем режим здесь - это будет сделано в _on_welcome_completed
+            # после завершения воспроизведения аудио
+            
         except Exception as e:
+            # 🆕 ВОЗВРАТ В SLEEPING ПРИ ОШИБКЕ (с задержкой для видимости)
+            logger.error("🔄 [WELCOME_INTEGRATION] Возврат в режим SLEEPING из-за ошибки")
+            await asyncio.sleep(0.5)  # Небольшая задержка для видимости изменения иконки
+            await self.event_bus.publish("mode.request", {
+                "target": "SLEEPING",
+                "source": "welcome_message", 
+                "reason": "welcome_error"
+            })
             await self._handle_error(e, where="welcome.play_message", severity="warning")
     
     def _on_welcome_started(self):
@@ -164,9 +182,10 @@ class WelcomeMessageIntegration:
         try:
             logger.info("🎵 [WELCOME_INTEGRATION] Приветствие началось")
             # Публикуем событие начала
+            method = "server" if getattr(self.config, "use_server", True) else "none"
             asyncio.create_task(self.event_bus.publish("welcome.started", {
                 "text": self.config.text,
-                "method": "server"  # Будет обновлено в _on_welcome_completed
+                "method": method  # Будет обновлено в _on_welcome_completed
             }))
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка в _on_welcome_started: {e}")
@@ -186,10 +205,14 @@ class WelcomeMessageIntegration:
             }))
             
             # Если есть аудио данные, отправляем их в SpeechPlaybackIntegration
-            if result.success and result.method in ["server", "local_fallback"]:
+            if result.success and result.method == "server":
                 audio_data = self.welcome_player.get_audio_data()
                 if audio_data is not None:
                     asyncio.create_task(self._send_audio_to_playback(audio_data))
+            
+            # 🆕 ВОЗВРАТ В SLEEPING РЕЖИМ после завершения воспроизведения
+            # (это будет вызвано после завершения воспроизведения аудио)
+            asyncio.create_task(self._return_to_sleeping_after_playback())
             
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка в _on_welcome_completed: {e}")
@@ -205,8 +228,51 @@ class WelcomeMessageIntegration:
                 "text": self.config.text
             }))
             
+            # 🆕 ВОЗВРАТ В SLEEPING РЕЖИМ при ошибке
+            asyncio.create_task(self._return_to_sleeping_after_playback())
+            
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка в _on_welcome_error: {e}")
+    
+    async def _return_to_sleeping_after_playback(self):
+        """Возвращает приложение в режим SLEEPING после завершения воспроизведения"""
+        try:
+            # Слушаем событие завершения воспроизведения от SpeechPlaybackIntegration
+            logger.info("🔄 [WELCOME_INTEGRATION] Ожидаю завершения воспроизведения...")
+            
+            # Создаем Future для ожидания события
+            playback_completed = asyncio.Future()
+            
+            async def on_playback_completed(event):
+                # Проверяем session_id вместо pattern, так как SpeechPlaybackIntegration
+                # не публикует pattern в playback.completed
+                session_id = event.get("data", {}).get("session_id", "")
+                if "welcome_message" in session_id:
+                    logger.info("🎵 [WELCOME_INTEGRATION] Получено событие завершения воспроизведения")
+                    if not playback_completed.done():
+                        playback_completed.set_result(True)
+            
+            # Подписываемся на событие завершения воспроизведения
+            await self.event_bus.subscribe("playback.completed", on_playback_completed)
+            
+            try:
+                # Ждем завершения воспроизведения с таймаутом
+                await asyncio.wait_for(playback_completed, timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ [WELCOME_INTEGRATION] Таймаут ожидания завершения воспроизведения")
+            finally:
+                # Отписываемся от события
+                await self.event_bus.unsubscribe("playback.completed", on_playback_completed)
+            
+            logger.info("🔄 [WELCOME_INTEGRATION] Возврат в режим SLEEPING после завершения воспроизведения")
+            await self.event_bus.publish("mode.request", {
+                "target": "SLEEPING",
+                "source": "welcome_message",
+                "reason": "welcome_playback_completed"
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка в _return_to_sleeping_after_playback: {e}")
     
     async def _send_audio_to_playback(self, audio_data: np.ndarray):
         """Отправляет аудио данные в SpeechPlaybackIntegration для воспроизведения"""
@@ -440,8 +506,6 @@ class WelcomeMessageIntegration:
             "config": {
                 "enabled": self.config.enabled,
                 "text": self.config.text,
-                "audio_file": self.config.audio_file,
-                "fallback_to_tts": self.config.fallback_to_tts,
                 "delay_sec": self.config.delay_sec
             },
             "player_state": self.welcome_player.state.value if hasattr(self.welcome_player, 'state') else "unknown"

@@ -37,7 +37,7 @@ CLEANUP_CATEGORIES = {
         "files": [
             "assets/audio/welcome_en_old.mp3",
             "assets/audio/welcome_en_new.aiff",
-            # welcome_en.mp3 и welcome_en.wav оставляем - они используются
+            # Аудио файлы приветствия удалены - теперь используется серверная генерация
         ]
     },
     

@@ -34,8 +34,6 @@ class WelcomeConfigLoader:
             config = WelcomeConfig(
                 enabled=welcome_config.get('enabled', True),
                 text=welcome_config.get('text', "Hi! Nexy is here. How can I help you?"),
-                audio_file=welcome_config.get('audio_file', "assets/audio/welcome_en.mp3"),
-                fallback_to_tts=welcome_config.get('fallback_to_tts', True),
                 delay_sec=float(welcome_config.get('delay_sec', 1.0)),
                 volume=float(welcome_config.get('volume', 0.8)),
                 voice=welcome_config.get('voice', "en-US-JennyNeural"),

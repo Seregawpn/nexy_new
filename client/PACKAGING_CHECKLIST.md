@@ -51,8 +51,8 @@
   - PyInstaller onefile (sys._MEIPASS)
   - PyInstaller bundle (Contents/Resources/)
   - Development режим
-- [x] Обновлен `WelcomeConfig.get_audio_path()` для использования утилиты
-- [x] **КРИТИЧНО:** Исправляет проблему "аудио файл не найден"
+- [x] Обновлены утилиты путей для корректной работы в PyInstaller окружениях
+- [x] **КРИТИЧНО:** Исправляет проблему доступа к ресурсам в onefile/bundle режимах
 
 ### ✅ gRPC Server Configuration
 - [x] `integration/integrations/grpc_client_integration.py` строка 35:
@@ -240,6 +240,5 @@ dist/
 **Дата проверки:** 2025-10-02 23:59  
 **Проверено:** AI Assistant  
 **Статус:** ✅ ГОТОВО К PRODUCTION
-
 
 

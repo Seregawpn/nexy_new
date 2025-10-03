@@ -73,45 +73,44 @@ async def test_welcome_player_integration():
         from modules.welcome_message.core.types import WelcomeConfig
         from modules.welcome_message.core.welcome_player import WelcomePlayer
         
-        print("📋 Создание WelcomeConfig...")
-        config = WelcomeConfig(
+        print("📋 Проверка server-only конфигурации...")
+        config = WelcomeConfig()
+        print(f"   • enabled: {config.enabled}")
+        print(f"   • use_server: {config.use_server}")
+        if not config.use_server:
+            print("❌ Конфигурация должна использовать серверную генерацию приветствия")
+            return False
+
+        print("\n🎵 Симулируем запуск без серверной поддержки (use_server=False)...")
+        config_disabled = WelcomeConfig(
             enabled=True,
-            fallback_to_tts=True,
-            use_server=False,  # Для теста заставляем использовать только локальный fallback
-            server_timeout_sec=5.0,
+            text=config.text,
+            delay_sec=config.delay_sec,
+            volume=config.volume,
+            voice=config.voice,
+            sample_rate=config.sample_rate,
+            channels=config.channels,
+            bit_depth=config.bit_depth,
+            use_server=False,
+            server_timeout_sec=config.server_timeout_sec,
         )
 
-        print("\n🎵 Создание WelcomePlayer и воспроизведение...")
-        player = WelcomePlayer(config)
+        player = WelcomePlayer(config_disabled)
         result = await player.play_welcome()
 
         print(f"   • success: {result.success}")
         print(f"   • method: {result.method}")
-        print(f"   • duration_sec: {result.duration_sec:.2f}")
-        if result.error:
-            print(f"   • error: {result.error}")
+        print(f"   • error: {result.error}")
 
-        audio_data = player.get_audio_data()
-        metadata = player.get_audio_metadata() or {}
-
-        if not result.success or audio_data is None:
-            print("❌ Не удалось получить локальное приветствие")
+        if result.success or result.method != "none":
+            print("❌ Плеер не должен воспроизводить приветствие без сервера")
             return False
 
-        print(f"\n📊 Информация об аудио:")
-        print(f"   • Тип данных: {audio_data.dtype}")
-        print(f"   • Форма: {audio_data.shape}")
-        print(f"   • Размер: {audio_data.size} элементов")
-        print(f"   • Длительность (метаданные): {metadata.get('duration_sec')}")
-        print(f"   • Sample rate: {metadata.get('sample_rate', config.sample_rate)}")
-        print(f"   • Каналы: {metadata.get('channels', config.channels)}")
-        print(f"   • Диапазон: [{audio_data.min()}, {audio_data.max()}]")
-
-        if audio_data.size == 0:
-            print("❌ Аудио данные пустые!")
+        if not result.error:
+            print("❌ Ожидалось сообщение об ошибке при отключении сервера")
             return False
 
-        print("\n✅ Welcome Player Integration - PASS")
+        print("\n✅ Welcome Player Integration (server-only check) - PASS")
         return True
         
     except Exception as e:
@@ -143,12 +142,13 @@ def test_ffmpeg_availability():
         if hasattr(AudioSegment, "converter"):
             print(f"   • AudioSegment.converter: {AudioSegment.converter}")
         
-        # Пробуем загрузить тестовый файл
-        test_audio_path = CLIENT_ROOT / "assets" / "audio" / "welcome_en.mp3"
+        # Создаем тестовый аудио файл для проверки
+        test_audio_path = CLIENT_ROOT / "test_audio_temp.wav"
         
-        if not test_audio_path.exists():
-            print(f"❌ Тестовый файл не найден: {test_audio_path}")
-            return False
+        # Создаем простой тестовый аудио файл
+        from pydub.generators import Sine
+        test_audio = Sine(440).to_audio_segment(duration=1000)  # 1 секунда 440Hz
+        test_audio.export(str(test_audio_path), format="wav")
         
         print(f"\n🎵 Попытка загрузить: {test_audio_path.name}")
         
@@ -159,6 +159,9 @@ def test_ffmpeg_availability():
         print(f"   • Sample rate: {audio.frame_rate} Hz")
         print(f"   • Каналы: {audio.channels}")
         print(f"   • Sample width: {audio.sample_width} bytes")
+        
+        # Очищаем временный файл
+        test_audio_path.unlink()
         
         return True
         
@@ -249,5 +252,4 @@ def main():
 if __name__ == "__main__":
     exit_code = main()
     sys.exit(exit_code)
-
 

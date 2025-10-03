@@ -1,12 +1,9 @@
 """
-Welcome Player
-
-Основной плеер для воспроизведения приветственного сообщения.
-Поддерживает серверную генерацию и локальные fallback'и.
+Welcome Player — воспроизведение приветствия, сгенерированного на сервере.
 """
 
 import logging
-from typing import Optional, Callable, Any, Dict
+from typing import Optional, Callable, Dict, Any
 import numpy as np
 
 from .types import WelcomeConfig, WelcomeState, WelcomeResult
@@ -53,6 +50,8 @@ class WelcomePlayer:
         try:
             logger.info("🎵 [WELCOME_PLAYER] Начинаю воспроизведение приветствия")
             self.state = WelcomeState.LOADING
+            self._last_audio = None
+            self._last_metadata = None
             
             # Проверяем, включен ли модуль
             if not self.config.enabled:
@@ -78,35 +77,34 @@ class WelcomePlayer:
             if self._on_started:
                 self._on_started()
             
-            server_result: Optional[WelcomeResult] = None
-            if self.config.use_server:
-                server_result = await self._play_server_audio()
-                if server_result.success:
-                    logger.info("✅ [WELCOME_PLAYER] Серверное приветствие воспроизведено успешно")
-                    self.state = WelcomeState.COMPLETED
-                    if self._on_completed:
-                        self._on_completed(server_result)
-                    return server_result
+            if not self.config.use_server:
+                error_msg = "Серверное воспроизведение приветствия отключено в конфигурации"
+                logger.error(f"❌ [WELCOME_PLAYER] {error_msg}")
+                self.state = WelcomeState.ERROR
 
-                logger.warning(f"⚠️ [WELCOME_PLAYER] Серверное приветствие не удалось: {server_result.error}")
-            else:
-                logger.info("🔌 [WELCOME_PLAYER] Серверное приветствие отключено в конфигурации")
-            
-            # Локальные fallback'и (macOS say / тон)
-            if self.config.fallback_to_tts:
-                logger.info("🎵 [WELCOME_PLAYER] Переключаюсь на локальный fallback")
-                fallback_result = await self._play_local_fallback()
-                if fallback_result.success:
-                    logger.info("✅ [WELCOME_PLAYER] Локальный fallback воспроизведен успешно")
-                    self.state = WelcomeState.COMPLETED
-                    if self._on_completed:
-                        self._on_completed(fallback_result)
-                    return fallback_result
-                
-                logger.error(f"❌ [WELCOME_PLAYER] Локальный fallback не удался: {fallback_result.error}")
-            
-            # Все методы не удались
-            error_msg = "Все методы воспроизведения приветствия не удались"
+                result = WelcomeResult(
+                    success=False,
+                    method="none",
+                    duration_sec=0.0,
+                    error=error_msg
+                )
+
+                if self._on_error:
+                    self._on_error(error_msg)
+                if self._on_completed:
+                    self._on_completed(result)
+
+                return result
+
+            server_result = await self._play_server_audio()
+            if server_result.success:
+                logger.info("✅ [WELCOME_PLAYER] Серверное приветствие воспроизведено успешно")
+                self.state = WelcomeState.COMPLETED
+                if self._on_completed:
+                    self._on_completed(server_result)
+                return server_result
+
+            error_msg = server_result.error or "Серверное воспроизведение приветствия не удалось"
             logger.error(f"❌ [WELCOME_PLAYER] {error_msg}")
             self.state = WelcomeState.ERROR
             
@@ -159,13 +157,18 @@ class WelcomePlayer:
             sample_rate = server_metadata.get('sample_rate', self.config.sample_rate)
             channels = server_metadata.get('channels', self.config.channels)
 
-            frame_count = audio_data.shape[0] if audio_data.ndim == 1 else audio_data.shape[0]
+            total_samples = int(audio_data.size if hasattr(audio_data, 'size') else len(audio_data))
+            if audio_data.ndim > 1:
+                frame_count = audio_data.shape[0]
+            else:
+                frame_count = total_samples // max(1, channels)
             duration_sec = frame_count / float(sample_rate)
 
             metadata = {
                 "sample_rate": sample_rate,
                 "channels": channels,
-                "samples": int(audio_data.size if hasattr(audio_data, 'size') else frame_count * channels),
+                "samples": total_samples,
+                "frames": frame_count,
                 "method": server_metadata.get('method', 'server'),
                 "duration_sec": server_metadata.get('duration_sec', duration_sec),
             }
@@ -188,47 +191,6 @@ class WelcomePlayer:
                 error=f"Ошибка серверной генерации: {e}"
             )
 
-    async def _play_local_fallback(self) -> WelcomeResult:
-        """Воспроизводит приветствие с использованием локального fallback"""
-        try:
-            audio_data = await self.audio_generator.generate_local_fallback(self.config.text)
-            if audio_data is None:
-                return WelcomeResult(
-                    success=False,
-                    method="local_fallback",
-                    duration_sec=0.0,
-                    error="Не удалось получить локальное аудио"
-                )
-
-            sample_rate = self.config.sample_rate
-            channels = self.config.channels
-            duration_sec = len(audio_data) / float(sample_rate)
-
-            metadata = {
-                "sample_rate": sample_rate,
-                "channels": channels,
-                "samples": len(audio_data),
-                "method": "local_fallback",
-                "duration_sec": duration_sec,
-            }
-
-            self._last_audio = audio_data
-            self._last_metadata = metadata
-
-            return WelcomeResult(
-                success=True,
-                method="local_fallback",
-                duration_sec=duration_sec,
-                metadata=metadata
-            )
-
-        except Exception as e:
-            return WelcomeResult(
-                success=False,
-                method="local_fallback",
-                duration_sec=0.0,
-                error=f"Ошибка локального fallback: {e}"
-            )
     
     def get_audio_data(self) -> Optional[np.ndarray]:
         """Получить аудио данные для воспроизведения"""

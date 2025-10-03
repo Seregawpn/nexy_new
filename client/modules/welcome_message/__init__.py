@@ -1,8 +1,5 @@
 """
-Welcome Message Module
-
-Модуль для воспроизведения приветственного сообщения при запуске приложения.
-Поддерживает предзаписанное аудио и fallback на TTS.
+Welcome Message Module — серверная генерация приветственного сообщения при запуске приложения.
 """
 
 from .core.welcome_player import WelcomePlayer

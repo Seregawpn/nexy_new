@@ -292,8 +292,6 @@ voice_recognition:
 welcome_message:
   enabled: true
   text: "Hi! Nexy is here. How can I help you?"
-  audio_file: "assets/audio/welcome_en.mp3"
-  fallback_to_tts: true
   use_server: true
   server_timeout_sec: 20
   delay_sec: 0.3

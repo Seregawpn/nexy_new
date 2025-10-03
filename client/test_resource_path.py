@@ -38,31 +38,21 @@ def main():
     print(f"\n📄 main.py: {main_py}")
     print(f"   Существует: {main_py.exists()}")
     
-    # Проверяем путь к assets
-    assets_audio = base_path / "assets" / "audio"
-    print(f"\n📂 assets/audio: {assets_audio}")
-    print(f"   Существует: {assets_audio.exists()}")
-    
-    if assets_audio.exists():
-        audio_files = list(assets_audio.glob("welcome_*.mp3")) + list(assets_audio.glob("welcome_*.wav"))
-        print(f"   Найдено аудио файлов: {len(audio_files)}")
-        for audio_file in audio_files:
-            print(f"      • {audio_file.name}")
-    
+    # Проверяем наличие assets каталога (общие ресурсы)
+    assets_dir = base_path / "assets"
+    print(f"\n📂 assets/: {assets_dir}")
+    print(f"   Существует: {assets_dir.exists()}")
+
     # Проверяем WelcomeConfig
     print(f"\n🎵 WelcomeConfig:")
     config = WelcomeConfig()
-    audio_path = config.get_audio_path()
-    print(f"   Конфигурация: audio_file='{config.audio_file}'")
-    print(f"   Полный путь: {audio_path}")
-    print(f"   Существует: {audio_path.exists()}")
+    print(f"   enabled={config.enabled}")
+    print(f"   use_server={config.use_server}")
+    print(f"   server_timeout_sec={config.server_timeout_sec}")
     
     # Проверяем resource_exists
     print(f"\n✅ resource_exists():")
     test_paths = [
-        "assets/audio/welcome_en.mp3",
-        "assets/audio/welcome_en.wav",
-        "assets/audio/welcome_en_old.mp3",
         "config/unified_config.yaml"
     ]
     for test_path in test_paths:
@@ -73,19 +63,14 @@ def main():
     print("\n" + "=" * 80)
     
     # Финальный статус
-    if audio_path.exists():
-        print("✅ УСПЕХ: Аудио файл приветствия найден!")
+    if config.use_server:
+        print("✅ УСПЕХ: Конфигурация использует серверную генерацию приветствия")
     else:
-        print("❌ ОШИБКА: Аудио файл приветствия не найден!")
-        print("\n💡 Возможные причины:")
-        print("   1. Файл не упакован в .app (проверьте Nexy.spec)")
-        print("   2. Неправильное имя файла в конфигурации")
-        print("   3. Файл отсутствует в assets/audio/")
+        print("❌ ОШИБКА: Конфигурация отключила серверную генерацию приветствия")
     
     print("=" * 80)
 
 if __name__ == "__main__":
     main()
-
 
 

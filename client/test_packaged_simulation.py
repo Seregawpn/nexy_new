@@ -15,56 +15,43 @@ sys.path.insert(0, str(CLIENT_ROOT))
 sys.path.insert(0, str(CLIENT_ROOT / "modules"))
 
 def simulate_pyinstaller_onefile():
-    """
-    Симуляция PyInstaller onefile режима
-    Создает временную директорию и устанавливает sys._MEIPASS
-    """
+    """Симуляция PyInstaller onefile режима"""
     print("\n" + "=" * 80)
     print("🧪 ТЕСТ 1: Симуляция PyInstaller ONEFILE режима")
     print("=" * 80)
-    
-    # Создаем временную директорию для имитации _MEIPASS
+
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        
-        # Копируем ресурсы в временную директорию (имитация распаковки PyInstaller)
+
         assets_src = CLIENT_ROOT / "assets"
         assets_dst = temp_path / "assets"
-        
+
         print(f"📁 Создаю временную структуру в: {temp_path}")
         shutil.copytree(assets_src, assets_dst)
         print(f"   ✓ Скопированы assets/ -> {assets_dst}")
-        
-        # Устанавливаем sys._MEIPASS
+
         sys._MEIPASS = str(temp_path)
         print(f"   ✓ Установлен sys._MEIPASS = {sys._MEIPASS}")
-        
+
         try:
-            # Тестируем определение путей
             from modules.welcome_message.utils.resource_path import (
                 get_resource_base_path,
-                get_resource_path,
                 resource_exists
             )
             from modules.welcome_message.core.types import WelcomeConfig
-            
+
             print("\n📊 Результаты:")
-            
+
             base_path = get_resource_base_path()
             print(f"   • Базовый путь: {base_path}")
             print(f"   • Равен _MEIPASS: {str(base_path) == sys._MEIPASS}")
-            
+
             config = WelcomeConfig()
-            audio_path = config.get_audio_path()
-            print(f"   • Путь к аудио: {audio_path}")
-            print(f"   • Файл существует: {audio_path.exists()}")
-            
-            # Проверяем другие ресурсы
-            test_resources = [
-                "assets/audio/welcome_en.mp3",
-                "assets/audio/welcome_en.wav",
-            ]
-            
+            print(f"   • use_server: {config.use_server}")
+            print(f"   • server_timeout_sec: {config.server_timeout_sec}")
+
+            test_resources = []
+
             print("\n   📂 Проверка ресурсов:")
             all_ok = True
             for resource in test_resources:
@@ -73,16 +60,15 @@ def simulate_pyinstaller_onefile():
                 print(f"      {status} {resource}")
                 if not exists:
                     all_ok = False
-            
-            if all_ok and audio_path.exists():
-                print("\n   ✅ УСПЕХ: Все ресурсы найдены в ONEFILE режиме!")
+
+            if all_ok:
+                print("\n   ✅ УСПЕХ: Проверки ONEFILE режима пройдены!")
             else:
                 print("\n   ❌ ОШИБКА: Некоторые ресурсы не найдены!")
-            
-            return all_ok and audio_path.exists()
-            
+
+            return all_ok
+
         finally:
-            # Удаляем sys._MEIPASS после теста
             if hasattr(sys, "_MEIPASS"):
                 delattr(sys, "_MEIPASS")
                 print("\n   🧹 Очистка: sys._MEIPASS удален")
@@ -153,14 +139,11 @@ def simulate_pyinstaller_bundle():
             print(f"   • Находится в Resources: {'Resources' in str(base_path)}")
             
             config = WelcomeConfig()
-            audio_path = config.get_audio_path()
-            print(f"   • Путь к аудио: {audio_path}")
-            print(f"   • Файл существует: {audio_path.exists()}")
+            print(f"   • use_server: {config.use_server}")
+            print(f"   • server_timeout_sec: {config.server_timeout_sec}")
             
             # Проверяем ресурсы
             test_resources = [
-                "assets/audio/welcome_en.mp3",
-                "assets/audio/welcome_en.wav",
             ]
             
             print("\n   📂 Проверка ресурсов:")
@@ -172,12 +155,12 @@ def simulate_pyinstaller_bundle():
                 if not exists:
                     all_ok = False
             
-            if all_ok and audio_path.exists():
-                print("\n   ✅ УСПЕХ: Все ресурсы найдены в BUNDLE режиме!")
+            if all_ok:
+                print("\n   ✅ УСПЕХ: Проверки BUNDLE режима пройдены!")
             else:
                 print("\n   ❌ ОШИБКА: Некоторые ресурсы не найдены!")
             
-            return all_ok and audio_path.exists()
+            return all_ok
             
         finally:
             # Восстанавливаем оригинальный sys.argv[0]
@@ -207,16 +190,13 @@ def test_development_mode():
     base_path = get_resource_base_path()
     print(f"   • Базовый путь: {base_path}")
     print(f"   • Равен client/: {base_path == CLIENT_ROOT}")
-    
+
     config = WelcomeConfig()
-    audio_path = config.get_audio_path()
-    print(f"   • Путь к аудио: {audio_path}")
-    print(f"   • Файл существует: {audio_path.exists()}")
+    print(f"   • use_server: {config.use_server}")
+    print(f"   • server_timeout_sec: {config.server_timeout_sec}")
     
     # Проверяем ресурсы
     test_resources = [
-        "assets/audio/welcome_en.mp3",
-        "assets/audio/welcome_en.wav",
     ]
     
     print("\n   📂 Проверка ресурсов:")
@@ -228,12 +208,12 @@ def test_development_mode():
         if not exists:
             all_ok = False
     
-    if all_ok and audio_path.exists():
-        print("\n   ✅ УСПЕХ: Все ресурсы найдены в Development режиме!")
+    if all_ok:
+        print("\n   ✅ УСПЕХ: Проверки Development режима пройдены!")
     else:
         print("\n   ❌ ОШИБКА: Некоторые ресурсы не найдены!")
-    
-    return all_ok and audio_path.exists()
+
+    return all_ok
 
 def main():
     """Запуск всех тестов"""
@@ -288,6 +268,3 @@ def main():
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
-
-
-
