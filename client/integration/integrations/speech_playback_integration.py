@@ -7,6 +7,7 @@ SpeechPlaybackIntegration — интеграция модуля последов
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -56,6 +57,8 @@ class SpeechPlaybackIntegration:
         self._cancelled_sessions: set = set()
         # Защита от WAV: пометка, что заголовок уже отброшен для сессии
         self._wav_header_skipped: Dict[Any, bool] = {}
+        # Основной event loop, используется для публикации из фоновых потоков
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def initialize(self) -> bool:
         try:
@@ -97,6 +100,12 @@ class SpeechPlaybackIntegration:
                 await self.event_bus.subscribe("audio.device_switched", self._on_audio_device_switched, EventPriority.MEDIUM)
             except Exception:
                 pass
+
+            # Сохраняем текущий event loop для последующих thread-safe публикаций
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
 
             self._initialized = True
             logger.info("SpeechPlaybackIntegration initialized")
@@ -419,8 +428,12 @@ class SpeechPlaybackIntegration:
             channels = data.get("channels", 1)
             priority = int(data.get("priority", 10))
             pattern = data.get("pattern", "raw_audio")
-            
-            logger.info(f"🔔 playback.raw_audio: pattern={pattern}, dtype={audio_data.dtype}, shape={audio_data.shape}, sr={sample_rate}, ch={channels}, prio={priority}")
+            session_id = data.get("session_id")
+
+            logger.info(
+                f"🔔 playback.raw_audio: pattern={pattern}, dtype={audio_data.dtype}, shape={audio_data.shape}, "
+                f"sr={sample_rate}, ch={channels}, prio={priority}"
+            )
 
             # Проверяем sample rate — должен совпадать с плеером
             target_sr = int(self.config['sample_rate'])
@@ -428,11 +441,32 @@ class SpeechPlaybackIntegration:
                 logger.debug(f"Raw audio SR mismatch: got={sample_rate}, player={target_sr} — skipping")
                 return
 
+            # Назначаем технический session_id для «сырых» сценариев без реальной сессии (например, welcome tone).
+            raw_session = False
+            if session_id is None:
+                session_id = f"raw:{pattern}:{int(time.time() * 1000)}"
+                raw_session = True
+
+            self._current_session_id = session_id
+            self._had_audio_for_session[session_id] = True
+            if raw_session:
+                self._grpc_done_sessions[session_id] = True
+            else:
+                self._grpc_done_sessions.setdefault(session_id, False)
+            self._finalized_sessions.pop(session_id, None)
+            self._cancelled_sessions.discard(session_id)
+
             # ✅ ПРАВИЛЬНО: Передаем numpy массив напрямую в плеер
             # Плеер сам выполнит необходимую конвертацию
             try:
+                if (not self._player.state_manager.is_playing
+                        and not self._player.state_manager.is_paused):
+                    if not self._player.initialize():
+                        await self._handle_error(Exception("player_init_failed"), where="speech.raw_audio.init")
+                        return
+
                 meta = {
-                    "kind": "raw_audio", 
+                    "kind": "raw_audio",
                     "pattern": pattern,
                     "sample_rate": sample_rate,
                     "channels": channels
@@ -442,7 +476,22 @@ class SpeechPlaybackIntegration:
                 if state == PlaybackState.PAUSED:
                     self._player.resume_playback()
                 elif state != PlaybackState.PLAYING:
-                    self._player.start_playback()
+                    if not self._player.start_playback():
+                        await self._handle_error(Exception("start_failed"), where="speech.raw_audio.start")
+                        return
+                    await self.event_bus.publish("playback.started", {"session_id": session_id, "pattern": pattern})
+
+                # Обновляем отметку времени последнего аудио и планируем корректный shutdown
+                try:
+                    self._last_audio_ts = asyncio.get_event_loop().time()
+                except Exception:
+                    pass
+
+                if raw_session:
+                    if self._silence_task and not self._silence_task.done():
+                        self._silence_task.cancel()
+                    self._silence_task = asyncio.create_task(self._finalize_on_silence(session_id, timeout=1.0))
+
             except Exception as e:
                 await self._handle_error(e, where="speech.raw_audio", severity="warning")
 
@@ -601,15 +650,17 @@ class SpeechPlaybackIntegration:
                             except Exception:
                                 pass
                         else:
-                            # Если все еще воспроизводится, ждем еще 1 секунду и принудительно завершаем
-                            logger.info(f"SpeechPlayback: _finalize_on_silence ждем еще 1 секунду для сессии {sid}")
-                            await asyncio.sleep(1.0)
-                            logger.info(f"SpeechPlayback: _finalize_on_silence принудительно завершаем сессию {sid} (таймаут)")
-                            try:
-                                if self._player:
-                                    self._player.stop_playback()
-                            except Exception:
-                                pass
+                            # Для raw-сессий (welcome, signals) просто ждем пока доиграют естественным образом
+                            # НЕТ ЛИМИТОВ - играем до конца
+                            logger.info(f"SpeechPlayback: ожидаем естественного завершения воспроизведения для {sid}")
+                            while True:
+                                await asyncio.sleep(0.5)  # проверяем каждые 500мс
+                                # Проверяем завершилось ли естественным образом
+                                buf_check = (getattr(self._player, 'chunk_buffer', None) and self._player.chunk_buffer.is_empty)
+                                if buf_check or not self._player or not self._player.state_manager.is_playing:
+                                    logger.info(f"SpeechPlayback: воспроизведение завершено естественным образом")
+                                    break
+                            
                             await self.event_bus.publish("playback.completed", {"session_id": sid})
                             self._finalized_sessions[sid] = True
                             try:
@@ -647,19 +698,27 @@ class SpeechPlaybackIntegration:
             # Завершаем только если сервер завершил поток и мы еще не финализировали
             if grpc_done and not finalized:
                 logger.info(f"SpeechPlayback: завершаем воспроизведение для сессии {sid}")
-                loop = asyncio.get_event_loop()
                 # На всякий случай — остановим воспроизведение, если ещё не остановлено
                 try:
                     if self._player:
                         self._player.stop_playback()
                 except Exception:
                     pass
-                loop.create_task(self.event_bus.publish("playback.completed", {"session_id": sid}))
+                loop = self._loop
+                if loop and not loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self.event_bus.publish("playback.completed", {"session_id": sid}),
+                        loop,
+                    )
                 self._finalized_sessions[sid] = True
-                loop.create_task(self.event_bus.publish("mode.request", {
-                    "target": AppMode.SLEEPING,
-                    "source": "speech_playback"
-                }))
+                if loop and not loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self.event_bus.publish("mode.request", {
+                            "target": AppMode.SLEEPING,
+                            "source": "speech_playback"
+                        }),
+                        loop,
+                    )
             else:
                 logger.debug(f"SpeechPlayback: пропускаем завершение для сессии {sid} (grpc_done={grpc_done}, finalized={finalized})")
         except Exception as e:

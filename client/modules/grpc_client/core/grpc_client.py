@@ -41,7 +41,7 @@ class GrpcClient:
         return {
             'servers': {
                 'local': {
-                    'address': '127.0.0.1',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
+                    'address': '127.0.0.1',
                     'port': 50051,
                     'use_ssl': False,
                     'timeout': 30,
@@ -49,7 +49,7 @@ class GrpcClient:
                     'retry_delay': 1.0
                 },
                 'production': {
-                    'address': '20.151.51.172',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
+                    'address': '20.151.51.172',
                     'port': 50051,
                     'use_ssl': False,
                     'timeout': 120,
@@ -183,15 +183,23 @@ class GrpcClient:
 
     def _import_proto_modules(self) -> Tuple[Any, Any]:
         """Гибкий импорт streaming_pb2 и streaming_pb2_grpc.
-        Сначала пробуем локальные модули, затем fallback в server/.
+        Сначала пробуем из proto директории модуля, затем fallback в server/.
         """
-        # 1) Пытаемся локально
+        # 1) Пытаемся импортировать из proto директории модуля
         try:
+            # Путь: client/modules/grpc_client/proto/
+            proto_dir = Path(__file__).resolve().parent.parent / 'proto'
+            
+            if proto_dir.exists() and str(proto_dir) not in sys.path:
+                sys.path.insert(0, str(proto_dir))
+                logger.info(f"✅ Добавлен путь к proto модулям: {proto_dir}")
+            
             pb2 = importlib.import_module('streaming_pb2')
             pb2_grpc = importlib.import_module('streaming_pb2_grpc')
+            logger.info("✅ Protobuf модули успешно импортированы из proto/")
             return pb2, pb2_grpc
-        except Exception:
-            pass
+        except Exception as local_err:
+            logger.warning(f"⚠️ Не удалось импортировать из proto/: {local_err}")
 
         # 2) Пытаемся взять из server/ (репозиторий корень/ server)
         try:
@@ -201,9 +209,11 @@ class GrpcClient:
             # Проверяем существование и добавляем только если нужно
             if server_dir.exists() and str(server_dir) not in sys.path:
                 sys.path.append(str(server_dir))
+                logger.info(f"✅ Добавлен путь к server модулям: {server_dir}")
             
             pb2 = importlib.import_module('streaming_pb2')
             pb2_grpc = importlib.import_module('streaming_pb2_grpc')
+            logger.info("✅ Protobuf модули успешно импортированы из server/")
             return pb2, pb2_grpc
         except Exception as e:
             raise ImportError(f"Unable to import protobuf modules (streaming_pb2*). Error: {e}")

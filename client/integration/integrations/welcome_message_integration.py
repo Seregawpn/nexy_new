@@ -8,7 +8,10 @@ WelcomeMessageIntegration — интеграция модуля приветст
 """
 
 import asyncio
+import contextlib
 import logging
+import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
 
@@ -61,6 +64,12 @@ class WelcomeMessageIntegration:
         
         self._initialized = False
         self._running = False
+        # Состояние разрешения микрофона (granted/denied/not_determined/None)
+        self._microphone_status: Optional[str] = None
+        self._pending_welcome = False
+        self._permission_prompted = False
+        self._permission_recheck_task: Optional[asyncio.Task] = None
+        self._enforce_permissions = self._detect_packaged_environment()
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
@@ -69,9 +78,15 @@ class WelcomeMessageIntegration:
             
             # Подписываемся на события
             await self.event_bus.subscribe("app.startup", self._on_app_startup, EventPriority.MEDIUM)
+            await self.event_bus.subscribe("permissions.status_checked", self._on_permission_event, EventPriority.HIGH)
+            await self.event_bus.subscribe("permissions.changed", self._on_permission_event, EventPriority.HIGH)
+            await self.event_bus.subscribe("permissions.requested", self._on_permission_event, EventPriority.MEDIUM)
+            await self.event_bus.subscribe("permissions.integration_ready", self._on_permissions_ready, EventPriority.MEDIUM)
             
             self._initialized = True
             logger.info("✅ [WELCOME_INTEGRATION] Инициализирован")
+            # Запрашиваем актуальный статус разрешений (не блокируем initialize)
+            asyncio.create_task(self._request_initial_permission_status())
             return True
             
         except Exception as e:
@@ -92,6 +107,7 @@ class WelcomeMessageIntegration:
         """Остановка интеграции"""
         try:
             self._running = False
+            await self._cancel_permission_recheck_task()
             logger.info("✅ [WELCOME_INTEGRATION] Остановлен")
             return True
         except Exception as e:
@@ -111,16 +127,26 @@ class WelcomeMessageIntegration:
             if self.config.delay_sec > 0:
                 await asyncio.sleep(self.config.delay_sec)
             
-            # Воспроизводим приветствие
-            await self._play_welcome_message()
+            if not self._enforce_permissions:
+                await self._play_welcome_message(trigger="app_startup")
+                return
+
+            await self._ensure_permission_status()
+
+            if self._is_microphone_granted():
+                await self._play_welcome_message(trigger="app_startup")
+            else:
+                logger.info("🎙️ [WELCOME_INTEGRATION] Приветствие отложено: требуется разрешение микрофона")
+                self._pending_welcome = True
+                await self._prompt_microphone_permission()
             
         except Exception as e:
             await self._handle_error(e, where="welcome.on_app_startup", severity="warning")
     
-    async def _play_welcome_message(self):
+    async def _play_welcome_message(self, trigger: str = "app_startup"):
         """Воспроизводит приветственное сообщение"""
         try:
-            logger.info("🎵 [WELCOME_INTEGRATION] Начинаю воспроизведение приветствия")
+            logger.info(f"🎵 [WELCOME_INTEGRATION] Начинаю воспроизведение приветствия (trigger={trigger})")
             
             # Воспроизводим через плеер
             result = await self.welcome_player.play_welcome()
@@ -206,6 +232,187 @@ class WelcomeMessageIntegration:
             
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка отправки аудио: {e}")
+
+    async def _on_permission_event(self, event: Dict[str, Any]):
+        """Обработка событий статуса разрешений"""
+        try:
+            data = (event or {}).get("data") or {}
+            event_type = (event or {}).get("type", "permissions.unknown")
+
+            # Обновление по одному разрешению
+            if "permission" in data:
+                perm = data.get("permission")
+                status = data.get("status") or data.get("new_status")
+                self._process_permission_update(perm, status, source=event_type)
+
+            # Пакетное обновление
+            permissions_map = data.get("permissions")
+            if permissions_map:
+                self._process_permissions_map(permissions_map, source=event_type)
+
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка обработки события разрешений: {e}")
+
+    async def _on_permissions_ready(self, event: Dict[str, Any]):
+        """Получение начального статуса от PermissionsIntegration"""
+        try:
+            data = (event or {}).get("data") or {}
+            permissions_map = data.get("permissions")
+            if permissions_map:
+                self._process_permissions_map(permissions_map, source="permissions.integration_ready")
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка обработки permissions.integration_ready: {e}")
+
+    def _process_permissions_map(self, permissions_map: Dict[Any, Any], source: str):
+        """Обновить статусы из словаря"""
+        try:
+            for perm_key, status_value in permissions_map.items():
+                # Словарь может содержать PermissionResult или чистые статусы
+                status = status_value
+                if isinstance(status_value, dict):
+                    status = status_value.get("status") or status_value.get("new_status")
+                self._process_permission_update(perm_key, status, source=source)
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка разбора словаря разрешений ({source}): {e}")
+
+    def _process_permission_update(self, raw_permission: Any, raw_status: Any, source: str):
+        """Нормализует и сохраняет статус отдельного разрешения"""
+        if raw_permission is None:
+            return
+
+        perm_name = getattr(raw_permission, "value", raw_permission)
+        if perm_name is None:
+            return
+        perm_name = str(perm_name).lower()
+        if perm_name != "microphone":
+            return
+
+        status_value = getattr(raw_status, "value", raw_status)
+        if status_value is None:
+            return
+
+        status_normalized = str(status_value).lower()
+        previous = self._microphone_status
+
+        if previous == status_normalized:
+            return
+
+        self._microphone_status = status_normalized
+        logger.info(
+            "🎙️ [WELCOME_INTEGRATION] Статус микрофона обновлён: %s → %s (source=%s)",
+            previous or "unknown",
+            status_normalized,
+            source,
+        )
+
+        if not self._enforce_permissions:
+            return
+
+        if status_normalized == "granted":
+            self._pending_welcome = False
+            self._permission_prompted = False
+            asyncio.create_task(self._cancel_permission_recheck_task())
+            # Если ожидали приветствие, запускаем его после получения разрешения
+            if self.config.enabled and self.welcome_player:
+                asyncio.create_task(self._play_welcome_message(trigger="permissions"))
+        else:
+            # Любой статус кроме granted означает, что приветствие пока нельзя воспроизвести
+            self._pending_welcome = True
+            self._schedule_permission_recheck()
+
+    def _is_microphone_granted(self) -> bool:
+        return (self._microphone_status or "").lower() == "granted"
+
+    async def _prompt_microphone_permission(self):
+        """Показывает инструкции и инициирует повторные проверки"""
+        if not self._enforce_permissions:
+            return
+        if self._permission_prompted:
+            self._schedule_permission_recheck()
+            return
+
+        self._permission_prompted = True
+        logger.warning(
+            "🎙️ [WELCOME_INTEGRATION] Требуется разрешение на микрофон. "
+            "Откройте 'Системные настройки → Конфиденциальность и безопасность → Микрофон' и включите Nexy."
+        )
+
+        try:
+            await self.event_bus.publish("permissions.request_required", {
+                "source": "welcome_message",
+                "permissions": ["microphone"],
+            })
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка публикации запроса разрешений: {e}")
+
+        await self._ensure_permission_status()
+        self._schedule_permission_recheck()
+
+    async def _ensure_permission_status(self):
+        """Уточняет статус микрофона через PermissionsIntegration"""
+        if not self._enforce_permissions:
+            return
+        try:
+            await self.event_bus.publish("permissions.check_required", {
+                "source": "welcome_message"
+            })
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка запроса проверки разрешений: {e}")
+
+    async def _request_initial_permission_status(self):
+        """Фоновый запрос статуса разрешений после инициализации"""
+        if not self._enforce_permissions:
+            return
+        await asyncio.sleep(0)  # yield event loop
+        await self._ensure_permission_status()
+
+    def _schedule_permission_recheck(self, interval: float = 5.0, max_attempts: int = 12):
+        """Периодически инициирует повторную проверку статуса"""
+        if not self._enforce_permissions:
+            return
+        if self._is_microphone_granted():
+            return
+
+        if self._permission_recheck_task and not self._permission_recheck_task.done():
+            return
+
+        async def _recheck_loop():
+            attempts = 0
+            try:
+                while not self._is_microphone_granted() and attempts < max_attempts:
+                    await asyncio.sleep(interval)
+                    attempts += 1
+                    await self.event_bus.publish("permissions.check_required", {
+                        "source": f"welcome_message.recheck#{attempts}"
+                    })
+            except asyncio.CancelledError:
+                logger.debug("🛑 [WELCOME_INTEGRATION] Повторная проверка разрешений отменена")
+                raise
+            except Exception as e:
+                logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка фоновой проверки разрешений: {e}")
+            finally:
+                self._permission_recheck_task = None
+
+        self._permission_recheck_task = asyncio.create_task(_recheck_loop())
+
+    async def _cancel_permission_recheck_task(self):
+        """Останавливает фоновую задачу проверки (если есть)"""
+        if self._permission_recheck_task and not self._permission_recheck_task.done():
+            self._permission_recheck_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._permission_recheck_task
+        self._permission_recheck_task = None
+
+    @staticmethod
+    def _detect_packaged_environment() -> bool:
+        if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS"):
+            return True
+        try:
+            exe_path = Path(sys.argv[0]).resolve()
+            return ".app/Contents/MacOS" in str(exe_path)
+        except Exception:
+            return False
+
     
     async def _handle_error(self, e: Exception, *, where: str, severity: str = "error"):
         """Обработка ошибок"""

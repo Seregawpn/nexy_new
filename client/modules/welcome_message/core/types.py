@@ -7,6 +7,16 @@ from enum import Enum
 from typing import Optional, Dict, Any
 from pathlib import Path
 
+# Импортируем утилиту для определения путей к ресурсам
+try:
+    from modules.welcome_message.utils.resource_path import get_resource_path
+except ImportError:
+    # Fallback для случаев, когда импорт не работает
+    def get_resource_path(relative_path: str, base_path: Optional[Path] = None) -> Path:
+        if base_path is None:
+            base_path = Path(__file__).parent.parent.parent.parent
+        return base_path / relative_path
+
 
 class WelcomeState(Enum):
     """Состояния плеера приветствия"""
@@ -32,63 +42,21 @@ class WelcomeConfig:
     bit_depth: int = 16
     
     def get_audio_path(self, base_path: Optional[Path] = None) -> Path:
-        """Получить полный путь к аудио файлу"""
-        if base_path is None:
-            base_path = self._find_base_path()
-        return base_path / self.audio_file
-    
-    def _find_base_path(self) -> Path:
-        """Найти базовый путь к ресурсам с учетом PyInstaller"""
-        import logging
-        import sys
+        """
+        Получить полный путь к аудио файлу.
         
-        logger = logging.getLogger(__name__)
+        Автоматически определяет правильный путь для:
+        - Development режима
+        - PyInstaller onefile (.app onefile)
+        - PyInstaller bundle (.app bundle)
         
-        # 1. PyInstaller onefile/onedir: данные распакованы рядом с исполняемым файлом
-        if hasattr(sys, "_MEIPASS"):
-            candidate = Path(sys._MEIPASS)
-            audio_path = candidate / self.audio_file
-            logger.info(f"🔍 [WELCOME_CONFIG] Проверяю PyInstaller _MEIPASS: {audio_path}")
-            if audio_path.exists():
-                logger.info(f"✅ [WELCOME_CONFIG] Найден аудио файл в _MEIPASS: {audio_path}")
-                return candidate
-            
-            # Частый случай: ресурсы лежат в подкаталоге Resources
-            resources_candidate = candidate / "Resources"
-            audio_path = resources_candidate / self.audio_file
-            logger.info(f"🔍 [WELCOME_CONFIG] Проверяю _MEIPASS/Resources: {audio_path}")
-            if audio_path.exists():
-                logger.info(f"✅ [WELCOME_CONFIG] Найден аудио файл в _MEIPASS/Resources: {audio_path}")
-                return resources_candidate
+        Args:
+            base_path: Базовый путь (если None, определяется автоматически)
         
-        # 2. PyInstaller bundle (.app): ищем каталог MacOS -> Contents -> Resources
-        resolved_path = Path(__file__).resolve()
-        macos_dir = None
-        for parent in resolved_path.parents:
-            if parent.name == "MacOS":
-                macos_dir = parent
-                break
-        
-        if macos_dir is not None:
-            contents_dir = macos_dir.parent  # MacOS -> Contents
-            resources_path = contents_dir / "Resources"  # Contents -> Resources
-            audio_path = resources_path / self.audio_file
-            logger.info(f"🔍 [WELCOME_CONFIG] Проверяю bundle Resources: {audio_path}")
-            if audio_path.exists():
-                logger.info(f"✅ [WELCOME_CONFIG] Найден аудио файл в bundle: {audio_path}")
-                return resources_path
-        
-        # 3. Dev-режим (репозиторий)
-        dev_path = Path(__file__).parent.parent.parent.parent
-        audio_path = dev_path / self.audio_file
-        logger.info(f"🔍 [WELCOME_CONFIG] Проверяю dev-режим: {audio_path}")
-        if audio_path.exists():
-            logger.info(f"✅ [WELCOME_CONFIG] Найден аудио файл в dev-режиме: {audio_path}")
-            return dev_path
-        
-        # 4. Fallback - возвращаем dev путь даже если файла нет
-        logger.warning(f"⚠️ [WELCOME_CONFIG] Аудио файл не найден, используем fallback: {audio_path}")
-        return dev_path
+        Returns:
+            Path: Полный путь к аудио файлу
+        """
+        return get_resource_path(self.audio_file, base_path)
 
 
 @dataclass

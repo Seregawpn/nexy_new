@@ -133,10 +133,12 @@ class SequentialSpeechPlayer:
                 device = get_best_audio_device()
                 if device:
                     self.config.device_id = device.portaudio_index
-                    # Определяем целевое число каналов по устройству (1..2)
-                    target_channels = 1 if device.channels <= 1 else 2
-                    if target_channels != self.config.channels:
-                        self.config.channels = target_channels
+                    # ✅ ИСПРАВЛЕНИЕ: Не переопределяем каналы автоматически
+                    # Используем конфигурацию как есть, устройство поддерживает и моно, и стерео
+                    # target_channels = 1 if device.channels <= 1 else 2
+                    # if target_channels != self.config.channels:
+                    #     self.config.channels = target_channels
+                    logger.info(f"🎵 Используем каналы из конфигурации: {self.config.channels} (устройство поддерживает: {device.channels})")
                     # Синхронизируем буфер под новое число каналов
                     try:
                         self.chunk_buffer.set_channels(self.config.channels)
@@ -200,18 +202,23 @@ class SequentialSpeechPlayer:
             else:
                 current_channels = audio_data.shape[1]
 
-            # Приводим число каналов к конфигурации вывода (например, stereo device)
-            target_channels = max(1, min(2, int(self.config.channels)))
+            # ✅ ИСПРАВЛЕНИЕ: Упрощенная логика каналов
+            # Оставляем данные как есть - sounddevice сам разберется с конвертацией
+            target_channels = int(self.config.channels)
+            
+            # Только базовая конвертация если действительно необходимо
             if current_channels != target_channels:
-                if current_channels == 1 and target_channels == 2:
-                    # Дублируем моно-данные на оба канала, чтобы избежать мусора во 2-м канале
-                    audio_data = np.repeat(audio_data, 2, axis=1)
-                elif current_channels >= 2 and target_channels == 1:
-                    # Берем первый канал для моно
+                if current_channels == 1 and target_channels == 1:
+                    # Моно → Моно: оставляем как есть
+                    pass
+                elif current_channels == 1 and target_channels > 1:
+                    # Моно → Стерео: НЕ дублируем, пусть sounddevice разберется
+                    logger.debug(f"🔄 Моно аудио будет воспроизведено на {target_channels} каналах")
+                elif current_channels > 1 and target_channels == 1:
+                    # Стерео → Моно: берем первый канал
                     audio_data = audio_data[:, :1]
-                else:
-                    # Универсальный fallback: повторяем первый канал столько раз, сколько требуется
-                    audio_data = np.repeat(audio_data[:, :1], target_channels, axis=1)
+                    logger.debug(f"🔄 Стерео → Моно: взят первый канал")
+                # Остальные случаи оставляем как есть
 
             # Добавляем в буфер
             chunk_id = self.chunk_buffer.add_chunk(audio_data, priority, metadata)

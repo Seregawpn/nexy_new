@@ -13,6 +13,8 @@ import subprocess
 import shlex
 import os
 import datetime
+import contextlib
+import sys
 
 from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager, AppMode
@@ -57,13 +59,16 @@ class ScreenshotCaptureIntegration:
         # Сессии/идемпотентность
         self._last_session_id: Optional[float] = None
         self._captured_for_session: Optional[float] = None
-        self._screen_permission_granted: Optional[bool] = None
+        self._screen_permission_status: Optional[str] = None
+        self._screen_permission_prompted = False
+        self._screen_permission_task: Optional[asyncio.Task] = None
 
         # Компоненты
         self._capture: Optional[ScreenshotCapture] = None
         self._config = self._load_config()
         self._prepared_screens: Dict[float, Dict[str, Any]] = {}
         self._prepare_tasks: Dict[float, asyncio.Task] = {}
+        self._enforce_permissions = self._detect_packaged_environment()
 
     def _load_config(self) -> ScreenshotCaptureIntegrationConfig:
         try:
@@ -98,8 +103,10 @@ class ScreenshotCaptureIntegration:
             logger.info("🔧 ScreenshotCapture: Подписки настроены - app.mode_changed, voice.recording_stop")
             # Подписки на статусы разрешений, чтобы не пытаться снимать без Screen Recording
             try:
-                await self.event_bus.subscribe("permissions.status_checked", self._on_permission_status, EventPriority.MEDIUM)
-                await self.event_bus.subscribe("permissions.critical_status", self._on_permissions_critical, EventPriority.MEDIUM)
+                await self.event_bus.subscribe("permissions.status_checked", self._on_permission_event, EventPriority.MEDIUM)
+                await self.event_bus.subscribe("permissions.changed", self._on_permission_event, EventPriority.MEDIUM)
+                await self.event_bus.subscribe("permissions.requested", self._on_permission_event, EventPriority.LOW)
+                await self.event_bus.subscribe("permissions.integration_ready", self._on_permissions_ready, EventPriority.MEDIUM)
             except Exception:
                 pass
 
@@ -110,6 +117,7 @@ class ScreenshotCaptureIntegration:
                 asyncio.create_task(self._cleanup_old_screenshots())
             except Exception:
                 pass
+            asyncio.create_task(self._request_initial_permission_status())
             return True
         except Exception as e:
             logger.error(f"Failed to initialize ScreenshotCaptureIntegration: {e}")
@@ -124,13 +132,16 @@ class ScreenshotCaptureIntegration:
         
         # Проверяем разрешения Screen Capture перед запуском
         await self._check_screen_capture_permissions()
-        
+        if self._enforce_permissions:
+            await self._ensure_screen_permission_status()
+
         self._running = True
         logger.info("ScreenshotCaptureIntegration started")
         return True
 
     async def stop(self) -> bool:
         self._running = False
+        await self._cancel_screen_permission_task()
         logger.info("ScreenshotCaptureIntegration stopped")
         return True
 
@@ -214,11 +225,12 @@ class ScreenshotCaptureIntegration:
                 logger.debug("ScreenshotCaptureIntegration: already captured for session")
                 return
             logger.info(f"📸 ScreenshotCaptureIntegration: app entered PROCESSING, session_id={sid}")
-            if self._screen_permission_granted is False:
+            if self._enforce_permissions and not self._is_screen_permission_granted():
                 await self.event_bus.publish("screenshot.error", {
                     "session_id": sid,
                     "error": "permissions_denied",
                 })
+                await self._prompt_screen_permission()
                 logger.info("Screenshot skipped: screen recording permission denied")
                 return
             if sid is not None and sid in self._prepared_screens:
@@ -245,11 +257,12 @@ class ScreenshotCaptureIntegration:
                 
             sid = self._last_session_id
             logger.info(f"📸 ScreenshotCaptureIntegration: state_changed→PROCESSING, session_id={sid}")
-            if self._screen_permission_granted is False:
+            if self._enforce_permissions and not self._is_screen_permission_granted():
                 await self.event_bus.publish("screenshot.error", {
                     "session_id": sid,
                     "error": "permissions_denied",
                 })
+                await self._prompt_screen_permission()
                 return
             await self._capture_once(session_id=sid)
         except Exception as e:
@@ -372,25 +385,38 @@ class ScreenshotCaptureIntegration:
             logger.debug(f"CLI capture fallback failed: {e}")
             return False, None, {}
 
-    async def _on_permission_status(self, event: Dict[str, Any]):
+    async def _on_permission_event(self, event: Dict[str, Any]):
         try:
             data = (event or {}).get("data", {})
-            perm = data.get("permission")
-            status = data.get("status")
-            if str(perm) == "screen_capture":
-                self._screen_permission_granted = (status == "granted")
-        except Exception:
-            pass
+            event_type = (event or {}).get("type", "permissions.unknown")
 
-    async def _on_permissions_critical(self, event: Dict[str, Any]):
+            perm_name = data.get("permission")
+            if perm_name is not None:
+                status = data.get("status") or data.get("new_status")
+                self._handle_permission_update(perm_name, status, source=event_type)
+
+            permissions_map = data.get("permissions")
+            if permissions_map:
+                for key, value in permissions_map.items():
+                    status = value
+                    if isinstance(value, dict):
+                        status = value.get("status") or value.get("new_status")
+                    self._handle_permission_update(key, status, source=event_type)
+        except Exception as e:
+            logger.error(f"ScreenshotCaptureIntegration: permission event error: {e}")
+
+    async def _on_permissions_ready(self, event: Dict[str, Any]):
         try:
             data = (event or {}).get("data", {})
-            perms = data.get("permissions", {}) or {}
-            sc = perms.get("screen_capture")
-            if sc is not None:
-                self._screen_permission_granted = (sc == "granted")
-        except Exception:
-            pass
+            permissions_map = data.get("permissions")
+            if permissions_map:
+                for key, value in permissions_map.items():
+                    status = value
+                    if isinstance(value, dict):
+                        status = value.get("status") or value.get("new_status")
+                    self._handle_permission_update(key, status, source="permissions.integration_ready")
+        except Exception as e:
+            logger.error(f"ScreenshotCaptureIntegration: permissions_ready error: {e}")
 
     async def _cleanup_old_screenshots(self, ttl_hours: int = 24):
         """Удаляет файлы скриншотов старше ttl_hours из tmp каталога."""
@@ -423,7 +449,9 @@ class ScreenshotCaptureIntegration:
     async def _schedule_preparation(self, session_id: float):
         if session_id in self._prepare_tasks and not self._prepare_tasks[session_id].done():
             return
-        if self._screen_permission_granted is False or not self._capture:
+        if self._enforce_permissions and not self._is_screen_permission_granted():
+            return
+        if not self._capture:
             return
         task = asyncio.create_task(self._prepare_screenshot(session_id))
         self._prepare_tasks[session_id] = task
@@ -482,9 +510,135 @@ class ScreenshotCaptureIntegration:
         except Exception:
             pass
 
+    async def _request_initial_permission_status(self):
+        if not self._enforce_permissions:
+            return
+        await asyncio.sleep(0)
+        await self._ensure_screen_permission_status()
+
+    async def _ensure_screen_permission_status(self):
+        if not self._enforce_permissions:
+            return
+        try:
+            await self.event_bus.publish("permissions.check_required", {
+                "source": "screenshot_capture"
+            })
+        except Exception as e:
+            logger.error(f"ScreenshotCaptureIntegration: ensure permission failed: {e}")
+
+    def _handle_permission_update(self, raw_permission: Any, raw_status: Any, source: str):
+        if raw_permission is None:
+            return
+        perm_name = getattr(raw_permission, "value", raw_permission)
+        if perm_name is None:
+            return
+        perm_name = str(perm_name).lower()
+        if perm_name != "screen_capture":
+            return
+
+        status_value = getattr(raw_status, "value", raw_status)
+        if status_value is None:
+            return
+
+        status_normalized = str(status_value).lower()
+        self._update_screen_permission_status(status_normalized, source=source)
+
+        if not self._enforce_permissions:
+            return
+
+        if status_normalized == "granted":
+            self._screen_permission_prompted = False
+            asyncio.create_task(self._cancel_screen_permission_task())
+        else:
+            self._schedule_screen_permission_recheck()
+            asyncio.create_task(self._prompt_screen_permission())
+
+    def _update_screen_permission_status(self, status: str, source: str):
+        normalized = (status or "").lower()
+        if normalized == self._screen_permission_status:
+            return
+        prev = self._screen_permission_status or "unknown"
+        self._screen_permission_status = normalized
+        logger.info(
+            "📸 ScreenshotCapture: permission status %s -> %s (source=%s)",
+            prev,
+            normalized,
+            source,
+        )
+
+    def _is_screen_permission_granted(self) -> bool:
+        return (self._screen_permission_status or "").lower() == "granted"
+
+    async def _prompt_screen_permission(self):
+        if not self._enforce_permissions:
+            return
+        if self._screen_permission_prompted:
+            self._schedule_screen_permission_recheck()
+            return
+        self._screen_permission_prompted = True
+        logger.warning(
+            "📸 Screen Recording permission required. Open System Settings > Privacy & Security > Screen Recording and enable Nexy."
+        )
+        try:
+            await self.event_bus.publish("permissions.request_required", {
+                "source": "screenshot_capture",
+                "permissions": ["screen_capture"],
+            })
+        except Exception as e:
+            logger.error(f"ScreenshotCaptureIntegration: failed to publish request_required: {e}")
+        await self._ensure_screen_permission_status()
+        self._schedule_screen_permission_recheck()
+
+    def _schedule_screen_permission_recheck(self, interval: float = 5.0, max_attempts: int = 12):
+        if not self._enforce_permissions:
+            return
+        if self._is_screen_permission_granted():
+            return
+        current = self._screen_permission_task
+        if current and not current.done():
+            return
+
+        async def _loop():
+            attempts = 0
+            try:
+                while not self._is_screen_permission_granted() and attempts < max_attempts:
+                    await asyncio.sleep(interval)
+                    attempts += 1
+                    await self.event_bus.publish("permissions.check_required", {
+                        "source": f"screenshot_capture.recheck#{attempts}"
+                    })
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"ScreenshotCaptureIntegration: recheck error: {e}")
+            finally:
+                self._screen_permission_task = None
+
+        self._screen_permission_task = asyncio.create_task(_loop())
+
+    async def _cancel_screen_permission_task(self):
+        task = self._screen_permission_task
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._screen_permission_task = None
+
+    @staticmethod
+    def _detect_packaged_environment() -> bool:
+        if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS"):
+            return True
+        try:
+            exe_path = Path(sys.argv[0]).resolve()
+            return ".app/Contents/MacOS" in str(exe_path)
+        except Exception:
+            return False
+
     async def _check_screen_capture_permissions(self):
         """Проверить разрешения Screen Capture"""
         try:
+            if not self._enforce_permissions:
+                return
             # Пробуем системный preflight API, без Bundle ID
             try:
                 from Quartz import CGPreflightScreenCaptureAccess  # type: ignore
@@ -510,10 +664,13 @@ class ScreenshotCaptureIntegration:
             if not granted:
                 logger.info("ℹ️ Screen Capture not accessible - screenshots will be disabled")
                 self._capture = None
+                self._update_screen_permission_status("denied", source="probe")
                 logger.info("🔄 ScreenshotCapture disabled due to missing Screen Capture access")
             else:
                 logger.info("✅ Screen Capture accessible (preflight/probe succeeded)")
+                self._update_screen_permission_status("granted", source="probe")
                 
         except Exception as e:
             logger.info(f"ℹ️ Screen Capture probe failed: {e}")
             self._capture = None
+            self._update_screen_permission_status("unknown", source="probe_error")

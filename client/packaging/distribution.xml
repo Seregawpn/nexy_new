@@ -11,5 +11,5 @@
         <pkg-ref id="com.nexy.assistant.pkg"/>
     </choice>
     <!-- id и version должны совпадать с параметрами pkgbuild -->
-    <pkg-ref id="com.nexy.assistant.pkg" version="1.0.0">Nexy-raw.pkg</pkg-ref>
+    <pkg-ref id="com.nexy.assistant.pkg" version="1.0.0">Nexy-raw-new.pkg</pkg-ref>
 </installer-gui-script>

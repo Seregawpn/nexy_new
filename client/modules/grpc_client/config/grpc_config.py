@@ -19,7 +19,7 @@ def create_default_config() -> Dict[str, Any]:
                 'retry_delay': 1.0
             },
             'production': {
-                'address': '20.151.51.172',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
+                'address': '20.151.51.172',
                 'port': 50051,
                 'use_ssl': False,
                 'timeout': 120,
@@ -65,7 +65,7 @@ def create_production_config() -> Dict[str, Any]:
     return {
         'servers': {
             'production': {
-                'address': '20.151.51.172',  # ⚠️ АВТОМАТИЧЕСКИ СИНХРОНИЗИРУЕТСЯ
+                'address': '20.151.51.172',
                 'port': 50051,
                 'use_ssl': False,
                 'timeout': 120,

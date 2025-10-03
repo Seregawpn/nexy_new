@@ -118,30 +118,28 @@ class UnifiedConfigLoader:
         """Получает сетевые настройки"""
         config = self._load_config()
         
-        # Новая структура: servers.grpc_servers
-        servers_data = config.get('servers', {})
-        grpc_servers_data = servers_data.get('grpc_servers', {})
-        appcast_data = servers_data.get('appcast', {})
+        # Получаем gRPC настройки из секции grpc
+        grpc_data = config.get('grpc', {})
         
-        # Преобразуем gRPC серверы в объекты
-        grpc_servers = {}
-        for name, server_data in grpc_servers_data.items():
-            grpc_servers[name] = GrpcServerConfig(
-                host=server_data['host'],
-                port=server_data['port'],
-                ssl=server_data['ssl'],
-                timeout=server_data['timeout'],
-                retry_attempts=server_data['retry_attempts'],
-                retry_delay=server_data['retry_delay']
+        # Создаем конфигурацию для локального сервера
+        grpc_servers = {
+            'local': GrpcServerConfig(
+                host=grpc_data.get('server_host', '127.0.0.1'),
+                port=grpc_data.get('server_port', 50051),
+                ssl=grpc_data.get('use_tls', False),
+                timeout=grpc_data.get('connection_timeout', 30),
+                retry_attempts=grpc_data.get('retry_attempts', 3),
+                retry_delay=grpc_data.get('retry_delay', 1.0)
             )
+        }
         
-        # Настройки сети (с fallback на старую структуру)
+        # Получаем настройки сети (если есть)
         network_data = config.get('network', {})
         
         return NetworkConfig(
             grpc_servers=grpc_servers,
-            appcast=appcast_data,
-            connection_check_interval=network_data.get('connection_check_interval', 5),
+            appcast=network_data.get('appcast', {'base_url': 'https://updates.nexy.ai'}),
+            connection_check_interval=network_data.get('connection_check_interval', 30),
             auto_fallback=network_data.get('auto_fallback', True),
             ping_timeout=network_data.get('ping_timeout', 5),
             ping_hosts=network_data.get('ping_hosts', ['8.8.8.8', '1.1.1.1'])

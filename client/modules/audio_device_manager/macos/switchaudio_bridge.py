@@ -7,7 +7,9 @@ import logging
 import subprocess
 import json
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Callable
 from ..core.types import AudioDevice, DeviceType, DeviceStatus, DevicePriority
 
@@ -22,6 +24,36 @@ class SwitchAudioBridge:
         self._current_devices: Dict[str, AudioDevice] = {}
         self._monitoring_task: Optional[asyncio.Task] = None
         self._last_device_count = 0
+    
+    def _get_switchaudio_path(self) -> str:
+        """
+        Определяет путь к бинарнику SwitchAudioSource.
+        
+        Поддерживает:
+        - PyInstaller onefile (sys._MEIPASS)
+        - PyInstaller bundle (.app/Contents/Resources/)
+        - Development/Homebrew (PATH)
+        
+        Returns:
+            str: Полный путь к SwitchAudioSource или 'SwitchAudioSource' для PATH
+        """
+        # 1) PyInstaller onefile: проверяем sys._MEIPASS
+        if hasattr(sys, "_MEIPASS"):
+            path = Path(sys._MEIPASS) / "resources" / "audio" / "SwitchAudioSource"
+            if path.exists():
+                logger.debug(f"🔍 Найден SwitchAudioSource (onefile): {path}")
+                return str(path)
+        
+        # 2) PyInstaller bundle: проверяем Contents/Resources/
+        macos_dir = Path(sys.argv[0]).resolve().parent
+        resources_path = macos_dir.parent / "Resources" / "resources" / "audio" / "SwitchAudioSource"
+        if resources_path.exists():
+            logger.debug(f"🔍 Найден SwitchAudioSource (bundle): {resources_path}")
+            return str(resources_path)
+        
+        # 3) Fallback на PATH (Homebrew в dev режиме)
+        logger.debug("🔍 Используем SwitchAudioSource из PATH")
+        return 'SwitchAudioSource'
         
     async def start_monitoring(self, device_change_callback: Callable):
         """Запуск мониторинга изменений устройств"""
@@ -134,9 +166,10 @@ class SwitchAudioBridge:
     async def _get_devices_from_switchaudio(self) -> List[AudioDevice]:
         """Получение устройств через switchaudio"""
         try:
-            # Запускаем SwitchAudioSource для получения списка устройств
+            # Получаем путь к бинарнику и запускаем
+            switchaudio_cmd = self._get_switchaudio_path()
             result = subprocess.run([
-                'SwitchAudioSource', '-a'
+                switchaudio_cmd, '-a'
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode != 0:
@@ -351,9 +384,10 @@ class SwitchAudioBridge:
             
             logger.info(f"🔄 Попытка переключения на: {target_device.name} (тип: {target_device.type.value})")
             
-            # Используем SwitchAudioSource для переключения
+            # Получаем путь к бинарнику и используем SwitchAudioSource для переключения
+            switchaudio_cmd = self._get_switchaudio_path()
             result = subprocess.run([
-                'SwitchAudioSource', '-t', 'output', '-s', target_device.name
+                switchaudio_cmd, '-t', 'output', '-s', target_device.name
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:
@@ -373,13 +407,16 @@ class SwitchAudioBridge:
     async def _try_alternative_switch(self, target_device: AudioDevice) -> bool:
         """Альтернативный способ переключения устройства"""
         try:
+            # Получаем путь к бинарнику
+            switchaudio_cmd = self._get_switchaudio_path()
+            
             # Пробуем переключиться по части имени
             name_parts = target_device.name.split()
             for part in name_parts:
                 if len(part) > 3:  # Игнорируем короткие части
                     logger.info(f"🔄 Пробуем переключиться по части имени: {part}")
                     result = subprocess.run([
-                        'SwitchAudioSource', '-t', 'output', '-s', part
+                        switchaudio_cmd, '-t', 'output', '-s', part
                     ], capture_output=True, text=True, timeout=10)
                     
                     if result.returncode == 0:
@@ -389,7 +426,7 @@ class SwitchAudioBridge:
             # Если не получилось, пробуем переключиться на встроенные динамики
             logger.info("🔄 Переключаемся на встроенные динамики...")
             result = subprocess.run([
-                'SwitchAudioSource', '-t', 'output', '-s', 'MacBook Air Speakers'
+                switchaudio_cmd, '-t', 'output', '-s', 'MacBook Air Speakers'
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:

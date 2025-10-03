@@ -41,6 +41,11 @@ def init_ffmpeg_for_pydub():
         resources_ffmpeg = macos_dir.parent / "Resources" / "resources" / "ffmpeg" / "ffmpeg"
         if resources_ffmpeg.exists():
             ffmpeg_path = resources_ffmpeg
+        else:
+            # Проверяем альтернативное расположение в Frameworks (PyInstaller иногда кладет туда)
+            frameworks_ffmpeg = macos_dir.parent / "Frameworks" / "resources" / "ffmpeg" / "ffmpeg"
+            if frameworks_ffmpeg.exists():
+                ffmpeg_path = frameworks_ffmpeg
     # 3) dev-режим (репозиторий)
     if ffmpeg_path is None:
         dev_ffmpeg = Path(__file__).resolve().parent / "resources" / "ffmpeg" / "ffmpeg"
@@ -57,6 +62,25 @@ def init_ffmpeg_for_pydub():
 
 # Выполняем инициализацию до импортов модулей, использующих pydub
 init_ffmpeg_for_pydub()
+
+# --- Фикс PyObjC для macOS (до импорта rumps) ---
+# ВАЖНО: Должен быть выполнен ДО импорта любых модулей, использующих rumps
+# Исправляет проблему "dlsym cannot find symbol NSMakeRect in CFBundle"
+try:
+    import AppKit
+    import Foundation
+    # Копируем NSMakeRect и другие символы из AppKit в Foundation
+    if not hasattr(Foundation, "NSMakeRect"):
+        Foundation.NSMakeRect = getattr(AppKit, "NSMakeRect", None)
+    if not hasattr(Foundation, "NSMakePoint"):
+        Foundation.NSMakePoint = getattr(AppKit, "NSMakePoint", None)
+    if not hasattr(Foundation, "NSMakeSize"):
+        Foundation.NSMakeSize = getattr(AppKit, "NSMakeSize", None)
+    if not hasattr(Foundation, "NSMakeRange"):
+        Foundation.NSMakeRange = getattr(AppKit, "NSMakeRange", None)
+except Exception:
+    # Если PyObjC недоступен или ошибка - продолжаем
+    pass
 
 # Настройка логирования
 logging.basicConfig(

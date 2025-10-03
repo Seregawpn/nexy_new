@@ -125,11 +125,14 @@ echo -e "${BLUE}🧹 Шаг 1: Очистка и сборка${NC}"
 cd "$CLIENT_DIR"
 
 log "Очищаем старые файлы..."
-rm -rf dist/ build/ *.pyc __pycache__/
-find . -name "*.pyc" -delete
+# Безопасная очистка: удаляем содержимое, а не сами директории
+rm -rf dist/* dist/.* build/* build/.* *.pyc __pycache__/ 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
 find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 log "Собираем приложение с PyInstaller..."
+# Активируем venv для использования правильных версий пакетов (protobuf 6.32.1)
+source "$CLIENT_DIR/venv/bin/activate"
 pyinstaller packaging/Nexy.spec --noconfirm --clean
 
 if [ ! -d "dist/$APP_NAME.app" ]; then
@@ -171,25 +174,42 @@ codesign --remove-signature "$CLEAN_APP" 2>/dev/null || true
 find "$CLEAN_APP/Contents" -type f -perm -111 -exec codesign --remove-signature {} \; 2>/dev/null || true
 
 log "Подписываем вложенные Mach-O файлы (СНАЧАЛА!)..."
+# Подписываем все вложенные библиотеки БЕЗ entitlements
 while IFS= read -r -d '' BIN; do
+    # Пропускаем главный executable - его подпишем потом
+    if [[ "$BIN" == *"/Contents/MacOS/$APP_NAME" ]]; then
+        continue
+    fi
     if file -b "$BIN" | grep -q "Mach-O"; then
-        echo "  Подписываем: $BIN"
+        echo "  Подписываем библиотеку: $(basename $BIN)"
         codesign --force --timestamp --options=runtime \
-            --entitlements "$ENTITLEMENTS" \
-            --sign "$IDENTITY" "$BIN"
+            --sign "$IDENTITY" "$BIN" || true
     fi
 done < <(find "$CLEAN_APP/Contents" -type f -perm -111 -print0 2>/dev/null)
 
-# Явно подписываем встроенный ffmpeg, если присутствует (Resources)
-FFMPEG_BIN="$CLEAN_APP/Contents/Resources/resources/ffmpeg/ffmpeg"
+# Явно подписываем встроенный ffmpeg, если присутствует (Frameworks)
+FFMPEG_BIN="$CLEAN_APP/Contents/Frameworks/resources/ffmpeg/ffmpeg"
 if [ -f "$FFMPEG_BIN" ]; then
     echo "  Подписываем встроенный ffmpeg: $FFMPEG_BIN"
     codesign --force --timestamp --options=runtime \
-        --entitlements "$ENTITLEMENTS" \
-        --sign "$IDENTITY" "$FFMPEG_BIN"
+        --sign "$IDENTITY" "$FFMPEG_BIN" || true
 fi
 
-log "Подписываем весь бандл (ПОТОМ!)..."
+# Подписываем SwitchAudioSource если присутствует
+SWITCHAUDIO_BIN="$CLEAN_APP/Contents/Resources/resources/audio/SwitchAudioSource"
+if [ -f "$SWITCHAUDIO_BIN" ]; then
+    echo "  Подписываем SwitchAudioSource: $SWITCHAUDIO_BIN"
+    codesign --force --timestamp --options=runtime \
+        --sign "$IDENTITY" "$SWITCHAUDIO_BIN" || true
+fi
+
+log "Подписываем главный executable с entitlements..."
+MAIN_EXE="$CLEAN_APP/Contents/MacOS/$APP_NAME"
+codesign --force --timestamp --options=runtime \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$IDENTITY" "$MAIN_EXE"
+
+log "Подписываем весь бандл (ФИНАЛ!)..."
 codesign --force --timestamp --options=runtime \
     --entitlements "$ENTITLEMENTS" \
     --sign "$IDENTITY" "$CLEAN_APP"

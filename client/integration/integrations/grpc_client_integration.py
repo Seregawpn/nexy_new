@@ -32,7 +32,7 @@ class GrpcClientIntegrationConfig:
     request_timeout_sec: float = 30.0
     max_retries: int = 3
     retry_delay_sec: float = 1.0
-    server: str = "local"  # local|production|fallback
+    server: str = "production"  # local|production|fallback (по умолчанию production для Azure)
     use_network_gate: bool = True
 
 
@@ -63,7 +63,8 @@ class GrpcClientIntegration:
                     server=str(cfg.get('server', 'production')),
                     use_network_gate=bool(cfg.get('use_network_gate', True)),
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка загрузки конфигурации gRPC, используем defaults: {e}")
                 config = GrpcClientIntegrationConfig()
         self.config = config
 

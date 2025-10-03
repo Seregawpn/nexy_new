@@ -1,76 +1,52 @@
-# =====================================================
-# ЗАВИСИМОСТИ ДЛЯ КЛИЕНТА (macOS) - ОБНОВЛЕНО
-# =====================================================
-
-# =====================================================
-# gRPC КЛИЕНТ
-# =====================================================
-grpcio
-grpcio-tools
-protobuf
-
-# =====================================================
-# РАСПОЗНАВАНИЕ РЕЧИ (STT)
-# =====================================================
-SpeechRecognition
-PyAudio            # ← Для voice_recognition модуля
-sounddevice        # ← Для speech_playback модуля
-
-# =====================================================
-# ЗАХВАТ ЭКРАНА
-# =====================================================
-Pillow
-mss               # ← ТОЛЬКО mss: Быстрый захват экрана
-
-# =====================================================
-# ОБРАБОТКА АУДИО
-# =====================================================
-numpy
-pydub
-scipy
-# FLAC поддержка (встроен в Speech Recognition 1.5.0)
-# Speech Recognition автоматически использует встроенный FLAC для оптимизации
-
-# =====================================================
-# СИСТЕМНЫЕ ЗАВИСИМОСТИ (устанавливаются через Homebrew)
-# =====================================================
-# brew install switchaudio-osx  # Переключение аудио устройств
-
-# =====================================================
-# УТИЛИТЫ
-# =====================================================
-rich
-pynput
-
-# =====================================================
-# СИСТЕМА ОБНОВЛЕНИЙ
-# =====================================================
-urllib3
-pynacl
-PyYAML            # ← Для чтения конфигурации
-
-# =====================================================
-# PyObjC - ВСЕ НЕОБХОДИМЫЕ ФРЕЙМВОРКИ ДЛЯ macOS
-# =====================================================
-pyobjc-core
-pyobjc-framework-CoreAudio
-pyobjc-framework-AVFoundation
-pyobjc-framework-AppKit
-pyobjc-framework-Quartz
-pyobjc-framework-ApplicationServices
-pyobjc-framework-SystemConfiguration
-
-# =====================================================
-# UI КОМПОНЕНТЫ
-# =====================================================
-rumps             # ← macOS tray приложение
-
-# =====================================================
-# СЕТЕВЫЕ ОПЕРАЦИИ
-# =====================================================
-aiohttp           # ← Для HTTP запросов и скачивания обновлений
-
-# =====================================================
-# ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ
-# =====================================================
-psutil
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.15
+aiosignal==1.4.0
+altgraph==0.17.4
+attrs==25.3.0
+audioop-lts==0.2.2
+cffi==2.0.0
+frozenlist==1.7.0
+grpcio==1.75.1
+grpcio-tools==1.75.1
+idna==3.10
+macholib==1.16.3
+markdown-it-py==4.0.0
+mdurl==0.1.2
+mss==10.1.0
+multidict==6.6.4
+numpy==2.3.3
+packaging==25.0
+pillow==11.3.0
+propcache==0.3.2
+protobuf==6.32.1
+psutil==7.1.0
+PyAudio==0.2.14
+pycparser==2.23
+pydub==0.25.1
+Pygments==2.19.2
+pyinstaller==6.16.0
+pyinstaller-hooks-contrib==2025.9
+PyNaCl==1.6.0
+pynput==1.8.1
+pyobjc-core==11.1
+pyobjc-framework-ApplicationServices==11.1
+pyobjc-framework-AVFoundation==11.1
+pyobjc-framework-Cocoa==11.1
+pyobjc-framework-CoreAudio==11.1
+pyobjc-framework-CoreMedia==11.1
+pyobjc-framework-CoreText==11.1
+pyobjc-framework-Quartz==11.1
+pyobjc-framework-SystemConfiguration==11.1
+PyYAML==6.0.3
+rich==14.1.0
+rumps==0.4.0
+scipy==1.16.2
+setuptools==80.9.0
+six==1.17.0
+sounddevice==0.5.2
+SpeechRecognition==3.14.3
+standard-aifc==3.13.0
+standard-chunk==3.13.0
+typing_extensions==4.15.0
+urllib3==2.5.0
+yarl==1.20.1

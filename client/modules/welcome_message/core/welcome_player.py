@@ -231,12 +231,34 @@ class WelcomePlayer:
     async def _load_prerecorded_audio(self):
         """Загружает предзаписанное аудио из файла"""
         try:
+            # Отладочное логирование для диагностики проблем с путями
+            import sys
+            logger.info(f"🔍 [WELCOME_PLAYER] Диагностика путей:")
+            logger.info(f"   • audio_file config: {self.config.audio_file}")
+            logger.info(f"   • __file__: {__file__}")
+            logger.info(f"   • sys.argv[0]: {sys.argv[0]}")
+            if hasattr(sys, "_MEIPASS"):
+                logger.info(f"   • sys._MEIPASS: {sys._MEIPASS}")
+            
             audio_path = self.config.get_audio_path()
-            logger.info(f"🔍 [WELCOME_PLAYER] Ищу предзаписанное аудио: {audio_path}")
+            logger.info(f"   • Полный путь: {audio_path}")
+            logger.info(f"   • Путь существует: {audio_path.exists()}")
             
             if not audio_path.exists():
+                # Дополнительная диагностика
+                parent_dir = audio_path.parent
                 logger.warning(f"⚠️ [WELCOME_PLAYER] Предзаписанное аудио не найдено: {audio_path}")
-                logger.warning(f"⚠️ [WELCOME_PLAYER] Будет использован TTS fallback")
+                logger.warning(f"   • Родительская директория: {parent_dir}")
+                logger.warning(f"   • Родительская директория существует: {parent_dir.exists()}")
+                if parent_dir.exists():
+                    try:
+                        files = list(parent_dir.glob("*"))
+                        logger.warning(f"   • Файлы в директории ({len(files)}):")
+                        for f in files[:10]:  # Показываем первые 10
+                            logger.warning(f"      - {f.name}")
+                    except Exception as e:
+                        logger.warning(f"   • Ошибка чтения директории: {e}")
+                
                 self._prerecorded_loaded = True  # Помечаем как загруженное, чтобы не пытаться снова
                 return
             

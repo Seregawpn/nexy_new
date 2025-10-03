@@ -1,10 +1,10 @@
 animation_speed: 0.5
 auto_hide: false
-debug_mode: true
+debug_mode: false
 enable_click_events: true
 enable_right_click: true
-enable_sound: true
-icon_size: 20
+enable_sound: false
+icon_size: 16
 menu_font_size: 13
 show_menu: true
 show_status: true
