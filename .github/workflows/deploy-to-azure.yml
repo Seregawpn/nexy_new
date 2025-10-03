@@ -1,0 +1,64 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'main.py', 'modules/**', 'integrations/**', 'config/**', 'requirements.txt' ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Deploy to Azure VM
+      uses: azure/CLI@v1
+      with:
+        inlineScript: |
+          echo "🚀 Начинаем деплой на Azure VM..."
+          
+          # Проверяем аутентификацию
+          echo "🔐 Проверяем аутентификацию в Azure..."
+          az account show || exit 1
+          
+          # Проверяем доступ к VM
+          echo "🔍 Проверяем доступ к VM..."
+          az vm show --resource-group Nexy --name nexy-regular --query "name" -o tsv || exit 1
+          
+          # Выполняем простую команду для тестирования
+          echo "🧪 Тестируем простую команду..."
+          az vm run-command invoke \
+            --resource-group Nexy \
+            --name nexy-regular \
+            --command-id RunShellScript \
+            --scripts "echo 'Test command works'" || exit 1
+          
+          # Выполняем команду обновления на VM
+          echo "🔄 Выполняем команду обновления..."
+          az vm run-command invoke \
+            --resource-group Nexy \
+            --name nexy-regular \
+            --command-id RunShellScript \
+            --scripts "timeout 300 bash /home/azureuser/update-server.sh" || exit 1
+          
+          echo "✅ Деплой завершен"
+          
+          # Проверяем health endpoint
+          echo "🔍 Проверяем health endpoint..."
+          sleep 15
+          
+          # Проверяем статус сервиса
+          echo "🔍 Проверяем статус сервиса..."
+          az vm run-command invoke \
+            --resource-group Nexy \
+            --name nexy-regular \
+            --command-id RunShellScript \
+            --scripts "systemctl is-active voice-assistant.service" || exit 1
+          
+          echo "🎉 Деплой успешно завершен!"
+      env:
+        AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
