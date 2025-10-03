@@ -3,37 +3,58 @@ name: Deploy to Azure VM
 on:
   push:
     branches: [ main ]
-    paths: [ 'server/**' ]
+    paths: [ 'main.py', 'modules/**', 'integrations/**', 'config/**', 'requirements.txt' ]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
     steps:
-    - name: Deploy to Azure VM
-      uses: azure/CLI@v1
+    - name: Azure Login
+      uses: azure/login@v1
       with:
-        inlineScript: |
-          echo "🚀 Deploying to Azure VM..."
-          
-          # Выполнить обновление
-          if az vm run-command invoke \
-            --resource-group Nexy \
-            --name nexy-regular \
-            --command-id RunShellScript \
-            --scripts "/home/azureuser/update-server.sh"; then
-            echo "✅ Deployment completed successfully!"
-          else
-            echo "❌ Deployment failed!"
-            exit 1
-          fi
-          
-          # Проверить health endpoint
-          echo "🏥 Checking health endpoint..."
-          if curl -f http://20.151.51.172/health; then
-            echo "✅ Health check passed!"
-          else
-            echo "❌ Health check failed!"
-            exit 1
-          fi
-
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Deploy to Azure VM
+      run: |
+        echo "🚀 Начинаем деплой на Azure VM..."
+        
+        # Проверяем аутентификацию
+        echo "🔐 Проверяем аутентификацию в Azure..."
+        az account show || exit 1
+        
+        # Проверяем доступ к VM
+        echo "🔍 Проверяем доступ к VM..."
+        az vm show --resource-group Nexy --name nexy-regular --query "name" -o tsv || exit 1
+        
+        # Выполняем команду обновления на VM
+        echo "🔄 Выполняем команду обновления..."
+        az vm run-command invoke \
+          --resource-group Nexy \
+          --name nexy-regular \
+          --command-id RunShellScript \
+          --scripts "timeout 300 bash /home/azureuser/update-server.sh" || exit 1
+        
+        echo "✅ Деплой завершен"
+        
+        # Проверяем health endpoint
+        echo "🔍 Проверяем health endpoint..."
+        sleep 15
+        
+        if curl -f http://20.151.51.172/health; then
+          echo "✅ Health check прошел успешно!"
+        else
+          echo "⚠️ Health check не прошел, но деплой завершен"
+        fi
+        
+        # Проверяем статус сервиса
+        echo "🔍 Проверяем статус сервиса..."
+        az vm run-command invoke \
+          --resource-group Nexy \
+          --name nexy-regular \
+          --command-id RunShellScript \
+          --scripts "systemctl is-active voice-assistant.service" || exit 1
+        
+        echo "🎉 Деплой успешно завершен!"

@@ -76,54 +76,41 @@ async def test_welcome_player_integration():
         print("📋 Создание WelcomeConfig...")
         config = WelcomeConfig(
             enabled=True,
-            audio_file="assets/audio/welcome_en.mp3",
-            fallback_to_tts=False  # Только предзаписанное аудио
+            fallback_to_tts=True,
+            use_server=False,  # Для теста заставляем использовать только локальный fallback
+            server_timeout_sec=5.0,
         )
-        
-        print(f"   • audio_file: {config.audio_file}")
-        
-        audio_path = config.get_audio_path()
-        print(f"   • Полный путь: {audio_path}")
-        print(f"   • Файл существует: {audio_path.exists()}")
-        
-        if not audio_path.exists():
-            print(f"❌ Аудио файл не найден: {audio_path}")
-            return False
-        
-        print("\n🎵 Создание WelcomePlayer...")
+
+        print("\n🎵 Создание WelcomePlayer и воспроизведение...")
         player = WelcomePlayer(config)
-        
-        print("\n🎵 Загрузка предзаписанного аудио...")
-        # Напрямую вызываем метод загрузки
-        await player._load_prerecorded_audio()
-        
-        # Проверяем, что аудио загружено
-        if player._prerecorded_audio is None:
-            print("❌ Предзаписанное аудио не загружено!")
+        result = await player.play_welcome()
+
+        print(f"   • success: {result.success}")
+        print(f"   • method: {result.method}")
+        print(f"   • duration_sec: {result.duration_sec:.2f}")
+        if result.error:
+            print(f"   • error: {result.error}")
+
+        audio_data = player.get_audio_data()
+        metadata = player.get_audio_metadata() or {}
+
+        if not result.success or audio_data is None:
+            print("❌ Не удалось получить локальное приветствие")
             return False
-        
-        print(f"✅ Аудио загружено: {len(player._prerecorded_audio)} сэмплов")
-        
-        # Проверяем формат
-        import numpy as np
-        audio_data = player._prerecorded_audio
-        
+
         print(f"\n📊 Информация об аудио:")
         print(f"   • Тип данных: {audio_data.dtype}")
         print(f"   • Форма: {audio_data.shape}")
-        print(f"   • Размер: {len(audio_data)} сэмплов")
-        print(f"   • Длительность: {len(audio_data) / config.sample_rate:.2f} сек")
+        print(f"   • Размер: {audio_data.size} элементов")
+        print(f"   • Длительность (метаданные): {metadata.get('duration_sec')}")
+        print(f"   • Sample rate: {metadata.get('sample_rate', config.sample_rate)}")
+        print(f"   • Каналы: {metadata.get('channels', config.channels)}")
         print(f"   • Диапазон: [{audio_data.min()}, {audio_data.max()}]")
-        
-        # Проверяем, что данные не пустые
-        if len(audio_data) == 0:
+
+        if audio_data.size == 0:
             print("❌ Аудио данные пустые!")
             return False
-        
-        # Проверяем, что это не только тишина
-        if audio_data.max() == audio_data.min():
-            print("⚠️  Предупреждение: аудио похоже на тишину (все значения одинаковые)")
-        
+
         print("\n✅ Welcome Player Integration - PASS")
         return True
         
@@ -262,6 +249,5 @@ def main():
 if __name__ == "__main__":
     exit_code = main()
     sys.exit(exit_code)
-
 
 

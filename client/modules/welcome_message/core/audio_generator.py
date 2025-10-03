@@ -1,266 +1,239 @@
-"""
-Welcome Audio Generator
+"""Welcome Audio Generator
 
-Локальный генератор аудио для приветственного сообщения.
-Использует серверный AudioGenerator (Azure TTS) с fallback на macOS say.
+Основной генератор аудио для приветственного сообщения.
+Пытается получить аудио с сервера через gRPC и использует локальные fallback'и.
 """
 
-import asyncio
 import logging
 import subprocess
 import tempfile
-import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Dict, Any
+
 import numpy as np
 from pydub import AudioSegment
 
-from .types import WelcomeConfig
+from config.unified_config_loader import UnifiedConfigLoader
+from modules.grpc_client.core.grpc_client import GrpcClient
 
-# Импортируем серверный AudioGenerator (если доступен)
-try:
-    # Ищем сервер в родительской директории проекта
-    project_root = Path(__file__).parent.parent.parent.parent.parent
-    server_path = project_root / "server"
-    
-    if server_path.exists() and str(server_path) not in sys.path:
-        sys.path.append(str(server_path))
-    
-    from audio_generator import AudioGenerator as ServerAudioGenerator
-    from config import Config as ServerConfig
-    _SERVER_AUDIO_GEN_AVAILABLE = True
-except Exception:
-    ServerAudioGenerator = None
-    ServerConfig = None
-    _SERVER_AUDIO_GEN_AVAILABLE = False
+from .types import WelcomeConfig
 
 logger = logging.getLogger(__name__)
 
 
 class WelcomeAudioGenerator:
     """Генератор аудио для приветственного сообщения"""
-    
+
     def __init__(self, config: WelcomeConfig):
         self.config = config
-        self._cache: Optional[np.ndarray] = None
-        self._cache_path: Optional[Path] = None
-        
-        # Серверный генератор (если доступен)
-        self._server_generator: Optional[ServerAudioGenerator] = None
-        if _SERVER_AUDIO_GEN_AVAILABLE:
-            try:
-                self._server_generator = ServerAudioGenerator(voice=config.voice)
-                logger.info("✅ [WELCOME_AUDIO] Серверный AudioGenerator доступен (Azure TTS)")
-            except Exception as e:
-                logger.warning(f"⚠️ [WELCOME_AUDIO] Не удалось создать серверный генератор: {e}")
-                self._server_generator = None
-    
+        self._last_server_metadata: Dict[str, Any] = {}
+
+        self._grpc_client: Optional[GrpcClient] = None
+        self._grpc_client_config: Optional[Dict[str, Any]] = None
+        self._grpc_server_name: Optional[str] = None
+        self._grpc_timeout: float = float(config.server_timeout_sec)
+
+        self._load_grpc_settings()
+
     async def generate_audio(self, text: str) -> Optional[np.ndarray]:
-        """
-        Генерирует аудио для текста приветствия
-        
-        Args:
-            text: Текст для генерации
-            
-        Returns:
-            numpy массив аудио данных или None при ошибке
-        """
+        """Генерирует аудио для приветственного текста"""
         try:
-            logger.info(f"🎵 [WELCOME_AUDIO] Генерация аудио для: '{text[:30]}...'")
-            
-            # Сначала пробуем серверный AudioGenerator (Azure TTS)
-            if self._server_generator:
-                logger.info("🎵 [WELCOME_AUDIO] Пробуем серверный AudioGenerator (Azure TTS)")
-                audio_data = await self._generate_with_server_generator(text)
-                if audio_data is not None:
-                    logger.info(f"✅ [WELCOME_AUDIO] Успешно сгенерировано через Azure TTS: {len(audio_data)} сэмплов")
-                    return audio_data
-                logger.warning("⚠️ [WELCOME_AUDIO] Серверный генератор не удался, переключаемся на fallback")
-            
-            # Fallback на macOS say command
-            logger.info("🎵 [WELCOME_AUDIO] Пробуем macOS say fallback")
+            logger.info("🎵 [WELCOME_AUDIO] Генерация аудио для приветствия")
+
+            audio_data = await self.generate_server_audio(text)
+            if audio_data is not None:
+                logger.info(f"✅ [WELCOME_AUDIO] Серверное аудио получено: {len(audio_data)} samples")
+                return audio_data
+
+            logger.warning("⚠️ [WELCOME_AUDIO] Серверная генерация не удалась, пробуем macOS say")
+
             audio_data = await self._generate_with_macos_say(text)
             if audio_data is not None:
-                logger.info(f"✅ [WELCOME_AUDIO] Успешно сгенерировано через macOS say: {len(audio_data)} сэмплов")
+                logger.info(f"✅ [WELCOME_AUDIO] macOS say fallback сработал: {len(audio_data)} samples")
                 return audio_data
-            
-            # Последний fallback на простой tone
-            logger.warning("⚠️ [WELCOME_AUDIO] macOS say недоступен, используем fallback tone")
-            audio_data = self._generate_fallback_tone(text)
+
+            logger.warning("⚠️ [WELCOME_AUDIO] macOS say недоступен, генерируем fallback tone")
+            audio_data = self._generate_fallback_tone()
             if audio_data is not None:
-                logger.info(f"✅ [WELCOME_AUDIO] Fallback tone создан: {len(audio_data)} сэмплов")
                 return audio_data
-            
-            logger.error("❌ [WELCOME_AUDIO] Не удалось сгенерировать аудио")
+
+            logger.error("❌ [WELCOME_AUDIO] Все методы генерации приветствия не удались")
             return None
-            
-        except Exception as e:
-            logger.error(f"❌ [WELCOME_AUDIO] Ошибка генерации: {e}")
+        except Exception as exc:
+            logger.error(f"💥 [WELCOME_AUDIO] Критическая ошибка генерации: {exc}")
             return None
-    
-    async def _generate_with_server_generator(self, text: str) -> Optional[np.ndarray]:
-        """Генерация аудио через серверный AudioGenerator (Azure TTS)"""
+
+    async def generate_server_audio(self, text: str) -> Optional[np.ndarray]:
+        """Пытается получить приветствие только с сервера"""
+        if not self.config.use_server:
+            return None
+        return await self._generate_with_server(text)
+
+    async def generate_local_fallback(self, text: str) -> Optional[np.ndarray]:
+        """Генерирует приветствие локальными средствами без сервера"""
+        audio_data = await self._generate_with_macos_say(text)
+        if audio_data is not None:
+            return audio_data
+        return self._generate_fallback_tone()
+
+    async def _generate_with_server(self, text: str) -> Optional[np.ndarray]:
+        """Запрашивает генерацию приветствия на сервере"""
+        if not text:
+            logger.error("❌ [WELCOME_AUDIO] Пустой текст приветствия")
+            return None
+
+        client = self._ensure_grpc_client()
+        if not client:
+            return None
+
         try:
-            if not self._server_generator:
+            result = await client.generate_welcome_audio(
+                text=text,
+                voice=self.config.voice,
+                language=None,
+                server_name=self._grpc_server_name,
+                timeout=self._grpc_timeout,
+            )
+            audio_array: Optional[np.ndarray] = result.get('audio')
+            metadata = result.get('metadata', {})
+            self._last_server_metadata = metadata
+
+            if audio_array is None or len(audio_array) == 0:
+                logger.error("❌ [WELCOME_AUDIO] Сервер вернул пустое аудио")
                 return None
-            
-            logger.info(f"🎵 [WELCOME_AUDIO] Генерация через серверный AudioGenerator для: '{text[:30]}...'")
-            
-            # Используем серверный генератор
-            audio_data = await self._server_generator.generate_audio(text)
-            
-            if audio_data is not None:
-                # Серверный генератор уже возвращает правильный формат (48000Hz 16-bit mono)
-                logger.info(f"✅ [WELCOME_AUDIO] Серверный генератор успешно: {len(audio_data)} сэмплов")
-                return audio_data
-            else:
-                logger.warning("⚠️ [WELCOME_AUDIO] Серверный генератор вернул None")
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ [WELCOME_AUDIO] Ошибка серверного генератора: {e}")
+
+            sample_rate = metadata.get('sample_rate') or self.config.sample_rate
+            channels = metadata.get('channels') or self.config.channels
+
+            if sample_rate != self.config.sample_rate or channels != self.config.channels:
+                logger.info(
+                    "⚠️ [WELCOME_AUDIO] Несовпадение формата: server_sr=%s, config_sr=%s, server_ch=%s, config_ch=%s",
+                    sample_rate,
+                    self.config.sample_rate,
+                    channels,
+                    self.config.channels,
+                )
+                # Пока не выполняем ресэмплинг, сообщаем в лог.
+
+            return audio_array
+        except Exception as exc:
+            logger.error(f"❌ [WELCOME_AUDIO] Ошибка серверной генерации: {exc}")
             return None
-    
+
     async def _generate_with_macos_say(self, text: str) -> Optional[np.ndarray]:
-        """Генерация аудио через macOS say command"""
+        """Генерация аудио через macOS say"""
         try:
-            # Создаем временный файл
             with tempfile.NamedTemporaryFile(suffix='.aiff', delete=False) as temp_file:
-                temp_path = temp_file.name
-            
+                temp_path = Path(temp_file.name)
+
             try:
-                # Генерируем аудио через say
-                cmd = [
-                    'say',
-                    '-v', 'Samantha',  # Качественный женский голос
-                    '-r', '180',       # Скорость (слов в минуту)
-                    '-o', temp_path,   # Выходной файл
-                    text
-                ]
-                
-                # Запускаем с таймаутом
+                cmd = ['say', '-v', 'Samantha', '-r', '180', '-o', str(temp_path), text]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                
-                if result.returncode == 0 and Path(temp_path).exists():
-                    # Конвертируем в нужный формат
-                    seg = AudioSegment.from_file(temp_path)
-                    
-                    # Приводим к стандартному формату: 48000Hz mono
-                    if seg.frame_rate != self.config.sample_rate:
-                        seg = seg.set_frame_rate(self.config.sample_rate)
-                    if seg.channels != self.config.channels:
-                        seg = seg.set_channels(self.config.channels)
-                    
-                    # Конвертируем в numpy int16
-                    samples = np.array(seg.get_array_of_samples(), dtype=np.int16)
-                    
-                    logger.info(f"✅ [WELCOME_AUDIO] macOS say успешно: {len(samples)} сэмплов, {len(samples)/self.config.sample_rate:.1f}s")
+
+                if result.returncode == 0 and temp_path.exists():
+                    segment = AudioSegment.from_file(str(temp_path))
+                    if segment.frame_rate != self.config.sample_rate:
+                        segment = segment.set_frame_rate(self.config.sample_rate)
+                    if segment.channels != self.config.channels:
+                        segment = segment.set_channels(self.config.channels)
+
+                    samples = np.array(segment.get_array_of_samples(), dtype=np.int16)
+                    logger.info(
+                        "✅ [WELCOME_AUDIO] macOS say: %s samples, %.1fs",
+                        len(samples),
+                        len(samples) / self.config.sample_rate,
+                    )
                     return samples
-                    
-                else:
-                    logger.error(f"❌ [WELCOME_AUDIO] macOS say ошибка: {result.stderr}")
-                    return None
-                    
+
+                logger.error(f"❌ [WELCOME_AUDIO] macOS say завершился с ошибкой: {result.stderr}")
+                return None
             finally:
-                # Удаляем временный файл
                 try:
-                    Path(temp_path).unlink(missing_ok=True)
+                    temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-                    
         except subprocess.TimeoutExpired:
-            logger.error("⏰ [WELCOME_AUDIO] macOS say таймаут 10s")
+            logger.error("⏰ [WELCOME_AUDIO] macOS say превысил таймаут 10s")
             return None
-        except Exception as e:
-            logger.error(f"❌ [WELCOME_AUDIO] macOS say ошибка: {e}")
+        except Exception as exc:
+            logger.error(f"❌ [WELCOME_AUDIO] macOS say ошибка: {exc}")
             return None
-    
-    def _generate_fallback_tone(self, text: str) -> Optional[np.ndarray]:
-        """
-        Fallback генератор: создает короткий приветственный tone
-        """
+
+    def _generate_fallback_tone(self) -> Optional[np.ndarray]:
+        """Генерирует короткий приветственный тон"""
         try:
-            logger.info("🎛️ [WELCOME_AUDIO] Создаю fallback tone")
-            
             sr = self.config.sample_rate
-            
-            # Короткий приветственный tone (1.5 секунды)
             duration_sec = 1.5
             total_samples = int(sr * duration_sec)
-            
-            # Создаем мелодичный tone
+
             t = np.linspace(0, duration_sec, total_samples, endpoint=False, dtype=np.float32)
-            
-            # Простая мелодия: две ноты
-            note1_dur = 0.6  # Первая нота
-            note2_dur = 0.6  # Вторая нота
-            pause_dur = 0.3  # Пауза между нотами
-            
             audio = np.zeros(total_samples, dtype=np.float32)
-            
-            # Первая нота (A4 = 440Hz)
-            note1_samples = int(sr * note1_dur)
-            note1 = 0.3 * np.sin(2 * np.pi * 440 * t[:note1_samples])
-            # Мягкий fade-in/out
-            fade_samples = int(0.05 * sr)  # 50ms fade
-            note1[:fade_samples] *= np.linspace(0, 1, fade_samples)
-            note1[-fade_samples:] *= np.linspace(1, 0, fade_samples)
-            audio[:note1_samples] = note1
-            
-            # Вторая нота (C5 = 523Hz) после паузы
-            note2_start = int(sr * (note1_dur + pause_dur))
-            note2_samples = int(sr * note2_dur)
-            if note2_start + note2_samples <= total_samples:
-                note2 = 0.3 * np.sin(2 * np.pi * 523 * t[:note2_samples])
-                note2[:fade_samples] *= np.linspace(0, 1, fade_samples)
-                note2[-fade_samples:] *= np.linspace(1, 0, fade_samples)
-                audio[note2_start:note2_start + note2_samples] = note2
-            
-            # Конвертируем в int16
-            audio_int16 = np.asarray(audio * 32767, dtype=np.int16)
-            
-            logger.info(f"✅ [WELCOME_AUDIO] Fallback tone создан: {len(audio_int16)} сэмплов, {duration_sec:.1f}s")
+
+            note1_duration = 0.6
+            pause_duration = 0.3
+            note2_duration = 0.6
+
+            note1 = np.sin(2 * np.pi * 523.25 * t[: int(note1_duration * sr)])
+            pause = np.zeros(int(pause_duration * sr), dtype=np.float32)
+            note2 = np.sin(2 * np.pi * 659.25 * t[: int(note2_duration * sr)])
+
+            melody = np.concatenate([note1, pause, note2])
+            if len(melody) < total_samples:
+                melody = np.concatenate([melody, np.zeros(total_samples - len(melody), dtype=np.float32)])
+
+            audio[: len(melody)] = melody
+            audio_int16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+            logger.info(f"✅ [WELCOME_AUDIO] Fallback tone создан: {len(audio_int16)} samples")
             return audio_int16
-            
-        except Exception as e:
-            logger.error(f"❌ [WELCOME_AUDIO] Fallback tone ошибка: {e}")
+        except Exception as exc:
+            logger.error(f"❌ [WELCOME_AUDIO] Ошибка fallback tone: {exc}")
             return None
-    
-    async def save_audio_to_file(self, audio_data: np.ndarray, output_path: Path) -> bool:
-        """
-        Сохраняет аудио данные в файл
-        
-        Args:
-            audio_data: numpy массив аудио данных
-            output_path: путь для сохранения
-            
-        Returns:
-            True если успешно сохранено
-        """
+
+    def get_last_server_metadata(self) -> Dict[str, Any]:
+        """Возвращает метаданные последней серверной генерации"""
+        return self._last_server_metadata
+
+    def _load_grpc_settings(self):
         try:
-            # Создаем директорию если не существует
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Конвертируем в AudioSegment
-            audio_segment = AudioSegment(
-                audio_data.tobytes(),
-                frame_rate=self.config.sample_rate,
-                sample_width=2,  # 16-bit
-                channels=self.config.channels
-            )
-            
-            # Сохраняем в нужном формате
-            if output_path.suffix.lower() == '.mp3':
-                audio_segment.export(output_path, format="mp3")
-            elif output_path.suffix.lower() == '.wav':
-                audio_segment.export(output_path, format="wav")
-            else:
-                # По умолчанию WAV
-                audio_segment.export(output_path.with_suffix('.wav'), format="wav")
-            
-            logger.info(f"✅ [WELCOME_AUDIO] Аудио сохранено: {output_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ [WELCOME_AUDIO] Ошибка сохранения: {e}")
-            return False
+            loader = UnifiedConfigLoader()
+            config_data = loader._load_config()
+            integrations_cfg = (config_data.get('integrations') or {}).get('grpc_client', {})
+            self._grpc_server_name = integrations_cfg.get('server')
+            integration_timeout = float(integrations_cfg.get('request_timeout_sec', self._grpc_timeout))
+            self._grpc_timeout = float(self.config.server_timeout_sec or integration_timeout)
+
+            network_cfg = loader.get_network_config()
+            servers_cfg: Dict[str, Dict[str, Any]] = {}
+            for name, server in network_cfg.grpc_servers.items():
+                servers_cfg[name] = {
+                    'address': server.host,
+                    'port': server.port,
+                    'use_ssl': server.ssl,
+                    'timeout': server.timeout,
+                    'retry_attempts': server.retry_attempts,
+                    'retry_delay': server.retry_delay,
+                }
+
+            self._grpc_client_config = {
+                'servers': servers_cfg,
+                'auto_fallback': network_cfg.auto_fallback,
+                'connection_timeout': network_cfg.connection_check_interval,
+                'max_retry_attempts': int(integrations_cfg.get('max_retries', 3)),
+                'retry_delay': float(integrations_cfg.get('retry_delay', 1.0)),
+                'welcome_timeout_sec': self._grpc_timeout,
+            }
+        except Exception as exc:
+            logger.warning(f"⚠️ [WELCOME_AUDIO] Не удалось загрузить настройки gRPC: {exc}")
+            self._grpc_client_config = None
+            self._grpc_server_name = None
+            self._grpc_timeout = 30.0
+
+    def _ensure_grpc_client(self) -> Optional[GrpcClient]:
+        try:
+            if self._grpc_client is None:
+                self._grpc_client = GrpcClient(config=self._grpc_client_config)
+            return self._grpc_client
+        except Exception as exc:
+            logger.error(f"❌ [WELCOME_AUDIO] Ошибка создания gRPC клиента: {exc}")
+            self._grpc_client = None
+            return None

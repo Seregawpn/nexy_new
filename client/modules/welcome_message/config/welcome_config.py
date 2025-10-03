@@ -41,7 +41,9 @@ class WelcomeConfigLoader:
                 voice=welcome_config.get('voice', "en-US-JennyNeural"),
                 sample_rate=int(welcome_config.get('sample_rate', 48000)),
                 channels=int(welcome_config.get('channels', 1)),
-                bit_depth=int(welcome_config.get('bit_depth', 16))
+                bit_depth=int(welcome_config.get('bit_depth', 16)),
+                use_server=welcome_config.get('use_server', True),
+                server_timeout_sec=float(welcome_config.get('server_timeout_sec', 30.0))
             )
             
             logger.info(f"✅ [WELCOME_CONFIG] Конфигурация загружена: enabled={config.enabled}, text='{config.text[:30]}...'")

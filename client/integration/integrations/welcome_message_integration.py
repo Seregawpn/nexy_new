@@ -166,7 +166,7 @@ class WelcomeMessageIntegration:
             # Публикуем событие начала
             asyncio.create_task(self.event_bus.publish("welcome.started", {
                 "text": self.config.text,
-                "method": "prerecorded"  # Будет обновлено в _on_welcome_completed
+                "method": "server"  # Будет обновлено в _on_welcome_completed
             }))
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка в _on_welcome_started: {e}")
@@ -186,7 +186,7 @@ class WelcomeMessageIntegration:
             }))
             
             # Если есть аудио данные, отправляем их в SpeechPlaybackIntegration
-            if result.success and result.method in ["prerecorded", "tts"]:
+            if result.success and result.method in ["server", "local_fallback"]:
                 audio_data = self.welcome_player.get_audio_data()
                 if audio_data is not None:
                     asyncio.create_task(self._send_audio_to_playback(audio_data))
@@ -216,16 +216,22 @@ class WelcomeMessageIntegration:
             # ОТЛАДКА: Проверяем формат данных
             logger.info(f"🔍 [WELCOME_INTEGRATION] Формат данных: dtype={audio_data.dtype}, shape={audio_data.shape}")
             logger.info(f"🔍 [WELCOME_INTEGRATION] Диапазон: min={audio_data.min()}, max={audio_data.max()}")
+            metadata = self.welcome_player.get_audio_metadata() or {}
+            sample_rate = int(metadata.get('sample_rate', self.config.sample_rate))
+            channels = int(metadata.get('channels', self.config.channels))
+            method = metadata.get('method', 'server')
             
             # ✅ ПРАВИЛЬНО: Передаем numpy массив напрямую в плеер
             # БЕЗ конвертации в bytes - плеер сам разберется с форматом
             await self.event_bus.publish("playback.raw_audio", {
                 "audio_data": audio_data,  # numpy array
-                "sample_rate": self.config.sample_rate,
-                "channels": self.config.channels,
+                "sample_rate": sample_rate,
+                "channels": channels,
                 "dtype": "int16",  # для информации
                 "priority": 5,  # Высокий приоритет для приветствия
-                "pattern": "welcome_message"
+                "pattern": "welcome_message",
+                "metadata": metadata,
+                "method": method,
             })
             
             logger.info("✅ [WELCOME_INTEGRATION] Аудио отправлено в SpeechPlaybackIntegration")

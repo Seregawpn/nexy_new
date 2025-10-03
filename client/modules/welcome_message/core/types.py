@@ -40,6 +40,8 @@ class WelcomeConfig:
     sample_rate: int = 48000
     channels: int = 1
     bit_depth: int = 16
+    use_server: bool = True
+    server_timeout_sec: float = 30.0
     
     def get_audio_path(self, base_path: Optional[Path] = None) -> Path:
         """
@@ -63,7 +65,7 @@ class WelcomeConfig:
 class WelcomeResult:
     """Результат воспроизведения приветствия"""
     success: bool
-    method: str  # "prerecorded" | "tts" | "fallback"
+    method: str  # "server" | "local_fallback" | "none" | "error"
     duration_sec: float
     error: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None

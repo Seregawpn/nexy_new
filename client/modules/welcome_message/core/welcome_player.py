@@ -2,13 +2,11 @@
 Welcome Player
 
 Основной плеер для воспроизведения приветственного сообщения.
-Поддерживает предзаписанное аудио и fallback на TTS.
+Поддерживает серверную генерацию и локальные fallback'и.
 """
 
-import asyncio
 import logging
-from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Dict
 import numpy as np
 
 from .types import WelcomeConfig, WelcomeState, WelcomeResult
@@ -30,11 +28,9 @@ class WelcomePlayer:
         self._on_completed: Optional[Callable[[WelcomeResult], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
         
-        # Кэш для предзаписанного аудио
-        self._prerecorded_audio: Optional[np.ndarray] = None
-        self._prerecorded_loaded = False
-        # Последнее подготовленное аудио (prerecorded или tts)
+        # Последнее подготовленное аудио и метаданные
         self._last_audio: Optional[np.ndarray] = None
+        self._last_metadata: Optional[Dict[str, Any]] = None
     
     def set_callbacks(
         self,
@@ -82,29 +78,32 @@ class WelcomePlayer:
             if self._on_started:
                 self._on_started()
             
-            # Сначала пробуем предзаписанное аудио
-            result = await self._play_prerecorded()
-            if result.success:
-                logger.info("✅ [WELCOME_PLAYER] Предзаписанное аудио воспроизведено успешно")
-                self.state = WelcomeState.COMPLETED
-                if self._on_completed:
-                    self._on_completed(result)
-                return result
-            
-            logger.warning(f"⚠️ [WELCOME_PLAYER] Предзаписанное аудио не удалось: {result.error}")
-            
-            # Fallback на TTS
-            if self.config.fallback_to_tts:
-                logger.info("🎵 [WELCOME_PLAYER] Переключаюсь на TTS fallback")
-                result = await self._play_tts_fallback()
-                if result.success:
-                    logger.info("✅ [WELCOME_PLAYER] TTS fallback воспроизведен успешно")
+            server_result: Optional[WelcomeResult] = None
+            if self.config.use_server:
+                server_result = await self._play_server_audio()
+                if server_result.success:
+                    logger.info("✅ [WELCOME_PLAYER] Серверное приветствие воспроизведено успешно")
                     self.state = WelcomeState.COMPLETED
                     if self._on_completed:
-                        self._on_completed(result)
-                    return result
+                        self._on_completed(server_result)
+                    return server_result
+
+                logger.warning(f"⚠️ [WELCOME_PLAYER] Серверное приветствие не удалось: {server_result.error}")
+            else:
+                logger.info("🔌 [WELCOME_PLAYER] Серверное приветствие отключено в конфигурации")
+            
+            # Локальные fallback'и (macOS say / тон)
+            if self.config.fallback_to_tts:
+                logger.info("🎵 [WELCOME_PLAYER] Переключаюсь на локальный fallback")
+                fallback_result = await self._play_local_fallback()
+                if fallback_result.success:
+                    logger.info("✅ [WELCOME_PLAYER] Локальный fallback воспроизведен успешно")
+                    self.state = WelcomeState.COMPLETED
+                    if self._on_completed:
+                        self._on_completed(fallback_result)
+                    return fallback_result
                 
-                logger.error(f"❌ [WELCOME_PLAYER] TTS fallback не удался: {result.error}")
+                logger.error(f"❌ [WELCOME_PLAYER] Локальный fallback не удался: {fallback_result.error}")
             
             # Все методы не удались
             error_msg = "Все методы воспроизведения приветствия не удались"
@@ -144,152 +143,100 @@ class WelcomePlayer:
             
             return result
     
-    async def _play_prerecorded(self) -> WelcomeResult:
-        """Воспроизводит предзаписанное аудио"""
+    async def _play_server_audio(self) -> WelcomeResult:
+        """Пытается воспроизвести приветствие, сгенерированное на сервере"""
         try:
-            # Загружаем предзаписанное аудио если еще не загружено
-            if not self._prerecorded_loaded:
-                await self._load_prerecorded_audio()
-            
-            if self._prerecorded_audio is None:
-                return WelcomeResult(
-                    success=False,
-                    method="prerecorded",
-                    duration_sec=0.0,
-                    error="Предзаписанное аудио не найдено"
-                )
-            
-            # Воспроизводим через SpeechPlaybackIntegration
-            # (это будет реализовано в интеграции)
-            duration_sec = len(self._prerecorded_audio) / self.config.sample_rate
-            
-            logger.info(f"🎵 [WELCOME_PLAYER] Предзаписанное аудио готово: {len(self._prerecorded_audio)} сэмплов, {duration_sec:.1f}s")
-            # Сохраняем как последнее подготовленное аудио
-            self._last_audio = self._prerecorded_audio
-            
-            return WelcomeResult(
-                success=True,
-                method="prerecorded",
-                duration_sec=duration_sec,
-                metadata={
-                    "samples": len(self._prerecorded_audio),
-                    "sample_rate": self.config.sample_rate,
-                    "channels": self.config.channels
-                }
-            )
-            
-        except Exception as e:
-            return WelcomeResult(
-                success=False,
-                method="prerecorded",
-                duration_sec=0.0,
-                error=f"Ошибка воспроизведения предзаписанного аудио: {e}"
-            )
-    
-    async def _play_tts_fallback(self) -> WelcomeResult:
-        """Воспроизводит через TTS fallback"""
-        try:
-            logger.info(f"🎵 [WELCOME_PLAYER] Генерирую TTS для: '{self.config.text[:30]}...'")
-            
-            # Генерируем аудио
-            audio_data = await self.audio_generator.generate_audio(self.config.text)
+            audio_data = await self.audio_generator.generate_server_audio(self.config.text)
             if audio_data is None:
                 return WelcomeResult(
                     success=False,
-                    method="tts",
+                    method="server",
                     duration_sec=0.0,
-                    error="Не удалось сгенерировать TTS аудио"
+                    error="Серверная генерация вернула пустой результат"
                 )
-            
-            # Воспроизводим через SpeechPlaybackIntegration
-            # (это будет реализовано в интеграции)
-            duration_sec = len(audio_data) / self.config.sample_rate
-            
-            logger.info(f"🎵 [WELCOME_PLAYER] TTS аудио готово: {len(audio_data)} сэмплов, {duration_sec:.1f}s")
-            # Сохраняем как последнее подготовленное аудио
+
+            server_metadata = self.audio_generator.get_last_server_metadata()
+            sample_rate = server_metadata.get('sample_rate', self.config.sample_rate)
+            channels = server_metadata.get('channels', self.config.channels)
+
+            frame_count = audio_data.shape[0] if audio_data.ndim == 1 else audio_data.shape[0]
+            duration_sec = frame_count / float(sample_rate)
+
+            metadata = {
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "samples": int(audio_data.size if hasattr(audio_data, 'size') else frame_count * channels),
+                "method": server_metadata.get('method', 'server'),
+                "duration_sec": server_metadata.get('duration_sec', duration_sec),
+            }
+
             self._last_audio = audio_data
-            
+            self._last_metadata = metadata
+
             return WelcomeResult(
                 success=True,
-                method="tts",
+                method="server",
                 duration_sec=duration_sec,
-                metadata={
-                    "samples": len(audio_data),
-                    "sample_rate": self.config.sample_rate,
-                    "channels": self.config.channels
-                }
+                metadata=metadata
             )
-            
+
         except Exception as e:
             return WelcomeResult(
                 success=False,
-                method="tts",
+                method="server",
                 duration_sec=0.0,
-                error=f"Ошибка TTS fallback: {e}"
+                error=f"Ошибка серверной генерации: {e}"
             )
-    
-    async def _load_prerecorded_audio(self):
-        """Загружает предзаписанное аудио из файла"""
+
+    async def _play_local_fallback(self) -> WelcomeResult:
+        """Воспроизводит приветствие с использованием локального fallback"""
         try:
-            # Отладочное логирование для диагностики проблем с путями
-            import sys
-            logger.info(f"🔍 [WELCOME_PLAYER] Диагностика путей:")
-            logger.info(f"   • audio_file config: {self.config.audio_file}")
-            logger.info(f"   • __file__: {__file__}")
-            logger.info(f"   • sys.argv[0]: {sys.argv[0]}")
-            if hasattr(sys, "_MEIPASS"):
-                logger.info(f"   • sys._MEIPASS: {sys._MEIPASS}")
-            
-            audio_path = self.config.get_audio_path()
-            logger.info(f"   • Полный путь: {audio_path}")
-            logger.info(f"   • Путь существует: {audio_path.exists()}")
-            
-            if not audio_path.exists():
-                # Дополнительная диагностика
-                parent_dir = audio_path.parent
-                logger.warning(f"⚠️ [WELCOME_PLAYER] Предзаписанное аудио не найдено: {audio_path}")
-                logger.warning(f"   • Родительская директория: {parent_dir}")
-                logger.warning(f"   • Родительская директория существует: {parent_dir.exists()}")
-                if parent_dir.exists():
-                    try:
-                        files = list(parent_dir.glob("*"))
-                        logger.warning(f"   • Файлы в директории ({len(files)}):")
-                        for f in files[:10]:  # Показываем первые 10
-                            logger.warning(f"      - {f.name}")
-                    except Exception as e:
-                        logger.warning(f"   • Ошибка чтения директории: {e}")
-                
-                self._prerecorded_loaded = True  # Помечаем как загруженное, чтобы не пытаться снова
-                return
-            
-            logger.info(f"🎵 [WELCOME_PLAYER] Загружаю предзаписанное аудио: {audio_path}")
-            
-            # Загружаем аудио файл
-            from pydub import AudioSegment
-            audio_segment = AudioSegment.from_file(str(audio_path))
-            
-            # Конвертируем в нужный формат
-            if audio_segment.frame_rate != self.config.sample_rate:
-                audio_segment = audio_segment.set_frame_rate(self.config.sample_rate)
-            if audio_segment.channels != self.config.channels:
-                audio_segment = audio_segment.set_channels(self.config.channels)
-            
-            # Конвертируем в numpy массив
-            self._prerecorded_audio = np.array(audio_segment.get_array_of_samples(), dtype=np.int16)
-            self._prerecorded_loaded = True
-            # Обновляем последний подготовленный буфер
-            self._last_audio = self._prerecorded_audio
-            
-            duration_sec = len(self._prerecorded_audio) / self.config.sample_rate
-            logger.info(f"✅ [WELCOME_PLAYER] Предзаписанное аудио загружено: {len(self._prerecorded_audio)} сэмплов, {duration_sec:.1f}s")
-            
+            audio_data = await self.audio_generator.generate_local_fallback(self.config.text)
+            if audio_data is None:
+                return WelcomeResult(
+                    success=False,
+                    method="local_fallback",
+                    duration_sec=0.0,
+                    error="Не удалось получить локальное аудио"
+                )
+
+            sample_rate = self.config.sample_rate
+            channels = self.config.channels
+            duration_sec = len(audio_data) / float(sample_rate)
+
+            metadata = {
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "samples": len(audio_data),
+                "method": "local_fallback",
+                "duration_sec": duration_sec,
+            }
+
+            self._last_audio = audio_data
+            self._last_metadata = metadata
+
+            return WelcomeResult(
+                success=True,
+                method="local_fallback",
+                duration_sec=duration_sec,
+                metadata=metadata
+            )
+
         except Exception as e:
-            logger.error(f"❌ [WELCOME_PLAYER] Ошибка загрузки предзаписанного аудио: {e}")
-            self._prerecorded_loaded = True  # Помечаем как загруженное, чтобы не пытаться снова
+            return WelcomeResult(
+                success=False,
+                method="local_fallback",
+                duration_sec=0.0,
+                error=f"Ошибка локального fallback: {e}"
+            )
     
     def get_audio_data(self) -> Optional[np.ndarray]:
         """Получить аудио данные для воспроизведения"""
         return self._last_audio
+
+    def get_audio_metadata(self) -> Optional[Dict[str, Any]]:
+        """Получить метаданные последнего аудио"""
+        return self._last_metadata
     
     def is_ready(self) -> bool:
         """Проверить, готов ли плеер к воспроизведению"""
@@ -298,6 +245,5 @@ class WelcomePlayer:
     def reset(self):
         """Сбросить состояние плеера"""
         self.state = WelcomeState.IDLE
-        self._prerecorded_audio = None
-        self._prerecorded_loaded = False
         self._last_audio = None
+        self._last_metadata = None

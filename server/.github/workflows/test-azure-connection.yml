@@ -1,0 +1,35 @@
+name: Test Azure Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Test Azure Authentication
+      run: |
+        echo "🔐 Тестируем аутентификацию..."
+        az account show
+        
+        echo ""
+        echo "🔍 Тестируем доступ к VM..."
+        az vm show --resource-group Nexy --name nexy-regular --query "name" -o tsv
+        
+        echo ""
+        echo "🧪 Тестируем простую команду..."
+        az vm run-command invoke \
+          --resource-group Nexy \
+          --name nexy-regular \
+          --command-id RunShellScript \
+          --scripts "echo 'GitHub Actions test successful - $(date)'"
+        
+        echo ""
+        echo "✅ Все тесты пройдены успешно!"

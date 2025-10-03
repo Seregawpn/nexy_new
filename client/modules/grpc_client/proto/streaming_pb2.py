@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fstreaming.proto\x12\tstreaming\"\xde\x01\n\rStreamRequest\x12\x0e\n\x06prompt\x18\x01 \x01(\t\x12\x17\n\nscreenshot\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x0cscreen_width\x18\x03 \x01(\x05H\x01\x88\x01\x01\x12\x1a\n\rscreen_height\x18\x04 \x01(\x05H\x02\x88\x01\x01\x12\x13\n\x0bhardware_id\x18\x05 \x01(\t\x12\x17\n\nsession_id\x18\x06 \x01(\tH\x03\x88\x01\x01\x42\r\n\x0b_screenshotB\x0f\n\r_screen_widthB\x10\n\x0e_screen_heightB\r\n\x0b_session_id\"\x8f\x01\n\x0eStreamResponse\x12\x14\n\ntext_chunk\x18\x01 \x01(\tH\x00\x12,\n\x0b\x61udio_chunk\x18\x02 \x01(\x0b\x32\x15.streaming.AudioChunkH\x00\x12\x15\n\x0b\x65nd_message\x18\x03 \x01(\tH\x00\x12\x17\n\rerror_message\x18\x04 \x01(\tH\x00\x42\t\n\x07\x63ontent\">\n\nAudioChunk\x12\x12\n\naudio_data\x18\x01 \x01(\x0c\x12\r\n\x05\x64type\x18\x02 \x01(\t\x12\r\n\x05shape\x18\x03 \x03(\x05\"\'\n\x10InterruptRequest\x12\x13\n\x0bhardware_id\x18\x01 \x01(\t\"S\n\x11InterruptResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x1c\n\x14interrupted_sessions\x18\x02 \x03(\t\x12\x0f\n\x07message\x18\x03 \x01(\t2\xa7\x01\n\x10StreamingService\x12\x44\n\x0bStreamAudio\x12\x18.streaming.StreamRequest\x1a\x19.streaming.StreamResponse0\x01\x12M\n\x10InterruptSession\x12\x1b.streaming.InterruptRequest\x1a\x1c.streaming.InterruptResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fstreaming.proto\x12\tstreaming\"\xde\x01\n\rStreamRequest\x12\x0e\n\x06prompt\x18\x01 \x01(\t\x12\x17\n\nscreenshot\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x0cscreen_width\x18\x03 \x01(\x05H\x01\x88\x01\x01\x12\x1a\n\rscreen_height\x18\x04 \x01(\x05H\x02\x88\x01\x01\x12\x13\n\x0bhardware_id\x18\x05 \x01(\t\x12\x17\n\nsession_id\x18\x06 \x01(\tH\x03\x88\x01\x01\x42\r\n\x0b_screenshotB\x0f\n\r_screen_widthB\x10\n\x0e_screen_heightB\r\n\x0b_session_id\"\x8f\x01\n\x0eStreamResponse\x12\x14\n\ntext_chunk\x18\x01 \x01(\tH\x00\x12,\n\x0b\x61udio_chunk\x18\x02 \x01(\x0b\x32\x15.streaming.AudioChunkH\x00\x12\x15\n\x0b\x65nd_message\x18\x03 \x01(\tH\x00\x12\x17\n\rerror_message\x18\x04 \x01(\tH\x00\x42\t\n\x07\x63ontent\"\x88\x01\n\x0eWelcomeRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x17\n\nsession_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x12\n\x05voice\x18\x03 \x01(\tH\x01\x88\x01\x01\x12\x15\n\x08language\x18\x04 \x01(\tH\x02\x88\x01\x01\x42\r\n\x0b_session_idB\x08\n\x06_voiceB\x0b\n\t_language\"\xaa\x01\n\x0fWelcomeResponse\x12,\n\x0b\x61udio_chunk\x18\x01 \x01(\x0b\x32\x15.streaming.AudioChunkH\x00\x12.\n\x08metadata\x18\x02 \x01(\x0b\x32\x1a.streaming.WelcomeMetadataH\x00\x12\x15\n\x0b\x65nd_message\x18\x03 \x01(\tH\x00\x12\x17\n\rerror_message\x18\x04 \x01(\tH\x00\x42\t\n\x07\x63ontent\"^\n\x0fWelcomeMetadata\x12\x0e\n\x06method\x18\x01 \x01(\t\x12\x14\n\x0c\x64uration_sec\x18\x02 \x01(\x01\x12\x13\n\x0bsample_rate\x18\x03 \x01(\x05\x12\x10\n\x08\x63hannels\x18\x04 \x01(\x05\">\n\nAudioChunk\x12\x12\n\naudio_data\x18\x01 \x01(\x0c\x12\r\n\x05\x64type\x18\x02 \x01(\t\x12\r\n\x05shape\x18\x03 \x03(\x05\"\'\n\x10InterruptRequest\x12\x13\n\x0bhardware_id\x18\x01 \x01(\t\"S\n\x11InterruptResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x1c\n\x14interrupted_sessions\x18\x02 \x03(\t\x12\x0f\n\x07message\x18\x03 \x01(\t2\xf8\x01\n\x10StreamingService\x12\x44\n\x0bStreamAudio\x12\x18.streaming.StreamRequest\x1a\x19.streaming.StreamResponse0\x01\x12O\n\x14GenerateWelcomeAudio\x12\x19.streaming.WelcomeRequest\x1a\x1a.streaming.WelcomeResponse0\x01\x12M\n\x10InterruptSession\x12\x1b.streaming.InterruptRequest\x1a\x1c.streaming.InterruptResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,12 +35,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_STREAMREQUEST']._serialized_end=253
   _globals['_STREAMRESPONSE']._serialized_start=256
   _globals['_STREAMRESPONSE']._serialized_end=399
-  _globals['_AUDIOCHUNK']._serialized_start=401
-  _globals['_AUDIOCHUNK']._serialized_end=463
-  _globals['_INTERRUPTREQUEST']._serialized_start=465
-  _globals['_INTERRUPTREQUEST']._serialized_end=504
-  _globals['_INTERRUPTRESPONSE']._serialized_start=506
-  _globals['_INTERRUPTRESPONSE']._serialized_end=589
-  _globals['_STREAMINGSERVICE']._serialized_start=592
-  _globals['_STREAMINGSERVICE']._serialized_end=759
+  _globals['_WELCOMEREQUEST']._serialized_start=402
+  _globals['_WELCOMEREQUEST']._serialized_end=538
+  _globals['_WELCOMERESPONSE']._serialized_start=541
+  _globals['_WELCOMERESPONSE']._serialized_end=711
+  _globals['_WELCOMEMETADATA']._serialized_start=713
+  _globals['_WELCOMEMETADATA']._serialized_end=807
+  _globals['_AUDIOCHUNK']._serialized_start=809
+  _globals['_AUDIOCHUNK']._serialized_end=871
+  _globals['_INTERRUPTREQUEST']._serialized_start=873
+  _globals['_INTERRUPTREQUEST']._serialized_end=912
+  _globals['_INTERRUPTRESPONSE']._serialized_start=914
+  _globals['_INTERRUPTRESPONSE']._serialized_end=997
+  _globals['_STREAMINGSERVICE']._serialized_start=1000
+  _globals['_STREAMINGSERVICE']._serialized_end=1248
 # @@protoc_insertion_point(module_scope)

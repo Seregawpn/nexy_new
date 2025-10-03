@@ -121,7 +121,7 @@ integrations:
   grpc_client:
     enabled: true
     priority: 9
-    server: production  # local|production|fallback - ЕДИНСТВЕННОЕ МЕСТО для изменения сервера
+    server: local  # local|production|fallback - ЕДИНСТВЕННОЕ МЕСТО для изменения сервера
     aggregate_timeout_sec: 1.5
     request_timeout_sec: 30.0
     max_retries: 3
@@ -294,6 +294,8 @@ welcome_message:
   text: "Hi! Nexy is here. How can I help you?"
   audio_file: "assets/audio/welcome_en.mp3"
   fallback_to_tts: true
+  use_server: true
+  server_timeout_sec: 20
   delay_sec: 0.3
   volume: 0.8
   voice: "en-US-JennyNeural"

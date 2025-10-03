@@ -7,6 +7,9 @@ service StreamingService {
   // Стриминг аудио и текста в ответ на промпт
   rpc StreamAudio(StreamRequest) returns (stream StreamResponse);
   
+  // Генерация приветственного аудио на сервере
+  rpc GenerateWelcomeAudio(WelcomeRequest) returns (stream WelcomeResponse);
+  
   // ПРИНУДИТЕЛЬНОЕ прерывание активной сессии на сервере
   rpc InterruptSession(InterruptRequest) returns (InterruptResponse);
 }
@@ -29,6 +32,32 @@ message StreamResponse {
     string end_message = 3;    // Сообщение о завершении
     string error_message = 4;  // Сообщение об ошибке
   }
+}
+
+// Запрос на генерацию приветственного аудио
+message WelcomeRequest {
+  string text = 1;             // Текст приветствия
+  optional string session_id = 2; // Идентификатор сессии (опционально)
+  optional string voice = 3;      // Пользовательский голос (опционально)
+  optional string language = 4;   // Язык/локаль приветствия
+}
+
+// Ответ генерации приветствия
+message WelcomeResponse {
+  oneof content {
+    AudioChunk audio_chunk = 1;      // Аудио данные чанком
+    WelcomeMetadata metadata = 2;    // Метаданные о сессии генерации
+    string end_message = 3;          // Сообщение о завершении стрима
+    string error_message = 4;        // Сообщение об ошибке
+  }
+}
+
+// Метаданные приветствия
+message WelcomeMetadata {
+  string method = 1;          // Метод генерации (например, "server")
+  double duration_sec = 2;    // Оценочная длительность воспроизведения
+  int32 sample_rate = 3;      // Частота дискретизации
+  int32 channels = 4;         // Количество каналов
 }
 
 // Аудио чанк

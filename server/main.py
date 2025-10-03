@@ -11,9 +11,10 @@ load_dotenv('config.env')
 
 # Импорт системы обновлений
 try:
-    from update_server import start_update_server, stop_update_server  # type: ignore[reportMissingImports]
+    from modules.update.core.update_manager import UpdateManager
+    from modules.update.config import UpdateConfig
     UPDATE_SERVER_AVAILABLE = True
-    print("✅ Update Server импортирован успешно")
+    print("✅ Update Server модуль найден")
 except ImportError as e:
     print(f"⚠️ Update Server не найден: {e}")
     UPDATE_SERVER_AVAILABLE = False
@@ -67,13 +68,21 @@ async def main():
     logger.info("   - Root: http://localhost:8080/")
     
     # Запускаем сервер обновлений на порту 8081
+    update_manager = None
     if UPDATE_SERVER_AVAILABLE:
         logger.info("🔄 Запуск сервера обновлений на порту 8081...")
-        await start_update_server()
-        logger.info("✅ Сервер обновлений запущен")
-        logger.info("   - AppCast: http://localhost:8081/appcast.xml")
-        logger.info("   - Downloads: http://localhost:8081/downloads/")
-        logger.info("   - Health: http://localhost:8081/health")
+        try:
+            config = UpdateConfig()
+            update_manager = UpdateManager(config)
+            await update_manager.initialize()
+            await update_manager.start()
+            logger.info("✅ Сервер обновлений запущен")
+            logger.info("   - AppCast: http://localhost:8081/appcast.xml")
+            logger.info("   - Downloads: http://localhost:8081/downloads/")
+            logger.info("   - Health: http://localhost:8081/health")
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска сервера обновлений: {e}")
+            update_manager = None
     else:
         logger.warning("⚠️ Сервер обновлений недоступен")
     
@@ -86,10 +95,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Получен сигнал остановки, завершаю работу...")
-        if UPDATE_SERVER_AVAILABLE:
-            asyncio.run(stop_update_server())
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
-        if UPDATE_SERVER_AVAILABLE:
-            asyncio.run(stop_update_server())
         raise

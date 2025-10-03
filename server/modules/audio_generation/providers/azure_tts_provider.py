@@ -128,11 +128,14 @@ class AzureTTSProvider(UniversalProviderInterface):
             
             # Используем простой текст вместо SSML для избежания ошибок парсинга
             # result = self.synthesizer.speak_ssml_async(ssml).get()
+            logger.info(f"🔍 AzureTTS: synthesizing text='{input_data[:50]}...'")
             result = self.synthesizer.speak_text_async(input_data).get()
+            logger.info(f"🔍 AzureTTS: result.reason={result.reason}")
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 # Получаем аудио данные
                 audio_data = result.audio_data
+                logger.info(f"🔍 AzureTTS: audio_data type={type(audio_data)}, len={len(audio_data) if audio_data else 0}")
                 
                 if audio_data:
                     total_bytes = len(audio_data)
@@ -146,6 +149,7 @@ class AzureTTSProvider(UniversalProviderInterface):
                         total_bytes,
                     )
                 else:
+                    logger.error("❌ AzureTTS: audio_data is empty")
                     raise Exception("No audio data generated")
                     
             elif result.reason == speechsdk.ResultReason.Canceled:

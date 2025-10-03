@@ -4,10 +4,13 @@
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any, AsyncGenerator, Tuple
+from typing import Optional, Dict, Any, AsyncGenerator, Tuple, List
 import importlib
 import sys
 from pathlib import Path
+from datetime import datetime
+
+import numpy as np
 
 from .types import ServerConfig, RetryConfig, HealthCheckConfig, RetryStrategy
 from .retry_manager import RetryManager
@@ -63,7 +66,8 @@ class GrpcClient:
             'max_retry_attempts': 3,
             'retry_strategy': 'exponential',
             'circuit_breaker_threshold': 5,
-            'circuit_breaker_timeout': 60
+            'circuit_breaker_timeout': 60,
+            'welcome_timeout_sec': 30.0
         }
     
     def _initialize_servers(self):
@@ -114,7 +118,7 @@ class GrpcClient:
     async def execute_with_retry(self, operation, *args, **kwargs):
         """Выполняет операцию с retry механизмом"""
         return await self.retry_manager.execute_with_retry(operation, *args, **kwargs)
-    
+
     def get_connection_state(self):
         """Возвращает текущее состояние соединения"""
         return self.connection_manager.get_connection_state()
@@ -172,7 +176,108 @@ class GrpcClient:
         except Exception as e:
             logger.error(f"❌ Ошибка стриминга аудио: {e}")
             raise
-    
+
+    async def generate_welcome_audio(
+        self,
+        text: str,
+        *,
+        voice: Optional[str] = None,
+        language: Optional[str] = None,
+        session_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+        server_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Запрашивает серверную генерацию приветственного аудио.
+
+        Returns dict c numpy массивом аудио и метаданными.
+        """
+        if not text or not text.strip():
+            raise ValueError("Welcome text must be non-empty")
+
+        target_server = server_name or self.connection_manager.current_server
+
+        if not self.is_connected():
+            await self.connect(target_server)
+        elif server_name and self.connection_manager.current_server != server_name:
+            await self.connection_manager.switch_server(server_name)
+
+        streaming_pb2, streaming_pb2_grpc = self._import_proto_modules()
+
+        request = streaming_pb2.WelcomeRequest(
+            text=text,
+            session_id=session_id or f"welcome_{datetime.now().timestamp()}",
+        )
+
+        if voice:
+            request.voice = voice
+        if language:
+            request.language = language
+
+        stub = streaming_pb2_grpc.StreamingServiceStub(self.connection_manager.channel)
+        rpc_timeout = timeout or self.config.get('welcome_timeout_sec', 30.0)
+
+        audio_chunks: List[bytes] = []
+        metadata: Dict[str, Any] = {}
+        chunk_dtype: Optional[str] = None
+
+        try:
+            async for response in stub.GenerateWelcomeAudio(request, timeout=rpc_timeout):
+                content = response.WhichOneof('content')
+                if content == 'audio_chunk':
+                    chunk = response.audio_chunk
+                    if chunk.audio_data:
+                        audio_bytes = bytes(chunk.audio_data)
+                        if audio_bytes:
+                            audio_chunks.append(audio_bytes)
+                            chunk_dtype = chunk.dtype or chunk_dtype
+                elif content == 'metadata':
+                    metadata = {
+                        'method': response.metadata.method,
+                        'duration_sec': response.metadata.duration_sec,
+                        'sample_rate': response.metadata.sample_rate,
+                        'channels': response.metadata.channels,
+                    }
+                elif content == 'error_message':
+                    raise RuntimeError(response.error_message)
+                elif content == 'end_message':
+                    break
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации приветственного аудио: {e}")
+            raise
+
+        if not audio_chunks:
+            raise RuntimeError("Server returned no audio data")
+
+        raw_bytes = b''.join(audio_chunks)
+        dtype = (chunk_dtype or 'int16').lower()
+
+        if dtype not in ('int16', 'pcm_s16le', 'short'):
+            logger.warning(f"⚠️ Неподдерживаемый dtype '{dtype}', привожу к int16")
+            dtype = 'int16'
+
+        np_dtype = np.int16
+        audio_array = np.frombuffer(raw_bytes, dtype=np_dtype)
+
+        if metadata.get('channels', 1) > 1:
+            try:
+                audio_array = audio_array.reshape(-1, metadata['channels'])
+            except Exception:
+                logger.warning("⚠️ Не удалось изменить форму аудио по каналам, оставляю одномерный массив")
+
+        result = {
+            'audio': audio_array,
+            'metadata': {
+                'method': metadata.get('method', 'server'),
+                'duration_sec': metadata.get('duration_sec'),
+                'sample_rate': metadata.get('sample_rate', 48000),
+                'channels': metadata.get('channels', 1),
+                'dtype': 'int16',
+            }
+        }
+
+        return result
+
     async def cleanup(self):
         """Очистка ресурсов"""
         try:

@@ -212,7 +212,124 @@ class NewStreamingServicer(streaming_pb2_grpc.StreamingServiceServicer):
             # Записываем метрику запроса
             response_time = time.time() - start_time
             record_request(response_time, is_error=False)
-    
+
+    async def GenerateWelcomeAudio(self, request: streaming_pb2.WelcomeRequest, context) -> AsyncGenerator[streaming_pb2.WelcomeResponse, None]:
+        """Генерация приветственного аудио через AudioProcessor"""
+        start_time = time.time()
+        session_id = request.session_id or f"welcome_{datetime.now().timestamp()}"
+        text = (request.text or "").strip()
+
+        if not text:
+            logger.error("❌ GenerateWelcomeAudio: пустой текст приветствия")
+            record_request(0.0, is_error=True)
+            yield streaming_pb2.WelcomeResponse(error_message="Empty welcome text")
+            return
+
+        logger.info(
+            "📨 GenerateWelcomeAudio: session=%s, text_len=%s, voice=%s, language=%s",
+            session_id,
+            len(text),
+            request.voice or "default",
+            request.language or "default",
+        )
+
+        try:
+            if not self.is_initialized:
+                init_ok = await self.initialize()
+                if not init_ok:
+                    logger.error("❌ GenerateWelcomeAudio: failed to initialize server modules")
+                    record_request(time.time() - start_time, is_error=True)
+                    yield streaming_pb2.WelcomeResponse(error_message="Server is not initialized")
+                    return
+
+            audio_processor = self.grpc_service_manager.modules.get('audio_generation') if self.grpc_service_manager else None
+            if not audio_processor:
+                logger.error("❌ GenerateWelcomeAudio: audio_generation module not available")
+                record_request(time.time() - start_time, is_error=True)
+                yield streaming_pb2.WelcomeResponse(error_message="Audio processor unavailable")
+                return
+
+            if not getattr(audio_processor, 'is_initialized', False):
+                logger.info("🔄 GenerateWelcomeAudio: initializing audio processor on demand")
+                if hasattr(audio_processor, 'initialize'):
+                    init_ok = await audio_processor.initialize()
+                    if not init_ok:
+                        record_request(time.time() - start_time, is_error=True)
+                        yield streaming_pb2.WelcomeResponse(error_message="Failed to initialize audio processor")
+                        return
+
+            audio_info = {}
+            if hasattr(audio_processor, 'get_audio_info'):
+                try:
+                    audio_info = audio_processor.get_audio_info() or {}
+                except Exception as info_err:
+                    logger.warning(f"⚠️ GenerateWelcomeAudio: failed to get audio info: {info_err}")
+
+            sample_rate = int(audio_info.get('sample_rate') or 48000)
+            channels = int(audio_info.get('channels') or 1)
+            dtype = 'int16'
+            bytes_per_sample = max(1, int(audio_info.get('bits_per_sample') or 16) // 8)
+            bytes_per_frame = bytes_per_sample * max(1, channels)
+
+            total_bytes = 0
+
+            # Генерируем аудио чанки
+            logger.info("🎵 GenerateWelcomeAudio: start streaming TTS")
+            generator = None
+            if hasattr(audio_processor, 'generate_speech_streaming'):
+                logger.info("🔍 GenerateWelcomeAudio: using generate_speech_streaming")
+                generator = audio_processor.generate_speech_streaming(text)
+            elif hasattr(audio_processor, 'generate_speech'):
+                logger.info("🔍 GenerateWelcomeAudio: using generate_speech")
+                generator = audio_processor.generate_speech(text)
+
+            if generator is None:
+                logger.error("❌ GenerateWelcomeAudio: audio processor does not provide streaming interface")
+                yield streaming_pb2.WelcomeResponse(error_message="Audio processor streaming not available")
+                return
+            
+            logger.info(f"🔍 GenerateWelcomeAudio: generator created, type={type(generator)}")
+
+            async for chunk in generator:
+                logger.info(f"🔍 GenerateWelcomeAudio: received chunk type={type(chunk)}, len={len(chunk) if chunk else 0}")
+                if not chunk:
+                    logger.warning("⚠️ GenerateWelcomeAudio: empty chunk received, skipping")
+                    continue
+                chunk_bytes = bytes(chunk)
+                logger.info(f"🔍 GenerateWelcomeAudio: chunk_bytes len={len(chunk_bytes)}")
+                total_bytes += len(chunk_bytes)
+                yield streaming_pb2.WelcomeResponse(
+                    audio_chunk=streaming_pb2.AudioChunk(
+                        audio_data=chunk_bytes,
+                        dtype=dtype,
+                        shape=[],
+                    )
+                )
+
+            duration_sec = 0.0
+            if total_bytes and bytes_per_frame:
+                duration_sec = total_bytes / (bytes_per_frame * float(sample_rate))
+
+            metadata = streaming_pb2.WelcomeMetadata(
+                method="server",
+                duration_sec=duration_sec,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+            yield streaming_pb2.WelcomeResponse(metadata=metadata)
+            yield streaming_pb2.WelcomeResponse(end_message="Welcome audio generation completed")
+
+            response_time = time.time() - start_time
+            record_request(response_time, is_error=False)
+
+        except Exception as e:
+            logger.error(f"❌ GenerateWelcomeAudio: ошибка генерации приветствия: {e}")
+            import traceback
+            traceback.print_exc()
+            record_request(time.time() - start_time, is_error=True)
+            yield streaming_pb2.WelcomeResponse(error_message=f"Failed to generate welcome audio: {e}")
+
+
     async def InterruptSession(self, request: streaming_pb2.InterruptRequest, context) -> streaming_pb2.InterruptResponse:
         """Обработка InterruptRequest через Interrupt Manager"""
         hardware_id = request.hardware_id or "unknown"
