@@ -41,7 +41,8 @@ class WelcomeConfigLoader:
                 channels=int(welcome_config.get('channels', 1)),
                 bit_depth=int(welcome_config.get('bit_depth', 16)),
                 use_server=welcome_config.get('use_server', True),
-                server_timeout_sec=float(welcome_config.get('server_timeout_sec', 30.0))
+                server_timeout_sec=float(welcome_config.get('server_timeout_sec', 30.0)),
+                ignore_microphone_permission=welcome_config.get('ignore_microphone_permission', False)
             )
             
             logger.info(f"✅ [WELCOME_CONFIG] Конфигурация загружена: enabled={config.enabled}, text='{config.text[:30]}...'")

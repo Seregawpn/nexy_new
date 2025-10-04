@@ -51,8 +51,8 @@ class UpdateHTTPClient:
             ValueError: Если URL не HTTPS
             RuntimeError: Если HTTP статус не 200
         """
-        if not url.startswith('https://') and not url.startswith('http://localhost'):
-            raise ValueError("URL должен использовать HTTPS для безопасности (кроме localhost для тестирования)")
+        if not url.startswith('https://') and not url.startswith('http://localhost') and not url.startswith('http://20.151.51.172'):
+            raise ValueError("URL должен использовать HTTPS для безопасности (кроме localhost и Azure VM для тестирования)")
         
         logger.info(f"Запрос манифеста: {url}")
         
@@ -72,9 +72,14 @@ class UpdateHTTPClient:
         except urllib3.exceptions.HTTPError as e:
             logger.error(f"Ошибка HTTP запроса: {e}")
             raise RuntimeError(f"Ошибка HTTP запроса: {e}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON: {e}")
-            raise RuntimeError(f"Неверный формат JSON: {e}")
+        except Exception as e:
+            # Проверяем, является ли это ошибкой JSON
+            if "json" in str(type(e)).lower() or "decode" in str(e).lower():
+                logger.error(f"Ошибка парсинга JSON: {e}")
+                raise RuntimeError(f"Неверный формат JSON: {e}")
+            else:
+                logger.error(f"Неожиданная ошибка: {e}")
+                raise RuntimeError(f"Ошибка получения манифеста: {e}")
     
     def download_file(self, url: str, dest_path: str, expected_size: Optional[int] = None):
         """
@@ -89,8 +94,8 @@ class UpdateHTTPClient:
             ValueError: Если URL не HTTPS
             RuntimeError: Если размер файла не совпадает
         """
-        if not url.startswith('https://') and not url.startswith('http://localhost'):
-            raise ValueError("URL должен использовать HTTPS для безопасности (кроме localhost для тестирования)")
+        if not url.startswith('https://') and not url.startswith('http://localhost') and not url.startswith('http://20.151.51.172'):
+            raise ValueError("URL должен использовать HTTPS для безопасности (кроме localhost и Azure VM для тестирования)")
         
         logger.info(f"Скачивание файла: {url} -> {dest_path}")
         

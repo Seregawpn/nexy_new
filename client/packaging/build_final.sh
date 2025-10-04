@@ -26,7 +26,7 @@ VERSION="1.0.0"
 # Пути
 CLIENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$CLIENT_DIR/dist"
-CLEAN_APP="/tmp/${APP_NAME}CleanFinal.app"
+CLEAN_APP="/tmp/${APP_NAME}.app"
 
 echo -e "${BLUE}🚀 Начинаем финальную упаковку Nexy AI Assistant${NC}"
 echo "Рабочая директория: $CLIENT_DIR"

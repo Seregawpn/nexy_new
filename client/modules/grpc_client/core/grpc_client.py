@@ -38,37 +38,68 @@ class GrpcClient:
         # Инициализация
         self._initialize_servers()
         self._setup_callbacks()
+        
+        # Устанавливаем сервер по умолчанию из конфигурации
+        self._set_default_server()
     
     def _create_default_config(self) -> Dict[str, Any]:
-        """Создает конфигурацию по умолчанию"""
-        return {
-            'servers': {
-                'local': {
-                    'address': '127.0.0.1',
-                    'port': 50051,
-                    'use_ssl': False,
-                    'timeout': 30,
-                    'retry_attempts': 3,
-                    'retry_delay': 1.0
-                },
-                'production': {
-                    'address': '20.151.51.172',
-                    'port': 50051,
-                    'use_ssl': False,
-                    'timeout': 120,
-                    'retry_attempts': 5,
-                    'retry_delay': 2.0
+        """Создает конфигурацию по умолчанию из централизованной системы"""
+        try:
+            # Загружаем конфигурацию из unified_config.yaml
+            import yaml
+            with open('config/unified_config.yaml', 'r') as f:
+                config = yaml.safe_load(f)
+            
+            grpc_data = config.get('grpc', {})
+            servers_config = grpc_data.get('servers', {})
+            
+            # Преобразуем конфигурацию в формат, ожидаемый GrpcClient
+            servers = {}
+            for server_name, server_config in servers_config.items():
+                servers[server_name] = {
+                    'address': server_config.get('host', '127.0.0.1'),
+                    'port': server_config.get('port', 50051),
+                    'use_ssl': server_config.get('ssl', False),
+                    'timeout': server_config.get('timeout', grpc_data.get('connection_timeout', 30)),
+                    'retry_attempts': server_config.get('retry_attempts', grpc_data.get('retry_attempts', 3)),
+                    'retry_delay': server_config.get('retry_delay', grpc_data.get('retry_delay', 1.0))
                 }
-            },
-            'auto_fallback': True,
-            'health_check_interval': 30,
-            'connection_timeout': 10,
-            'max_retry_attempts': 3,
-            'retry_strategy': 'exponential',
-            'circuit_breaker_threshold': 5,
-            'circuit_breaker_timeout': 60,
-            'welcome_timeout_sec': 30.0
-        }
+            
+            return {
+                'servers': servers,
+                'auto_fallback': True,
+                'health_check_interval': 30,
+                'connection_timeout': grpc_data.get('connection_timeout', 10),
+                'max_retry_attempts': grpc_data.get('retry_attempts', 3),
+                'retry_strategy': 'exponential',
+                'circuit_breaker_threshold': 5,
+                'circuit_breaker_timeout': 60,
+                'welcome_timeout_sec': 30.0
+            }
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось загрузить централизованную конфигурацию: {e}")
+            # Fallback к минимальной конфигурации
+            return {
+                'servers': {
+                    'local': {
+                        'address': '127.0.0.1',
+                        'port': 50051,
+                        'use_ssl': False,
+                        'timeout': 30,
+                        'retry_attempts': 3,
+                        'retry_delay': 1.0
+                    }
+                },
+                'auto_fallback': True,
+                'health_check_interval': 30,
+                'connection_timeout': 10,
+                'max_retry_attempts': 3,
+                'retry_strategy': 'exponential',
+                'circuit_breaker_threshold': 5,
+                'circuit_breaker_timeout': 60,
+                'welcome_timeout_sec': 30.0
+            }
     
     def _initialize_servers(self):
         """Инициализирует конфигурации серверов"""
@@ -94,6 +125,32 @@ class GrpcClient:
         """Настраивает callback'и"""
         self.connection_manager.set_connection_callback(self._on_connection_changed)
         self.connection_manager.set_error_callback(self._on_error)
+    
+    def _set_default_server(self):
+        """Устанавливает сервер по умолчанию из конфигурации"""
+        try:
+            # Пытаемся получить сервер из unified_config.yaml
+            import yaml
+            with open('config/unified_config.yaml', 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Получаем настройки gRPC клиента из секции integrations
+            integrations = config.get('integrations', {})
+            grpc_config = integrations.get('grpc_client', {})
+            default_server = grpc_config.get('server', 'local')
+            
+            # Устанавливаем сервер по умолчанию
+            if default_server in self.connection_manager.servers:
+                self.connection_manager.current_server = default_server
+                logger.info(f"🌐 Установлен сервер по умолчанию: {default_server}")
+            else:
+                logger.warning(f"⚠️ Сервер '{default_server}' не найден, используем 'local'")
+                self.connection_manager.current_server = 'local'
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось загрузить конфигурацию gRPC: {e}")
+            # Используем local по умолчанию
+            self.connection_manager.current_server = 'local'
     
     def _on_connection_changed(self, state):
         """Обрабатывает изменения состояния соединения"""

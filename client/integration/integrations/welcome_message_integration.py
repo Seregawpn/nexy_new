@@ -69,6 +69,9 @@ class WelcomeMessageIntegration:
         self._permission_prompted = False
         self._permission_recheck_task: Optional[asyncio.Task] = None
         self._enforce_permissions = self._detect_packaged_environment()
+        if getattr(self.config, "ignore_microphone_permission", False) and self._enforce_permissions:
+            logger.info("🎙️ [WELCOME_INTEGRATION] Игнорируем статус разрешения микрофона для приветствия")
+            self._enforce_permissions = False
     
     async def initialize(self) -> bool:
         """Инициализация интеграции"""
@@ -130,14 +133,11 @@ class WelcomeMessageIntegration:
                 await self._play_welcome_message(trigger="app_startup")
                 return
 
-            await self._ensure_permission_status()
-
-            if self._is_microphone_granted():
-                await self._play_welcome_message(trigger="app_startup")
-            else:
-                logger.info("🎙️ [WELCOME_INTEGRATION] Приветствие отложено: требуется разрешение микрофона")
-                self._pending_welcome = True
-                await self._prompt_microphone_permission()
+            # БЛОКИРУЕМ приложение до получения разрешения микрофона
+            await self._wait_for_microphone_permission()
+            
+            # Только после получения разрешения продолжаем
+            await self._play_welcome_message(trigger="app_startup")
             
         except Exception as e:
             await self._handle_error(e, where="welcome.on_app_startup", severity="warning")
@@ -431,6 +431,37 @@ class WelcomeMessageIntegration:
         except Exception as e:
             logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка запроса проверки разрешений: {e}")
 
+    async def _wait_for_microphone_permission(self):
+        """Блокируем приложение до получения разрешения микрофона"""
+        max_attempts = 60  # 5 минут максимум (60 * 5 секунд)
+        attempt = 0
+        
+        logger.info("🔒 [WELCOME_INTEGRATION] Блокируем приложение до получения разрешения микрофона")
+        
+        while attempt < max_attempts:
+            await self._ensure_permission_status()
+            
+            if self._is_microphone_granted():
+                logger.info("✅ [WELCOME_INTEGRATION] Разрешение микрофона получено, продолжаем запуск")
+                return
+            
+            # Показываем инструкции пользователю только в первый раз
+            if attempt == 0:
+                await self._show_permission_instructions()
+            
+            # Ждем 5 секунд перед следующей проверкой
+            await asyncio.sleep(5.0)
+            attempt += 1
+            
+            # Показываем прогресс каждые 30 секунд
+            if attempt % 6 == 0:  # 6 * 5 секунд = 30 секунд
+                remaining_minutes = (max_attempts - attempt) // 12  # 12 * 5 секунд = 1 минута
+                logger.info(f"⏳ [WELCOME_INTEGRATION] Ожидание разрешения микрофона... осталось ~{remaining_minutes} мин")
+        
+        # Если не получили разрешение за 5 минут - продолжаем без него
+        logger.warning("⚠️ [WELCOME_INTEGRATION] Разрешение микрофона не получено за 5 минут, продолжаем без него")
+        await self._show_timeout_message()
+
     async def _request_initial_permission_status(self):
         """Фоновый запрос статуса разрешений после инициализации"""
         if not self._enforce_permissions:
@@ -474,6 +505,47 @@ class WelcomeMessageIntegration:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._permission_recheck_task
         self._permission_recheck_task = None
+
+    async def _show_permission_instructions(self):
+        """Показывает инструкции пользователю для получения разрешения микрофона"""
+        try:
+            logger.warning(
+                "🎙️ [WELCOME_INTEGRATION] ТРЕБУЕТСЯ РАЗРЕШЕНИЕ НА МИКРОФОН!\n"
+                "📱 Откройте 'Системные настройки → Конфиденциальность и безопасность → Микрофон'\n"
+                "🔧 Найдите 'Nexy' в списке и включите переключатель\n"
+                "⏳ Приложение будет ждать до 5 минут..."
+            )
+            
+            # Публикуем событие для показа уведомления в UI
+            await self.event_bus.publish("permissions.request_required", {
+                "source": "welcome_message",
+                "permissions": ["microphone"],
+                "blocking": True,
+                "message": "Требуется разрешение на микрофон для работы Nexy"
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка показа инструкций: {e}")
+
+    async def _show_timeout_message(self):
+        """Показывает сообщение о таймауте ожидания разрешения"""
+        try:
+            logger.warning(
+                "⏰ [WELCOME_INTEGRATION] ТАЙМАУТ ОЖИДАНИЯ РАЗРЕШЕНИЯ!\n"
+                "⚠️ Разрешение микрофона не получено за 5 минут\n"
+                "🚀 Продолжаем запуск приложения без микрофона\n"
+                "💡 Вы можете дать разрешение позже в настройках системы"
+            )
+            
+            # Публикуем событие о таймауте
+            await self.event_bus.publish("permissions.timeout", {
+                "source": "welcome_message",
+                "permissions": ["microphone"],
+                "message": "Таймаут ожидания разрешения микрофона"
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ [WELCOME_INTEGRATION] Ошибка показа сообщения о таймауте: {e}")
 
     @staticmethod
     def _detect_packaged_environment() -> bool:

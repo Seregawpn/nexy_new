@@ -1,17 +1,11 @@
 """
 Конфигурация gRPC клиента
+
+ВНИМАНИЕ: Конфигурация теперь централизована в unified_config.yaml
+Все настройки серверов управляются через config/server_manager.py
 """
 
-from .grpc_config import (
-    create_default_config,
-    create_local_config,
-    create_production_config,
-    create_test_config
-)
+# Конфигурация централизована в unified_config.yaml
+# Используйте config/server_manager.py для управления серверами
 
-__all__ = [
-    "create_default_config",
-    "create_local_config", 
-    "create_production_config",
-    "create_test_config"
-]
+__all__ = []

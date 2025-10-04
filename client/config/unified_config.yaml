@@ -1,21 +1,3 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# NEXY AI ASSISTANT - UNIFIED CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# ⚠️  ВАЖНО: Это ЕДИНСТВЕННЫЙ источник конфигурации для всего приложения!
-#
-# Все настройки приложения управляются из этого файла:
-# - Серверные подключения (gRPC)
-# - Аудио настройки
-# - Интеграции и модули
-# - Режимы работы
-# - Приоритеты и таймауты
-#
-# Для изменения любых настроек редактируйте только этот файл.
-# Изменения применятся при перезапуске приложения.
-#
-# ═══════════════════════════════════════════════════════════════════════════════
-
 accessibility:
   error_sound: true
   sound_notifications: true
@@ -24,18 +6,17 @@ accessibility:
   voice_feedback: true
   voiceover_control:
     enabled: true
-    mode: stop  # Используем Command+F5 для полного переключения VoiceOver
+    mode: stop
     duck_modes:
-      - listening
-      - processing
+    - listening
+    - processing
     release_modes:
-      - sleeping
+    - sleeping
     debounce_seconds: 0.25
     stop_repeats: 2
     stop_repeat_delay: 0.05
     use_apple_script_fallback: true
     engage_on_keyboard_events: true
-    # Настройки детального логирования для диагностики
     debug_logging: false
     log_osascript_commands: false
     log_voiceover_state: false
@@ -108,9 +89,32 @@ grpc:
   max_send_message_length: 4194304
   retry_attempts: 3
   retry_delay: 1.0
-  server_host: 127.0.0.1
-  server_port: 50051
   use_tls: false
+  servers:
+    local:
+      host: 127.0.0.1
+      port: 50051
+      ssl: false
+      timeout: 30
+      retry_attempts: 3
+      retry_delay: 1.0
+      description: Локальный сервер для разработки
+    production:
+      host: 20.151.51.172
+      port: 50051
+      ssl: false
+      timeout: 120
+      retry_attempts: 5
+      retry_delay: 2.0
+      description: Production сервер на Azure
+    fallback:
+      host: 127.0.0.1
+      port: 50052
+      ssl: false
+      timeout: 30
+      retry_attempts: 3
+      retry_delay: 1.0
+      description: Резервный сервер
 integrations:
   audio_device:
     enabled: true
@@ -121,7 +125,7 @@ integrations:
   grpc_client:
     enabled: true
     priority: 9
-    server: production  # local|production|fallback - ЕДИНСТВЕННОЕ МЕСТО для изменения сервера
+    server: production
     aggregate_timeout_sec: 1.5
     request_timeout_sec: 30.0
     max_retries: 3
@@ -164,11 +168,11 @@ integrations:
     retry_delay: 5.0
     show_instructions: false
     required_permissions:
-      - microphone
-      - screen_capture
-      - network
-      - accessibility
-      - input_monitoring
+    - microphone
+    - screen_capture
+    - network
+    - accessibility
+    - input_monitoring
   screenshot_capture:
     enabled: true
     priority: 7
@@ -187,11 +191,14 @@ integrations:
   voice_recognition:
     enabled: true
     priority: 4
-    simulate: false  # Отключаем симуляцию - пытаемся использовать реальный микрофон
+    simulate: false
     timeout_sec: 10.0
     simulate_success_rate: 0.7
     simulate_min_delay_sec: 1.0
     simulate_max_delay_sec: 3.0
+  welcome_message:
+    enabled: true
+    priority: 14
 logging:
   console_level: ERROR
   file_level: WARNING
@@ -201,43 +208,44 @@ logging:
   max_files: 5
   rotation: true
 network:
-  # Настройки сети используют конфигурацию из секции grpc
-  # чтобы избежать дублирования
+  connection_check_interval: 30
+  auto_fallback: true
+  ping_timeout: 5
+  ping_hosts:
+  - 8.8.8.8
+  - 1.1.1.1
 permissions:
-  # Основные разрешения
   microphone:
     enabled: true
     required: true
-    description: "Nexy использует микрофон для распознавания речи и голосового управления."
+    description: Nexy использует микрофон для распознавания речи и голосового управления.
   screen_capture:
     enabled: true
     required: true
-    description: "Nexy захватывает содержимое экрана для анализа и помощи пользователю."
+    description: Nexy захватывает содержимое экрана для анализа и помощи пользователю.
   camera:
     enabled: false
     required: false
-    description: "Nexy может использовать камеру для анализа окружения."
+    description: Nexy может использовать камеру для анализа окружения.
   network:
     enabled: true
     required: true
-    description: "Nexy использует сеть для связи с сервером и обновлений."
+    description: Nexy использует сеть для связи с сервером и обновлений.
   notifications:
     enabled: true
     required: true
-    description: "Nexy отправляет уведомления о статусе работы и важных событиях."
+    description: Nexy отправляет уведомления о статусе работы и важных событиях.
   accessibility:
     enabled: true
     required: true
-    description: "Nexy использует Accessibility для мониторинга клавиатуры и автоматизации."
-  # Настройки разрешений (дублируются в integrations.permissions)
-  # Системные настройки
+    description: Nexy использует Accessibility для мониторинга клавиатуры и автоматизации.
   system_preferences:
-    microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    screen_capture: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-    camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
-    accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    input_monitoring: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-    notifications: "x-apple.systempreferences:com.apple.preference.notifications"
+    microphone: x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone
+    screen_capture: x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture
+    camera: x-apple.systempreferences:com.apple.preference.security?Privacy_Camera
+    accessibility: x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility
+    input_monitoring: x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent
+    notifications: x-apple.systempreferences:com.apple.preference.notifications
 screenshot_capture:
   auto_capture: false
   capture_delay: 0.1
@@ -271,14 +279,38 @@ tray:
   show_notifications: true
   tooltip: Nexy AI Assistant
 updater:
-  appcast_url: https://nexy.ai/appcast.xml
-  auto_check: true
-  auto_install: false
-  check_interval: 3600
   enabled: true
+  update_channel: stable
+  appcast_url: http://20.151.51.172:8081/appcast.xml
+  manifest_url: http://20.151.51.172:8081/manifest.json
+  auto_check: true
+  check_interval: 3600
+  check_on_startup: true
+  auto_install: false
   install_after_download: false
   silent_mode: true
-  update_channel: stable
+  security:
+    public_key: ''
+    verify_signatures: true
+    require_https: true
+  network:
+    timeout: 30
+    retries: 3
+    user_agent: Nexy-Updater/1.0
+  ui:
+    show_notifications: true
+    auto_download: true
+    progress_notifications: true
+  channels:
+    stable:
+      url: http://20.151.51.172:8081/appcast.xml
+      description: Стабильные релизы
+    beta:
+      url: http://20.151.51.172:8081/appcast-beta.xml
+      description: Бета версии
+    alpha:
+      url: http://20.151.51.172:8081/appcast-alpha.xml
+      description: Альфа версии
 voice_recognition:
   enabled: true
   language: ru-RU
@@ -291,17 +323,16 @@ voice_recognition:
   wake_word: nexy
 welcome_message:
   enabled: true
-  text: "Hi! Nexy is here. How can I help you?"
+  text: Hi! Nexy is here. How can I help you?
   use_server: true
   server_timeout_sec: 20
   delay_sec: 0.3
   volume: 0.8
-  voice: "en-US-JennyNeural"
+  voice: en-US-JennyNeural
   sample_rate: 48000
   channels: 1
   bit_depth: 16
-
-# Network Manager Configuration
+  ignore_microphone_permission: true
 network_manager:
   enabled: true
   priority: 6
@@ -310,9 +341,9 @@ network_manager:
   max_retries: 3
   retry_delay: 5.0
   ping_hosts:
-    - "1.1.1.1"
-    - "8.8.8.8"
+  - 1.1.1.1
+  - 8.8.8.8
   test_urls:
-    - "https://www.google.com"
-    - "https://www.apple.com"
-    - "https://www.cloudflare.com"
+  - https://www.google.com
+  - https://www.apple.com
+  - https://www.cloudflare.com

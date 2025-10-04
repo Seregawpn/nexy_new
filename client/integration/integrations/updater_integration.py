@@ -11,7 +11,9 @@ from typing import Dict, Any
 
 from integration.core.event_bus import EventBus, EventPriority
 from integration.core.state_manager import ApplicationStateManager
-from modules.updater import Updater, UpdaterConfig
+from modules.updater import Updater
+from modules.updater.config import UpdaterConfig
+from config.updater_manager import get_updater_manager
 
 logger = logging.getLogger(__name__)
 
@@ -22,18 +24,22 @@ class UpdaterIntegration:
         self.event_bus = event_bus
         self.state_manager = state_manager
         
-        # Создаем конфигурацию обновлений
+        # Получаем централизованную конфигурацию обновлений
+        self.updater_manager = get_updater_manager()
+        updater_config_data = self.updater_manager.get_updater_config()
+        
+        # Создаем конфигурацию обновлений из централизованной системы
         updater_config = UpdaterConfig(
-            enabled=config.get("enabled", True),
-            manifest_url=config.get("manifest_url", ""),
-            check_interval=config.get("check_interval", 3600),
-            check_on_startup=config.get("check_on_startup", True),
-            auto_install=config.get("auto_install", True),
-            public_key=config.get("security", {}).get("public_key", ""),
-            timeout=config.get("timeout", 30),
-            retries=config.get("retries", 3),
-            show_notifications=config.get("ui", {}).get("show_notifications", True),
-            auto_download=config.get("ui", {}).get("auto_download", True)
+            enabled=updater_config_data.enabled,
+            manifest_url=self.updater_manager.get_manifest_url(),
+            check_interval=updater_config_data.check_interval,
+            check_on_startup=updater_config_data.check_on_startup,
+            auto_install=updater_config_data.auto_install,
+            public_key=updater_config_data.security.get("public_key", ""),
+            timeout=updater_config_data.network.get("timeout", 30),
+            retries=updater_config_data.network.get("retries", 3),
+            show_notifications=updater_config_data.ui.get("show_notifications", True),
+            auto_download=updater_config_data.ui.get("auto_download", True)
         )
         
         self.updater = Updater(updater_config)

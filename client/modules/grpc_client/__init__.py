@@ -15,10 +15,8 @@ from .core.types import (
     ConnectionState, RetryStrategy, ServerConfig, 
     ConnectionMetrics, RetryConfig, HealthCheckConfig
 )
-from .config.grpc_config import (
-    create_default_config, create_local_config, 
-    create_production_config, create_test_config
-)
+# Конфигурация теперь централизована в unified_config.yaml
+# Функции конфигурации удалены в пользу централизованной системы
 
 # Версия модуля
 __version__ = "1.0.0"
@@ -36,48 +34,31 @@ __all__ = [
     "RetryConfig",
     "HealthCheckConfig",
     
-    # Конфигурация
-    "create_default_config",
-    "create_local_config",
-    "create_production_config",
-    "create_test_config",
+    # Конфигурация централизована в unified_config.yaml
     
     # Версия
     "__version__"
 ]
 
 
-def create_grpc_client(config_type: str = "default", **kwargs) -> GrpcClient:
+def create_grpc_client(**kwargs) -> GrpcClient:
     """
-    Создает экземпляр GrpcClient с конфигурацией
+    Создает экземпляр GrpcClient с централизованной конфигурацией
     
     Args:
-        config_type: Тип конфигурации (default, local, production, test)
-        **kwargs: Дополнительные параметры конфигурации
+        **kwargs: Дополнительные параметры конфигурации (переопределяют unified_config.yaml)
         
     Returns:
         GrpcClient: Экземпляр gRPC клиента
     """
-    if config_type == "local":
-        config = create_local_config()
-    elif config_type == "production":
-        config = create_production_config()
-    elif config_type == "test":
-        config = create_test_config()
-    else:
-        config = create_default_config()
-    
-    # Обновляем конфигурацию дополнительными параметрами
-    config.update(kwargs)
-    
-    return GrpcClient(config)
+    return GrpcClient(kwargs if kwargs else None)
 
 
 def create_default_grpc_client(**kwargs) -> GrpcClient:
     """
-    Создает GrpcClient с конфигурацией по умолчанию
+    Создает GrpcClient с централизованной конфигурацией
     
     Returns:
         GrpcClient: Экземпляр gRPC клиента
     """
-    return create_grpc_client("default", **kwargs)
+    return create_grpc_client(**kwargs)
